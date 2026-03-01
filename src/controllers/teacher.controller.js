@@ -1,0 +1,385 @@
+/**
+ * WHAT:
+ * teacher.controller exposes teacher routes for timetable actions, mission
+ * authoring, criterion draft approval, and SessionLog analytics.
+ * WHY:
+ * Stage 7 needs explicit request handlers so AI-generated criterion drafts stay
+ * behind teacher-only routes and review-before-save boundaries while dashboards
+ * can read chart-ready outcomes from deterministic session logs.
+ * HOW:
+ * Delegate request payloads to teacher.service and return stable JSON
+ * responses for the frontend, plus aggregate SessionLog metrics directly for
+ * teacher analytics views.
+ */
+const mongoose = require("mongoose");
+const SessionLog = require("../models/SessionLog");
+const teacherService = require("../services/teacher.service");
+
+const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+function createError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function buildAnalyticsMatch(req) {
+  const studentId = String(req.params.id || "").trim();
+  if (!mongoose.Types.ObjectId.isValid(studentId)) {
+    throw createError(400, "Valid student id is required.");
+  }
+
+  const from = String(req.query.from || "").trim();
+  const to = String(req.query.to || "").trim();
+
+  if (from && !DATE_KEY_PATTERN.test(from)) {
+    throw createError(400, "from must use YYYY-MM-DD format.");
+  }
+
+  if (to && !DATE_KEY_PATTERN.test(to)) {
+    throw createError(400, "to must use YYYY-MM-DD format.");
+  }
+
+  if (from && to && from > to) {
+    throw createError(400, "from cannot be later than to.");
+  }
+
+  const match = {
+    studentId: new mongoose.Types.ObjectId(studentId),
+  };
+
+  if (from || to) {
+    // WHY: dateKey is persisted in YYYY-MM-DD format, so lexical range filters
+    // stay deterministic without re-reading all historical session logs.
+    match.dateKey = {};
+    if (from) {
+      match.dateKey.$gte = from;
+    }
+    if (to) {
+      match.dateKey.$lte = to;
+    }
+  }
+
+  return match;
+}
+
+async function getStudents(_req, res, next) {
+  try {
+    const students = await teacherService.listStudents();
+    res.json({ students });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function createTimetable(req, res, next) {
+  try {
+    const timetable = await teacherService.createTimetable(req.body);
+    res.status(201).json({ timetable });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function createSessionLog(req, res, next) {
+  try {
+    const result = await teacherService.createSessionLog({
+      ...req.body,
+      createdBy: req.user.id,
+    });
+    res.status(201).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function generateLearningAndBlocksDraft(req, res, next) {
+  try {
+    const draft = await teacherService.generateLearningAndBlocksDraft(
+      req.user.id,
+      req.body,
+    );
+    res.json({ draft });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function extractSourcePlan(req, res, next) {
+  try {
+    const draft = await teacherService.extractSourcePlan(req.user.id, {
+      ...req.body,
+      file: req.file,
+    });
+    res.json({ draft });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function extractCriterionSourcePlan(req, res, next) {
+  try {
+    const draft = await teacherService.extractCriterionSourcePlan(req.user.id, {
+      ...req.body,
+      file: req.file,
+    });
+    res.json({ draft });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function approveLearningAndBlocks(req, res, next) {
+  try {
+    const draft = await teacherService.approveLearningAndBlocks(
+      req.user.id,
+      req.body,
+    );
+    res.status(201).json({ draft });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function generateMission(req, res, next) {
+  try {
+    const mission = await teacherService.generateMission(req.user.id, req.body);
+    res.status(201).json({ mission });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function previewMission(req, res, next) {
+  try {
+    const mission = await teacherService.previewMission(req.user.id, req.body);
+    res.json({ mission });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getRecentMissions(req, res, next) {
+  try {
+    const missions = await teacherService.listRecentMissions(
+      req.user.id,
+      req.params.studentId,
+    );
+    res.json({ missions });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getDraftMissions(req, res, next) {
+  try {
+    const missions = await teacherService.listDraftMissions(
+      req.user.id,
+      req.params.studentId,
+    );
+    res.json({ missions });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function updateMission(req, res, next) {
+  try {
+    const mission = await teacherService.updateMission(
+      req.user.id,
+      req.params.missionId,
+      req.body,
+    );
+    res.json({ mission });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function reextractMissionSource(req, res, next) {
+  try {
+    const mission = await teacherService.reextractMissionSource(
+      req.user.id,
+      req.params.missionId,
+    );
+    res.json({ mission });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getStudentDailyTrend(req, res, next) {
+  try {
+    const match = buildAnalyticsMatch(req);
+    const trend = await SessionLog.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: "$dateKey",
+          totalXp: { $sum: { $ifNull: ["$totalXpAwarded", 0] } },
+          performanceXp: { $sum: { $ifNull: ["$performanceXpAwarded", 0] } },
+          targetXp: { $sum: { $ifNull: ["$targetXpAwarded", 0] } },
+        },
+      },
+      { $sort: { _id: 1 } },
+      {
+        $project: {
+          _id: 0,
+          date: "$_id",
+          totalXp: 1,
+          performanceXp: 1,
+          targetXp: 1,
+        },
+      },
+    ]);
+
+    res.json(
+      trend.map((point) => ({
+        date: String(point.date || ""),
+        totalXp: Math.round(Number(point.totalXp || 0)),
+        performanceXp: Math.round(Number(point.performanceXp || 0)),
+        targetXp: Math.round(Number(point.targetXp || 0)),
+      })),
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getStudentSessionBreakdown(req, res, next) {
+  try {
+    const match = buildAnalyticsMatch(req);
+    const breakdown = await SessionLog.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: "$sessionType",
+          totalXp: { $sum: { $ifNull: ["$totalXpAwarded", 0] } },
+          avgScore: { $avg: { $ifNull: ["$scorePercent", 0] } },
+          avgFocus: { $avg: { $ifNull: ["$focusScore", 0] } },
+          sessions: { $sum: 1 },
+        },
+      },
+      {
+        $addFields: {
+          sortOrder: {
+            $cond: [{ $eq: ["$_id", "morning"] }, 0, 1],
+          },
+        },
+      },
+      { $sort: { sortOrder: 1 } },
+      {
+        $project: {
+          _id: 0,
+          sessionType: "$_id",
+          totalXp: 1,
+          avgScore: 1,
+          avgFocus: 1,
+          sessions: 1,
+        },
+      },
+    ]);
+
+    res.json(
+      breakdown.map((item) => ({
+        sessionType: String(item.sessionType || ""),
+        totalXp: Math.round(Number(item.totalXp || 0)),
+        avgScore: Math.round(Number(item.avgScore || 0)),
+        avgFocus: Math.round(Number(item.avgFocus || 0)),
+        sessions: Math.round(Number(item.sessions || 0)),
+      })),
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getStudentSubjectAnalytics(req, res, next) {
+  try {
+    const match = buildAnalyticsMatch(req);
+    const analytics = await SessionLog.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: "$subjectId",
+          totalXp: { $sum: { $ifNull: ["$totalXpAwarded", 0] } },
+          avgScore: { $avg: { $ifNull: ["$scorePercent", 0] } },
+          sessions: { $sum: 1 },
+        },
+      },
+      { $sort: { sessions: -1, totalXp: -1 } },
+      {
+        $project: {
+          _id: 0,
+          subjectId: { $toString: "$_id" },
+          totalXp: 1,
+          avgScore: 1,
+          sessions: 1,
+        },
+      },
+    ]);
+
+    res.json(
+      analytics.map((item) => ({
+        subjectId: String(item.subjectId || ""),
+        totalXp: Math.round(Number(item.totalXp || 0)),
+        avgScore: Math.round(Number(item.avgScore || 0)),
+        sessions: Math.round(Number(item.sessions || 0)),
+      })),
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getStudentBehaviourTrend(req, res, next) {
+  try {
+    const match = buildAnalyticsMatch(req);
+    const behaviourTrend = await SessionLog.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: { $ifNull: ["$behaviourStatus", "steady"] },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { count: -1, _id: 1 } },
+      {
+        $project: {
+          _id: 0,
+          behaviourStatus: "$_id",
+          count: 1,
+        },
+      },
+    ]);
+
+    res.json(
+      behaviourTrend.map((item) => ({
+        behaviourStatus: String(item.behaviourStatus || ""),
+        count: Math.round(Number(item.count || 0)),
+      })),
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+module.exports = {
+  getStudents,
+  createTimetable,
+  createSessionLog,
+  generateLearningAndBlocksDraft,
+  approveLearningAndBlocks,
+  extractSourcePlan,
+  extractCriterionSourcePlan,
+  generateMission,
+  previewMission,
+  getDraftMissions,
+  getRecentMissions,
+  updateMission,
+  reextractMissionSource,
+  getStudentDailyTrend,
+  getStudentSessionBreakdown,
+  getStudentSubjectAnalytics,
+  getStudentBehaviourTrend,
+};

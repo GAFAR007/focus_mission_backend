@@ -1,0 +1,602 @@
+/**
+ * WHAT:
+ * teacher.routes registers teacher-only endpoints for timetable work, mission
+ * authoring, and criterion AI drafts.
+ * WHY:
+ * Stage 7 requires explicit teacher-only routes so AI-generated criterion drafts
+ * cannot bypass the teacher approval boundary.
+ * HOW:
+ * Protect the routes, validate the incoming payload shape, and delegate to
+ * teacher.controller.
+ */
+const express = require("express");
+const multer = require("multer");
+const {
+  body,
+  param,
+  query,
+} = require("express-validator");
+
+const teacherController = require("../controllers/teacher.controller");
+const {
+  authorizeRoles,
+  protect,
+} = require("../middleware/auth.middleware");
+const {
+  validateRequest,
+} = require("../middleware/validate.middleware");
+
+const router = express.Router();
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+  },
+});
+
+router.use(
+  protect,
+  authorizeRoles("teacher"),
+);
+
+router.get(
+  "/students",
+  teacherController.getStudents,
+);
+
+router.get(
+  "/students/:id/daily-trend",
+  [
+    param("id")
+      .isMongoId()
+      .withMessage("Valid student id is required."),
+    query("from")
+      .optional()
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage("from must use YYYY-MM-DD format."),
+    query("to")
+      .optional()
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage("to must use YYYY-MM-DD format."),
+    validateRequest,
+  ],
+  teacherController.getStudentDailyTrend,
+);
+
+router.get(
+  "/students/:id/session-breakdown",
+  [
+    param("id")
+      .isMongoId()
+      .withMessage("Valid student id is required."),
+    query("from")
+      .optional()
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage("from must use YYYY-MM-DD format."),
+    query("to")
+      .optional()
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage("to must use YYYY-MM-DD format."),
+    validateRequest,
+  ],
+  teacherController.getStudentSessionBreakdown,
+);
+
+router.get(
+  "/students/:id/subjects",
+  [
+    param("id")
+      .isMongoId()
+      .withMessage("Valid student id is required."),
+    query("from")
+      .optional()
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage("from must use YYYY-MM-DD format."),
+    query("to")
+      .optional()
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage("to must use YYYY-MM-DD format."),
+    validateRequest,
+  ],
+  teacherController.getStudentSubjectAnalytics,
+);
+
+router.get(
+  "/students/:id/behaviour-trend",
+  [
+    param("id")
+      .isMongoId()
+      .withMessage("Valid student id is required."),
+    query("from")
+      .optional()
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage("from must use YYYY-MM-DD format."),
+    query("to")
+      .optional()
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage("to must use YYYY-MM-DD format."),
+    validateRequest,
+  ],
+  teacherController.getStudentBehaviourTrend,
+);
+
+router.get(
+  "/missions/drafts/:studentId",
+  [
+    param("studentId")
+      .isMongoId()
+      .withMessage(
+        "Valid studentId is required.",
+      ),
+    validateRequest,
+  ],
+  teacherController.getDraftMissions,
+);
+
+router.get(
+  "/missions/recent/:studentId",
+  [
+    param("studentId")
+      .isMongoId()
+      .withMessage(
+        "Valid studentId is required.",
+      ),
+    validateRequest,
+  ],
+  teacherController.getRecentMissions,
+);
+
+router.post(
+  "/timetable",
+  [
+    body("studentId")
+      .isMongoId()
+      .withMessage(
+        "Valid studentId is required.",
+      ),
+    body("day")
+      .notEmpty()
+      .withMessage("Day is required."),
+    body("morningSubject")
+      .isMongoId()
+      .withMessage(
+        "Valid morningSubject is required.",
+      ),
+    body("afternoonSubject")
+      .isMongoId()
+      .withMessage(
+        "Valid afternoonSubject is required.",
+      ),
+    body("morningTeacherId")
+      .optional()
+      .isMongoId()
+      .withMessage(
+        "Valid morningTeacherId is required.",
+      ),
+    body("afternoonTeacherId")
+      .optional()
+      .isMongoId()
+      .withMessage(
+        "Valid afternoonTeacherId is required.",
+      ),
+    validateRequest,
+  ],
+  teacherController.createTimetable,
+);
+
+router.post(
+  "/session-log",
+  [
+    body("studentId")
+      .isMongoId()
+      .withMessage(
+        "Valid studentId is required.",
+      ),
+    body("subjectId")
+      .isMongoId()
+      .withMessage(
+        "Valid subjectId is required.",
+      ),
+    body("sessionType")
+      .isIn(["morning", "afternoon"])
+      .withMessage(
+        "Session type must be morning or afternoon.",
+      ),
+    body("focusScore")
+      .optional()
+      .isInt({ min: 0, max: 100 })
+      .withMessage(
+        "Focus score must be between 0 and 100.",
+      ),
+    validateRequest,
+  ],
+  teacherController.createSessionLog,
+);
+
+router.post(
+  "/ai/extract-source",
+  upload.single("sourceFile"),
+  [
+    body("subjectId")
+      .isMongoId()
+      .withMessage(
+        "Valid subjectId is required.",
+      ),
+    body("sessionType")
+      .isIn(["morning", "afternoon"])
+      .withMessage(
+        "Session type must be morning or afternoon.",
+      ),
+    validateRequest,
+  ],
+  teacherController.extractSourcePlan,
+);
+
+router.post(
+  "/ai/extract-unit-source",
+  upload.single("sourceFile"),
+  [
+    body("criterionId")
+      .isMongoId()
+      .withMessage(
+        "Valid criterionId is required.",
+      ),
+    validateRequest,
+  ],
+  teacherController.extractCriterionSourcePlan,
+);
+
+router.post(
+  "/ai/generate-learning-and-blocks",
+  [
+    body("criterionId")
+      .isMongoId()
+      .withMessage(
+        "Valid criterionId is required.",
+      ),
+    body("unitText")
+      .trim()
+      .isLength({ min: 120 })
+      .withMessage(
+        "Unit text must be at least 120 characters long.",
+      ),
+    validateRequest,
+  ],
+  teacherController.generateLearningAndBlocksDraft,
+);
+
+router.post(
+  "/approve-learning-and-blocks",
+  [
+    body("criterionId")
+      .isMongoId()
+      .withMessage(
+        "Valid criterionId is required.",
+      ),
+    body("learningContent")
+      .isObject()
+      .withMessage(
+        "learningContent is required.",
+      ),
+    body("learningContent.title")
+      .trim()
+      .notEmpty()
+      .withMessage(
+        "Learning content title is required.",
+      ),
+    body("learningContent.summary")
+      .optional()
+      .isString(),
+    body("learningContent.sections")
+      .isArray({ min: 2 })
+      .withMessage(
+        "Learning content must include at least two sections.",
+      ),
+    body("learningCheckBlocks")
+      .isArray({ min: 3 })
+      .withMessage(
+        "learningCheckBlocks must include at least three items.",
+      ),
+    body("essayBuilderBlocks")
+      .isArray({ min: 3 })
+      .withMessage(
+        "essayBuilderBlocks must include at least three items.",
+      ),
+    validateRequest,
+  ],
+  teacherController.approveLearningAndBlocks,
+);
+
+router.post(
+  "/missions/preview",
+  [
+    body("studentId")
+      .isMongoId()
+      .withMessage(
+        "Valid studentId is required.",
+      ),
+    body("subjectId")
+      .isMongoId()
+      .withMessage(
+        "Valid subjectId is required.",
+      ),
+    body("sessionType")
+      .isIn(["morning", "afternoon"])
+      .withMessage(
+        "Session type must be morning or afternoon.",
+      ),
+    body("targetDate")
+      .trim()
+      .isISO8601({
+        strict: true,
+        strictSeparator: true,
+      })
+      .withMessage(
+        "targetDate must be a valid YYYY-MM-DD date.",
+      ),
+    body("title")
+      .trim()
+      .notEmpty()
+      .withMessage(
+        "Mission title is required.",
+      ),
+    body("unitText")
+      .trim()
+      .isLength({ min: 80 })
+      .withMessage(
+        "Unit text must be at least 80 characters long.",
+      ),
+    body("sourceRawText")
+      .optional()
+      .isString()
+      .withMessage(
+        "sourceRawText must be a string.",
+      ),
+    body("difficulty")
+      .optional()
+      .isIn(["easy", "medium", "hard"])
+      .withMessage(
+        "Difficulty must be easy, medium, or hard.",
+      ),
+    body("questionCount")
+      .optional()
+      .custom((value) =>
+        [5, 8, 10].includes(
+          Number(value),
+        ),
+      )
+      .withMessage(
+        "Question count must be 5, 8, or 10.",
+      ),
+    body("taskCodes")
+      .optional()
+      .isArray({ max: 8 })
+      .withMessage(
+        "taskCodes must include up to 8 items.",
+      ),
+    body("taskCodes.*")
+      .optional()
+      .isString()
+      .matches(/^[PMD]\d+$/i)
+      .withMessage(
+        "Task codes must look like P1, P2, M1, or D1.",
+      ),
+    body("xpReward")
+      .optional()
+      .custom((value) => {
+        const parsed = Number(value);
+        return (
+          Number.isInteger(parsed) &&
+          parsed >= 10 &&
+          parsed <= 50 &&
+          parsed % 5 === 0
+        );
+      })
+      .withMessage(
+        "XP reward must be between 10 and 50 in steps of 5.",
+      ),
+    validateRequest,
+  ],
+  teacherController.previewMission,
+);
+
+router.post(
+  "/missions/generate",
+  [
+    body("studentId")
+      .isMongoId()
+      .withMessage(
+        "Valid studentId is required.",
+      ),
+    body("subjectId")
+      .isMongoId()
+      .withMessage(
+        "Valid subjectId is required.",
+      ),
+    body("sessionType")
+      .isIn(["morning", "afternoon"])
+      .withMessage(
+        "Session type must be morning or afternoon.",
+      ),
+    body("targetDate")
+      .trim()
+      .isISO8601({
+        strict: true,
+        strictSeparator: true,
+      })
+      .withMessage(
+        "targetDate must be a valid YYYY-MM-DD date.",
+      ),
+    body("title")
+      .trim()
+      .notEmpty()
+      .withMessage(
+        "Mission title is required.",
+      ),
+    body("unitText")
+      .trim()
+      .isLength({ min: 80 })
+      .withMessage(
+        "Unit text must be at least 80 characters long.",
+      ),
+    body("sourceRawText")
+      .optional()
+      .isString()
+      .withMessage(
+        "sourceRawText must be a string.",
+      ),
+    body("difficulty")
+      .optional()
+      .isIn(["easy", "medium", "hard"])
+      .withMessage(
+        "Difficulty must be easy, medium, or hard.",
+      ),
+    body("questionCount")
+      .optional()
+      .custom((value) =>
+        [5, 8, 10].includes(
+          Number(value),
+        ),
+      )
+      .withMessage(
+        "Question count must be 5, 8, or 10.",
+      ),
+    body("taskCodes")
+      .optional()
+      .isArray({ max: 8 })
+      .withMessage(
+        "taskCodes must include up to 8 items.",
+      ),
+    body("taskCodes.*")
+      .optional()
+      .isString()
+      .matches(/^[PMD]\d+$/i)
+      .withMessage(
+        "Task codes must look like P1, P2, M1, or D1.",
+      ),
+    body("xpReward")
+      .optional()
+      .custom((value) => {
+        const parsed = Number(value);
+        return (
+          Number.isInteger(parsed) &&
+          parsed >= 10 &&
+          parsed <= 50 &&
+          parsed % 5 === 0
+        );
+      })
+      .withMessage(
+        "XP reward must be between 10 and 50 in steps of 5.",
+      ),
+    validateRequest,
+  ],
+  teacherController.generateMission,
+);
+
+router.post(
+  "/missions/:missionId/reextract-source",
+  [
+    param("missionId")
+      .isMongoId()
+      .withMessage(
+        "Valid missionId is required.",
+      ),
+    validateRequest,
+  ],
+  teacherController.reextractMissionSource,
+);
+
+router.patch(
+  "/missions/:missionId",
+  [
+    param("missionId")
+      .isMongoId()
+      .withMessage(
+        "Valid missionId is required.",
+      ),
+    body("title")
+      .optional()
+      .trim()
+      .notEmpty()
+      .withMessage(
+        "Mission title cannot be empty.",
+      ),
+    body("teacherNote")
+      .optional()
+      .isString(),
+    body("sourceUnitText")
+      .optional()
+      .isString(),
+    body("sourceRawText")
+      .optional()
+      .isString()
+      .withMessage(
+        "sourceRawText must be a string.",
+      ),
+    body("sessionType")
+      .optional()
+      .isIn(["morning", "afternoon"])
+      .withMessage(
+        "Session type must be morning or afternoon.",
+      ),
+    body("targetDate")
+      .optional()
+      .trim()
+      .isISO8601({
+        strict: true,
+        strictSeparator: true,
+      })
+      .withMessage(
+        "targetDate must be a valid YYYY-MM-DD date.",
+      ),
+    body("difficulty")
+      .optional()
+      .isIn(["easy", "medium", "hard"])
+      .withMessage(
+        "Difficulty must be easy, medium, or hard.",
+      ),
+    body("taskCodes")
+      .optional()
+      .isArray({ max: 8 })
+      .withMessage(
+        "taskCodes must include up to 8 items.",
+      ),
+    body("taskCodes.*")
+      .optional()
+      .isString()
+      .matches(/^[PMD]\d+$/i)
+      .withMessage(
+        "Task codes must look like P1, P2, M1, or D1.",
+      ),
+    body("xpReward")
+      .optional()
+      .custom((value) => {
+        const parsed = Number(value);
+        return (
+          Number.isInteger(parsed) &&
+          parsed >= 10 &&
+          parsed <= 50 &&
+          parsed % 5 === 0
+        );
+      })
+      .withMessage(
+        "XP reward must be between 10 and 50 in steps of 5.",
+      ),
+    body("status")
+      .optional()
+      .isIn(["draft", "published"])
+      .withMessage(
+        "Status must be draft or published.",
+      ),
+    body("questions")
+      .optional()
+      .isArray({ min: 1, max: 10 })
+      .withMessage(
+        "Questions must include between 1 and 10 items.",
+      ),
+    validateRequest,
+  ],
+  teacherController.updateMission,
+);
+
+module.exports = router;
