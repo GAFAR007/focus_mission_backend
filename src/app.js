@@ -22,7 +22,19 @@ const {
 } = require("./middleware/error.middleware");
 
 const app = express();
-const configuredOrigin = process.env.CLIENT_ORIGIN;
+const configuredOrigins = String(process.env.CLIENT_ORIGIN || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+function normalizeOrigin(origin) {
+  try {
+    const url = new URL(origin);
+    return `${url.protocol}//${url.host}`;
+  } catch (_error) {
+    return String(origin || "").trim().replace(/\/+$/, "");
+  }
+}
 
 function isLocalWebOrigin(origin) {
   try {
@@ -35,23 +47,27 @@ function isLocalWebOrigin(origin) {
   }
 }
 
+function isAllowedOrigin(origin) {
+  const incomingOrigin = normalizeOrigin(origin);
+  return configuredOrigins
+    .map(normalizeOrigin)
+    .some((allowedOrigin) => allowedOrigin === incomingOrigin);
+}
+
 app.use(
   cors({
     origin(origin, callback) {
-      // WHY: Local Flutter web runs on dynamic localhost ports during
-      // development, so the app explicitly allows local browser origins without
-      // weakening the production origin rule.
-      if (
-        !origin ||
-        origin === configuredOrigin ||
-        isLocalWebOrigin(origin)
-      ) {
+      // WHY: Browsers send an exact origin string; normalize and compare against
+      // configured origins so Netlify, localhost, and optional aliases work.
+      if (!origin || isAllowedOrigin(origin) || isLocalWebOrigin(origin)) {
         return callback(null, true);
       }
 
       return callback(new Error("Origin not allowed by CORS."));
     },
     credentials: true,
+    methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   }),
 );
 app.use(helmet());
