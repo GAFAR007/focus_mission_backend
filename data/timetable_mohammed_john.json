@@ -1,0 +1,47 @@
+[
+  {
+    "day": "Monday",
+    "room": "Room 2 / Room 4",
+    "morningSubject": "GCSE RE",
+    "afternoonSubject": "Sport",
+    "morningTeacherEmail": "re.bot@focusmission.app",
+    "afternoonTeacherEmail": "sport.teacher@focusmission.app",
+    "mentorEmail": "mentor@focusmission.app"
+  },
+  {
+    "day": "Tuesday",
+    "room": "Room 3 / Room 2",
+    "morningSubject": "Health and Science",
+    "afternoonSubject": "Business",
+    "morningTeacherEmail": "science.teacher@focusmission.app",
+    "afternoonTeacherEmail": "business.teacher@focusmission.app",
+    "mentorEmail": "mentor@focusmission.app"
+  },
+  {
+    "day": "Wednesday",
+    "room": "Room 4 / Room 1",
+    "morningSubject": "Science",
+    "afternoonSubject": "Mathematics",
+    "morningTeacherEmail": "science.teacher@focusmission.app",
+    "afternoonTeacherEmail": "maths.bot@focusmission.app",
+    "mentorEmail": "mentor@focusmission.app"
+  },
+  {
+    "day": "Thursday",
+    "room": "Room 2 / Room 4",
+    "morningSubject": "English",
+    "afternoonSubject": "Art",
+    "morningTeacherEmail": "english.bot@focusmission.app",
+    "afternoonTeacherEmail": "art.bot@focusmission.app",
+    "mentorEmail": "mentor@focusmission.app"
+  },
+  {
+    "day": "Friday",
+    "room": "Room 3 / Room 1",
+    "morningSubject": "ICT",
+    "afternoonSubject": "GCSE Citizenship",
+    "morningTeacherEmail": "ict.teacher@focusmission.app",
+    "afternoonTeacherEmail": "citizenship.bot@focusmission.app",
+    "mentorEmail": "mentor@focusmission.app"
+  }
+]

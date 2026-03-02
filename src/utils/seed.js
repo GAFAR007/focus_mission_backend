@@ -67,8 +67,11 @@ async function seed() {
     ictTeacher,
     businessTeacher,
     scienceTeacher,
+    reBotTeacher,
     englishBotTeacher,
     mathsBotTeacher,
+    artBotTeacher,
+    citizenshipBotTeacher,
     mentor,
   ] = await User.create([
     {
@@ -138,6 +141,17 @@ async function seed() {
         "https://api.dicebear.com/9.x/adventurer/svg?seed=Ndumisa%20Nkomazana",
     },
     {
+      name: "RE Bot Teacher",
+      email: "re.bot@focusmission.app",
+      passwordHash: staffPasswordHash,
+      role: "teacher",
+      subjectSpecialty: "GCSE RE",
+      isPlaceholder: true,
+      avatarSeed: "RE Bot Teacher",
+      avatar:
+        "https://api.dicebear.com/9.x/adventurer/svg?seed=RE%20Bot%20Teacher",
+    },
+    {
       name: "English Bot Teacher",
       email:
         "english.bot@focusmission.app",
@@ -162,6 +176,28 @@ async function seed() {
         "https://api.dicebear.com/9.x/adventurer/svg?seed=Maths%20Bot%20Teacher",
     },
     {
+      name: "Art Bot Teacher",
+      email: "art.bot@focusmission.app",
+      passwordHash: staffPasswordHash,
+      role: "teacher",
+      subjectSpecialty: "Art",
+      isPlaceholder: true,
+      avatarSeed: "Art Bot Teacher",
+      avatar:
+        "https://api.dicebear.com/9.x/adventurer/svg?seed=Art%20Bot%20Teacher",
+    },
+    {
+      name: "Citizenship Bot Teacher",
+      email: "citizenship.bot@focusmission.app",
+      passwordHash: staffPasswordHash,
+      role: "teacher",
+      subjectSpecialty: "GCSE Citizenship",
+      isPlaceholder: true,
+      avatarSeed: "Citizenship Bot Teacher",
+      avatar:
+        "https://api.dicebear.com/9.x/adventurer/svg?seed=Citizenship%20Bot%20Teacher",
+    },
+    {
       name: "Gafar Temitayo Razak",
       email: "mentor@focusmission.app",
       passwordHash: staffPasswordHash,
@@ -178,8 +214,12 @@ async function seed() {
     ict,
     business,
     science,
+    gcseRe,
     english,
     mathematics,
+    healthScience,
+    art,
+    gcseCitizenship,
   ] = await Subject.create([
     {
       name: "Sport",
@@ -218,6 +258,15 @@ async function seed() {
       ],
     },
     {
+      name: "GCSE RE",
+      icon: "auto_stories",
+      color: "#F1B7FF",
+      difficultyDefaults: [
+        "easy",
+        "medium",
+      ],
+    },
+    {
       name: "English",
       icon: "menu_book",
       color: "#FFBFA8",
@@ -230,6 +279,33 @@ async function seed() {
       name: "Mathematics",
       icon: "calculate",
       color: "#8AD2A1",
+      difficultyDefaults: [
+        "easy",
+        "medium",
+      ],
+    },
+    {
+      name: "Health and Science",
+      icon: "health_and_safety",
+      color: "#8FD3FF",
+      difficultyDefaults: [
+        "easy",
+        "medium",
+      ],
+    },
+    {
+      name: "Art",
+      icon: "palette",
+      color: "#FFC6A1",
+      difficultyDefaults: [
+        "easy",
+        "medium",
+      ],
+    },
+    {
+      name: "GCSE Citizenship",
+      icon: "account_balance",
+      color: "#B0C4DE",
       difficultyDefaults: [
         "easy",
         "medium",
@@ -472,48 +548,23 @@ async function seed() {
     },
   ]);
 
-  await Timetable.create([
+  const baseTimetable = [
     {
-      studentId: student._id,
       day: "Monday",
-      morningSubject: sport._id,
-      afternoonSubject: ict._id,
-      room: "Room 2",
-      morningTeacherId:
-        sportTeacher._id,
-      afternoonTeacherId:
-        ictTeacher._id,
-      mentorId: mentor._id,
-    },
-    {
-      studentId: student._id,
-      day: "Tuesday",
-      morningSubject: business._id,
-      afternoonSubject: science._id,
-      room: "Room 1",
-      morningTeacherId:
-        businessTeacher._id,
-      afternoonTeacherId:
-        scienceTeacher._id,
-      mentorId: mentor._id,
-    },
-    {
-      studentId: student._id,
-      day: "Wednesday",
-      morningSubject: ict._id,
+      morningSubject: gcseRe._id,
       afternoonSubject: sport._id,
-      room: "Room 3",
-      morningTeacherId: ictTeacher._id,
+      room: "Room 2 / Room 4",
+      morningTeacherId:
+        reBotTeacher._id,
       afternoonTeacherId:
         sportTeacher._id,
       mentorId: mentor._id,
     },
     {
-      studentId: student._id,
-      day: "Thursday",
-      morningSubject: science._id,
+      day: "Tuesday",
+      morningSubject: healthScience._id,
       afternoonSubject: business._id,
-      room: "Room 4",
+      room: "Room 3 / Room 2",
       morningTeacherId:
         scienceTeacher._id,
       afternoonTeacherId:
@@ -521,77 +572,45 @@ async function seed() {
       mentorId: mentor._id,
     },
     {
-      studentId: student._id,
-      day: "Friday",
-      morningSubject: english._id,
+      day: "Wednesday",
+      morningSubject: science._id,
       afternoonSubject: mathematics._id,
-      room: "Room 3",
-      morningTeacherId:
-        englishBotTeacher._id,
+      room: "Room 4 / Room 1",
+      morningTeacherId: scienceTeacher._id,
       afternoonTeacherId:
         mathsBotTeacher._id,
       mentorId: mentor._id,
     },
     {
-      studentId: johnStudent._id,
-      day: "Monday",
-      morningSubject: sport._id,
-      afternoonSubject: ict._id,
-      room: "Room 2",
-      morningTeacherId:
-        sportTeacher._id,
-      afternoonTeacherId:
-        ictTeacher._id,
-      mentorId: mentor._id,
-    },
-    {
-      studentId: johnStudent._id,
-      day: "Tuesday",
-      morningSubject: business._id,
-      afternoonSubject: science._id,
-      room: "Room 1",
-      morningTeacherId:
-        businessTeacher._id,
-      afternoonTeacherId:
-        scienceTeacher._id,
-      mentorId: mentor._id,
-    },
-    {
-      studentId: johnStudent._id,
-      day: "Wednesday",
-      morningSubject: ict._id,
-      afternoonSubject: sport._id,
-      room: "Room 3",
-      morningTeacherId: ictTeacher._id,
-      afternoonTeacherId:
-        sportTeacher._id,
-      mentorId: mentor._id,
-    },
-    {
-      studentId: johnStudent._id,
       day: "Thursday",
-      morningSubject: science._id,
-      afternoonSubject: business._id,
-      room: "Room 4",
-      morningTeacherId:
-        scienceTeacher._id,
-      afternoonTeacherId:
-        businessTeacher._id,
-      mentorId: mentor._id,
-    },
-    {
-      studentId: johnStudent._id,
-      day: "Friday",
       morningSubject: english._id,
-      afternoonSubject: mathematics._id,
-      room: "Room 3",
+      afternoonSubject: art._id,
+      room: "Room 2 / Room 4",
       morningTeacherId:
         englishBotTeacher._id,
       afternoonTeacherId:
-        mathsBotTeacher._id,
+        artBotTeacher._id,
       mentorId: mentor._id,
     },
-  ]);
+    {
+      day: "Friday",
+      morningSubject: ict._id,
+      afternoonSubject: gcseCitizenship._id,
+      room: "Room 3 / Room 1",
+      morningTeacherId:
+        ictTeacher._id,
+      afternoonTeacherId:
+        citizenshipBotTeacher._id,
+      mentorId: mentor._id,
+    },
+  ];
+
+  await Timetable.create(
+    baseTimetable.flatMap((entry) => [
+      { ...entry, studentId: student._id },
+      { ...entry, studentId: johnStudent._id },
+    ]),
+  );
 
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
@@ -603,13 +622,19 @@ async function seed() {
   const tomorrowWeekday = new Intl.DateTimeFormat("en-US", {
     weekday: "long",
   }).format(tomorrow);
+  const tomorrowEntry = baseTimetable.find(
+    (entry) => entry.day === tomorrowWeekday,
+  );
+  const johnMorningSubjectId = tomorrowEntry?.morningSubject || gcseRe._id;
+  const johnMorningTeacherId = tomorrowEntry?.morningTeacherId ||
+    reBotTeacher._id;
 
   await Mission.create([
     {
       studentId: johnStudent._id,
-      subjectId: sport._id,
+      subjectId: johnMorningSubjectId,
       sessionType: "morning",
-      title: "John Daily Sport Mission",
+      title: "John Daily Mission",
       teacherNote:
         "Daily mission for John. Keep momentum high with clear, short questions.",
       source: "bank",
@@ -742,13 +767,13 @@ async function seed() {
             "Cooldowns support a safe return to resting state.",
         },
       ],
-      createdBy: sportTeacher._id,
+      createdBy: johnMorningTeacherId,
     },
     {
       studentId: johnStudent._id,
-      subjectId: sport._id,
+      subjectId: johnMorningSubjectId,
       sessionType: "morning",
-      title: "John Assessment Sport Mission",
+      title: "John Assessment Mission",
       teacherNote:
         "Assessment mission for John to evaluate understanding of muscles, joints, and movement.",
       source: "bank",
@@ -913,7 +938,7 @@ async function seed() {
             "Slow-twitch fibers support endurance work.",
         },
       ],
-      createdBy: sportTeacher._id,
+      createdBy: johnMorningTeacherId,
     },
   ]);
 
@@ -994,6 +1019,12 @@ async function seed() {
       },
     ),
     User.findByIdAndUpdate(
+      reBotTeacher._id,
+      {
+        assignedStudents: [student._id, johnStudent._id],
+      },
+    ),
+    User.findByIdAndUpdate(
       englishBotTeacher._id,
       {
         assignedStudents: [student._id, johnStudent._id],
@@ -1001,6 +1032,18 @@ async function seed() {
     ),
     User.findByIdAndUpdate(
       mathsBotTeacher._id,
+      {
+        assignedStudents: [student._id, johnStudent._id],
+      },
+    ),
+    User.findByIdAndUpdate(
+      artBotTeacher._id,
+      {
+        assignedStudents: [student._id, johnStudent._id],
+      },
+    ),
+    User.findByIdAndUpdate(
+      citizenshipBotTeacher._id,
       {
         assignedStudents: [student._id, johnStudent._id],
       },
@@ -1030,10 +1073,19 @@ async function seed() {
     `Science teacher login: science.teacher@focusmission.app / ${staffSeedPassword}`,
   );
   console.log(
+    `RE bot login: re.bot@focusmission.app / ${staffSeedPassword}`,
+  );
+  console.log(
     `English bot login: english.bot@focusmission.app / ${staffSeedPassword}`,
   );
   console.log(
     `Maths bot login: maths.bot@focusmission.app / ${staffSeedPassword}`,
+  );
+  console.log(
+    `Art bot login: art.bot@focusmission.app / ${staffSeedPassword}`,
+  );
+  console.log(
+    `Citizenship bot login: citizenship.bot@focusmission.app / ${staffSeedPassword}`,
   );
   console.log(
     `Mentor login: mentor@focusmission.app / ${staffSeedPassword}`,
