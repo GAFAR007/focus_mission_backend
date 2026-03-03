@@ -101,6 +101,19 @@ const missionSchema = new mongoose.Schema(
       default: "",
       trim: true,
     },
+    draftFormat: {
+      type: String,
+      enum: ["QUESTIONS", "ESSAY_BUILDER"],
+      default: "QUESTIONS",
+      // WHY: Daily missions can be standard questions or essay-builder drafts,
+      // and the frontend must know which rendering path to use.
+    },
+    draftJson: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+      // WHY: Essay builder drafts store the Groq JSON payload as-is so the
+      // student experience can render the exact A/B/C/D sentence structure.
+    },
     source: {
       type: String,
       enum: ["groq", "bank"],
@@ -197,6 +210,9 @@ const missionSchema = new mongoose.Schema(
       default: [],
       validate: {
         validator(value) {
+          if (this.draftFormat === "ESSAY_BUILDER") {
+            return Array.isArray(value);
+          }
           return Array.isArray(value) && value.length > 0 && value.length <= 10;
         },
         message: "Mission must include between 1 and 10 questions.",

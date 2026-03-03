@@ -696,26 +696,41 @@ async function completeSession(payload) {
     });
 
     if (mission) {
+      const isEssayBuilder = mission.draftFormat === "ESSAY_BUILDER";
       const totalQuestions = Array.isArray(mission.questions)
         ? mission.questions.length
         : 0;
-      missionQuestionCount = totalQuestions;
-      completedQuestions = totalQuestions;
-      correctAnswers = Math.max(0, Math.min(correctAnswers, totalQuestions));
-      scorePercent = totalQuestions > 0
-        ? Math.round((correctAnswers / totalQuestions) * 100)
-        : 0;
       missionSubjectId = String(mission.subjectId || payload.subjectId);
 
-      if (isAssessmentQuestionCount(totalQuestions)) {
-        assessmentXpForSession = calculateAssessmentXp(scorePercent);
-      } else {
+      if (isEssayBuilder) {
+        // WHY: Essay builder missions are scored by completed sentences rather
+        // than question correctness, so we honor the payload totals.
+        missionQuestionCount = Math.max(0, completedQuestions);
+        completedQuestions = missionQuestionCount;
+        correctAnswers = Math.max(0, Math.min(correctAnswers, completedQuestions));
+        scorePercent = completedQuestions > 0
+          ? Math.round((correctAnswers / completedQuestions) * 100)
+          : 0;
         challengeXpForSession = calculateChallengeXp(scorePercent);
+        xpAwarded = challengeXpForSession;
+      } else {
+        missionQuestionCount = totalQuestions;
+        completedQuestions = totalQuestions;
+        correctAnswers = Math.max(0, Math.min(correctAnswers, totalQuestions));
+        scorePercent = totalQuestions > 0
+          ? Math.round((correctAnswers / totalQuestions) * 100)
+          : 0;
+
+        if (isAssessmentQuestionCount(totalQuestions)) {
+          assessmentXpForSession = calculateAssessmentXp(scorePercent);
+        } else {
+          challengeXpForSession = calculateChallengeXp(scorePercent);
+        }
+        xpAwarded = challengeXpForSession + assessmentXpForSession;
       }
-      xpAwarded = challengeXpForSession + assessmentXpForSession;
 
       mission.latestScoreCorrect = correctAnswers;
-      mission.latestScoreTotal = totalQuestions;
+      mission.latestScoreTotal = missionQuestionCount;
       mission.latestScorePercent = scorePercent;
       mission.latestXpEarned = xpAwarded;
       await mission.save();

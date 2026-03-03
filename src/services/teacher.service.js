@@ -23,6 +23,7 @@ const Unit = require("../models/Unit");
 const User = require("../models/User");
 const {
   generateLearningAndBlocksWithGroq,
+  generateEssayBuilderDraft,
   generateMissionWithGroq,
   planUnitFromSourceWithGroq,
 } = require("./groq.service");
@@ -150,6 +151,22 @@ function normalizeTaskCodes(taskCodes) {
   }
 
   return [...new Set(normalized)];
+}
+
+function normalizeDraftFormat(value) {
+  const normalized = String(value || "").trim().toUpperCase();
+
+  if (!normalized) {
+    return "QUESTIONS";
+  }
+
+  // WHY: Draft format must be explicit so the backend can safely switch
+  // generation paths without guessing the teacher's intent.
+  if (!["QUESTIONS", "ESSAY_BUILDER"].includes(normalized)) {
+    throw createError(400, "Draft format must be QUESTIONS or ESSAY_BUILDER.");
+  }
+
+  return normalized;
 }
 
 function normalizeQuestions(questions) {
@@ -847,16 +864,25 @@ async function generateMission(teacherId, payload) {
   const xpReward = isAssessmentQuestionCount(questionCount)
     ? 50
     : normalizeXpReward(payload.xpReward || 20);
-  const generated = await generateMissionWithGroq({
+  const draftFormat = normalizeDraftFormat(payload.draftFormat);
+  const normalizedTaskCodes = normalizeTaskCodes(payload.taskCodes);
+  const unitText = payload.unitText.trim();
+  const draftBase = {
     title: payload.title.trim(),
     subjectName: subject.name,
     sessionType: payload.sessionType,
     studentName: student.name,
     difficulty: payload.difficulty || "medium",
     questionCount,
-    taskCodes: normalizeTaskCodes(payload.taskCodes),
-    unitText: payload.unitText.trim(),
-  });
+    taskCodes: normalizedTaskCodes,
+    unitText,
+  };
+
+  // WHY: Draft format determines the Groq generation path (questions vs essay builder)
+  // so daily missions stay aligned to the teacher's intended experience.
+  const generated = draftFormat === "ESSAY_BUILDER"
+    ? await generateEssayBuilderDraft(draftBase)
+    : await generateMissionWithGroq(draftBase);
 
   const mission = await Mission.create({
     studentId: student._id,
@@ -864,19 +890,21 @@ async function generateMission(teacherId, payload) {
     sessionType: payload.sessionType,
     title: generated.title,
     teacherNote: generated.teacherNote,
-    sourceUnitText: payload.unitText.trim(),
+    sourceUnitText: unitText,
     sourceRawText: String(payload.sourceRawText || payload.unitText || "").trim(),
+    draftFormat,
+    draftJson: generated.draftJson || null,
     source: "groq",
     status: "draft",
     aiModel: generated.aiModel,
     availableOnDate: availability.availableOnDate,
     availableOnDay: availability.availableOnDay,
     difficulty: payload.difficulty || "medium",
-    taskCodes: normalizeTaskCodes(payload.taskCodes),
+    taskCodes: normalizedTaskCodes,
     xpReward,
     sourceFileName: String(payload.sourceFileName || "").trim(),
     sourceFileType: String(payload.sourceFileType || "").trim(),
-    questions: generated.questions,
+    questions: generated.questions || [],
     createdBy: teacher._id,
   });
 
@@ -918,23 +946,33 @@ async function previewMission(teacherId, payload) {
   const xpReward = isAssessmentQuestionCount(questionCount)
     ? 50
     : normalizeXpReward(payload.xpReward || 20);
-  const generated = await generateMissionWithGroq({
+  const draftFormat = normalizeDraftFormat(payload.draftFormat);
+  const normalizedTaskCodes = normalizeTaskCodes(payload.taskCodes);
+  const unitText = payload.unitText.trim();
+  const draftBase = {
     title: payload.title.trim(),
     subjectName: subject.name,
     sessionType: payload.sessionType,
     studentName: student.name,
     difficulty: payload.difficulty || "medium",
     questionCount,
-    taskCodes: normalizeTaskCodes(payload.taskCodes),
-    unitText: payload.unitText.trim(),
-  });
+    taskCodes: normalizedTaskCodes,
+    unitText,
+  };
+  // WHY: Preview must mirror the same draft format as the final generation
+  // so the teacher reviews exactly what Groq will produce.
+  const generated = draftFormat === "ESSAY_BUILDER"
+    ? await generateEssayBuilderDraft(draftBase)
+    : await generateMissionWithGroq(draftBase);
 
   return serializeMission({
     id: "",
     title: generated.title,
     teacherNote: generated.teacherNote,
-    sourceUnitText: payload.unitText.trim(),
+    sourceUnitText: unitText,
     sourceRawText: String(payload.sourceRawText || payload.unitText || "").trim(),
+    draftFormat,
+    draftJson: generated.draftJson || null,
     source: "groq",
     status: "draft",
     aiModel: generated.aiModel,
@@ -942,11 +980,11 @@ async function previewMission(teacherId, payload) {
     availableOnDate: availability.availableOnDate,
     availableOnDay: availability.availableOnDay,
     difficulty: payload.difficulty || "medium",
-    taskCodes: normalizeTaskCodes(payload.taskCodes),
+    taskCodes: normalizedTaskCodes,
     xpReward,
     sourceFileName: String(payload.sourceFileName || "").trim(),
     sourceFileType: String(payload.sourceFileType || "").trim(),
-    questions: generated.questions,
+    questions: generated.questions || [],
     subjectId: subject,
     createdAt: new Date(),
     publishedAt: null,
@@ -1069,7 +1107,15 @@ async function updateMission(teacherId, missionId, payload) {
   }
 
   if (payload.questions !== undefined) {
-    mission.questions = normalizeQuestions(payload.questions);
+    if (mission.draftFormat === "ESSAY_BUILDER") {
+      // WHY: Essay builder missions do not store question lists, so updates
+      // should keep questions empty without failing validation.
+      mission.questions = Array.isArray(payload.questions)
+        ? payload.questions
+        : [];
+    } else {
+      mission.questions = normalizeQuestions(payload.questions);
+    }
   }
 
   if (isAssessmentQuestionCount(Array.isArray(mission.questions) ? mission.questions.length : 0)) {

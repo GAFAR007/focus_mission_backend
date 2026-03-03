@@ -1000,6 +1000,108 @@ async function generateMissionWithGroq({
   };
 }
 
+async function generateEssayBuilderDraft({
+  title,
+  subjectName,
+  sessionType,
+  studentName,
+  taskCodes = [],
+  unitText,
+}) {
+  const aiSourceText = trimSourceTextForAi(unitText);
+  // WHY: Essay builder drafts must come from Groq so the blanked sentences
+  // reflect the exact unitText and stay teacher-review-only.
+  const { model, parsed } = await requestGroqDraft({
+    systemPrompt:
+      "You generate SEN-friendly DAILY Essay Builder drafts. Student never types. They only choose A/B/C/D options to fill blanks. Output JSON only.",
+    userPrompt: [
+      `Mission title: ${title}`,
+      `Subject: ${subjectName}`,
+      `Session: ${sessionType}`,
+      `Student name: ${studentName}`,
+      taskCodes.length ?
+        `Task focus: ${taskCodes.join(", ")}`
+      : "Task focus: none specified",
+      "Return JSON only with this shape:",
+      '{"type":"ESSAY_BUILDER","learnFirst":{"title":"LEARN FIRST","bullets":["..."],"miniExample":"..."},"builder":{"title":"BUILD YOUR ESSAY (A/B/C/D ONLY)","targetSentenceCount":6,"sentences":[{"id":"s1","role":"topic","parts":[{"type":"blank","blankId":"b1","hint":"topic","options":{"A":"...","B":"...","C":"...","D":"..."}},{"type":"text","value":" is important because "},{"type":"blank","blankId":"b2","hint":"reason","options":{"A":"...","B":"...","C":"...","D":"..."}},{"type":"text","value":"."}]}]}}',
+      "Rules:",
+      "- Use ONLY the provided unit text. Do not add outside facts.",
+      "- Calm, SEN-friendly language.",
+      "- learnFirst: 3–6 bullets, total 60–120 words, and a 2–3 sentence miniExample.",
+      "- builder.targetSentenceCount must be 6.",
+      "- roles: topic, detail, detail, detail, detail, conclusion.",
+      "- total blanks across all sentences: 10–14.",
+      "- each blank must have exactly 4 options A/B/C/D.",
+      "- only one option is the best fit; other options are plausible but less correct.",
+      "- student must NOT type anything.",
+      "Unit text:",
+      aiSourceText,
+    ].join("\n"),
+    emptyMessage: "Groq returned an empty essay builder payload.",
+    parseMessage: "Could not parse the Groq essay builder payload.",
+  });
+
+  if (!parsed || typeof parsed !== "object") {
+    throw createError(502, "Groq did not return a valid essay builder draft.");
+  }
+
+  const draftJson = parsed;
+  if (draftJson.type !== "ESSAY_BUILDER") {
+    throw createError(502, "Groq did not return ESSAY_BUILDER draft data.");
+  }
+
+  const learnFirst = draftJson.learnFirst || {};
+  const builder = draftJson.builder || {};
+  const sentences = Array.isArray(builder.sentences) ? builder.sentences : [];
+  const targetSentenceCount = Number(builder.targetSentenceCount || 0);
+
+  if (!learnFirst || !Array.isArray(learnFirst.bullets) || sentences.length < 1) {
+    throw createError(502, "Groq essay builder draft is missing required sections.");
+  }
+
+  if (targetSentenceCount !== 6) {
+    throw createError(502, "Groq essay builder must include 6 sentences.");
+  }
+
+  const blankCount = sentences.reduce((total, sentence) => {
+    const parts = Array.isArray(sentence.parts) ? sentence.parts : [];
+    const blanks = parts.filter((part) => part && part.type === "blank");
+    return total + blanks.length;
+  }, 0);
+
+  const invalidBlank = sentences.some((sentence) => {
+    const parts = Array.isArray(sentence.parts) ? sentence.parts : [];
+    return parts.some((part) => {
+      if (!part || part.type !== "blank") {
+        return false;
+      }
+      const options = part.options || {};
+      const keys = Object.keys(options);
+      return !["A", "B", "C", "D"].every((key) => keys.includes(key));
+    });
+  });
+
+  // WHY: Essay builder must stay within a guided blank count so the activity
+  // remains structured and suitable for SEN learners.
+  if (blankCount < 10 || blankCount > 14) {
+    throw createError(502, "Groq essay builder must include 10–14 blanks.");
+  }
+
+  // WHY: Each blank must offer four fixed options so students never type.
+  if (invalidBlank) {
+    throw createError(502, "Essay builder blanks must include A/B/C/D options.");
+  }
+
+  return {
+    title: String(title || "").trim(),
+    teacherNote:
+      "Complete each sentence by choosing the best A/B/C/D option.",
+    questions: [],
+    aiModel: model,
+    draftJson,
+  };
+}
+
 async function generateLearningAndBlocksWithGroq({
   subjectName,
   unitTitle,
@@ -1106,6 +1208,7 @@ async function planUnitFromSourceWithGroq({
 
 module.exports = {
   generateMissionWithGroq,
+  generateEssayBuilderDraft,
   generateLearningAndBlocksWithGroq,
   planUnitFromSourceWithGroq,
 };

@@ -24,7 +24,11 @@ function serializeMission(mission) {
   const subject = mission.subjectId && typeof mission.subjectId === "object"
     ? mission.subjectId
     : null;
-  const questionCount = (mission.questions || []).length;
+  const essayTargetCount = mission.draftFormat === "ESSAY_BUILDER"
+    ? Number(mission?.draftJson?.builder?.targetSentenceCount || 0)
+    : 0;
+  const questionCount =
+    essayTargetCount > 0 ? essayTargetCount : (mission.questions || []).length;
   const scoreTotal = Number(mission.latestScoreTotal || 0) > 0
     ? Number(mission.latestScoreTotal || 0)
     : questionCount;
@@ -49,6 +53,8 @@ function serializeMission(mission) {
     sourceRawText: mission.sourceRawText || "",
     sourceFileName: mission.sourceFileName || "",
     sourceFileType: mission.sourceFileType || "",
+    draftFormat: mission.draftFormat || "QUESTIONS",
+    draftJson: mission.draftJson || null,
     source: mission.source || "bank",
     status: mission.status || "published",
     aiModel: mission.aiModel || "",
@@ -95,6 +101,8 @@ function buildQuestionBankMission({
     sourceRawText: "",
     sourceFileName: "",
     sourceFileType: "",
+    draftFormat: "QUESTIONS",
+    draftJson: null,
     source: "bank",
     status: "published",
     aiModel: "",
