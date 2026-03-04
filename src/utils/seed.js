@@ -67,6 +67,7 @@ async function seed() {
     ictTeacher,
     businessTeacher,
     scienceTeacher,
+    healthScienceBotTeacher,
     reBotTeacher,
     englishBotTeacher,
     mathsBotTeacher,
@@ -139,6 +140,17 @@ async function seed() {
       avatarSeed: "Ndumisa Nkomazana",
       avatar:
         "https://api.dicebear.com/9.x/adventurer/svg?seed=Ndumisa%20Nkomazana",
+    },
+    {
+      name: "Health & Science Bot Teacher",
+      email: "healthscience.bot@focusmission.app",
+      passwordHash: staffPasswordHash,
+      role: "teacher",
+      subjectSpecialty: "Health and Science",
+      isPlaceholder: true,
+      avatarSeed: "Health & Science Bot Teacher",
+      avatar:
+        "https://api.dicebear.com/9.x/adventurer/svg?seed=Health%20%26%20Science%20Bot%20Teacher",
     },
     {
       name: "RE Bot Teacher",
@@ -1071,6 +1083,9 @@ async function seed() {
   );
   console.log(
     `Science teacher login: science.teacher@focusmission.app / ${staffSeedPassword}`,
+  );
+  console.log(
+    `Health & Science bot login: healthscience.bot@focusmission.app / ${staffSeedPassword}`,
   );
   console.log(
     `RE bot login: re.bot@focusmission.app / ${staffSeedPassword}`,
