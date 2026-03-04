@@ -590,9 +590,10 @@ router.patch(
       ),
     body("questions")
       .optional()
-      .isArray({ min: 1, max: 10 })
+      // WHY: Essay builder drafts store questions as an empty array.
+      .isArray({ min: 0, max: 10 })
       .withMessage(
-        "Questions must include between 1 and 10 items.",
+        "Questions must include between 0 and 10 items.",
       ),
     validateRequest,
   ],
