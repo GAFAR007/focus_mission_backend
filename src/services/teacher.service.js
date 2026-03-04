@@ -860,11 +860,15 @@ async function generateMission(teacherId, payload) {
     targetDate: payload.targetDate || getCurrentDateKey(),
   });
 
-  const questionCount = normalizeQuestionCount(payload.questionCount || 5);
-  const xpReward = isAssessmentQuestionCount(questionCount)
-    ? 50
-    : normalizeXpReward(payload.xpReward || 20);
   const draftFormat = normalizeDraftFormat(payload.draftFormat);
+  const questionCount = normalizeQuestionCount(payload.questionCount || 5);
+  const xpReward = draftFormat === "ESSAY_BUILDER"
+    // WHY: Essay drafts default to the full 50 XP reward to match the longer
+    // 10-sentence guided writing workload.
+    ? normalizeXpReward(payload.xpReward || 50)
+    : isAssessmentQuestionCount(questionCount)
+      ? 50
+      : normalizeXpReward(payload.xpReward || 20);
   const normalizedTaskCodes = normalizeTaskCodes(payload.taskCodes);
   const unitText = payload.unitText.trim();
   const draftBase = {
@@ -942,11 +946,15 @@ async function previewMission(teacherId, payload) {
     targetDate: payload.targetDate || getCurrentDateKey(),
   });
 
-  const questionCount = normalizeQuestionCount(payload.questionCount || 5);
-  const xpReward = isAssessmentQuestionCount(questionCount)
-    ? 50
-    : normalizeXpReward(payload.xpReward || 20);
   const draftFormat = normalizeDraftFormat(payload.draftFormat);
+  const questionCount = normalizeQuestionCount(payload.questionCount || 5);
+  const xpReward = draftFormat === "ESSAY_BUILDER"
+    // WHY: Essay drafts default to the full 50 XP reward to match the longer
+    // 10-sentence guided writing workload.
+    ? normalizeXpReward(payload.xpReward || 50)
+    : isAssessmentQuestionCount(questionCount)
+      ? 50
+      : normalizeXpReward(payload.xpReward || 20);
   const normalizedTaskCodes = normalizeTaskCodes(payload.taskCodes);
   const unitText = payload.unitText.trim();
   const draftBase = {
@@ -1148,6 +1156,35 @@ async function updateMission(teacherId, missionId, payload) {
   return serializeMission(savedMission);
 }
 
+async function deleteMission(teacherId, missionId) {
+  const mission = await Mission.findOne({
+    _id: missionId,
+    createdBy: teacherId,
+  }).lean();
+
+  if (!mission) {
+    throw createError(404, "Mission not found.");
+  }
+
+  // WHY: Published missions represent assigned work and audit history, so this
+  // delete path is intentionally limited to draft-only missions.
+  if (mission.status !== "draft") {
+    throw createError(400, "Only draft missions can be deleted.");
+  }
+
+  const deletion = await Mission.deleteOne({
+    _id: missionId,
+    createdBy: teacherId,
+    status: "draft",
+  });
+
+  if (!deletion.deletedCount) {
+    throw createError(409, "Draft mission could not be deleted.");
+  }
+
+  return { missionId: String(missionId) };
+}
+
 async function reextractMissionSource(teacherId, missionId) {
   const mission = await Mission.findOne({
     _id: missionId,
@@ -1213,5 +1250,6 @@ module.exports = {
   listDraftMissions,
   listRecentMissions,
   updateMission,
+  deleteMission,
   reextractMissionSource,
 };

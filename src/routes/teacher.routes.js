@@ -600,4 +600,17 @@ router.patch(
   teacherController.updateMission,
 );
 
+router.delete(
+  "/missions/:missionId",
+  [
+    param("missionId")
+      .isMongoId()
+      .withMessage(
+        "Valid missionId is required.",
+      ),
+    validateRequest,
+  ],
+  teacherController.deleteMission,
+);
+
 module.exports = router;

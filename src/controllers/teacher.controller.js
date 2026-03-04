@@ -196,6 +196,21 @@ async function updateMission(req, res, next) {
   }
 }
 
+async function deleteMission(req, res, next) {
+  try {
+    const deleted = await teacherService.deleteMission(
+      req.user.id,
+      req.params.missionId,
+    );
+    res.json({
+      success: true,
+      missionId: deleted.missionId,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function reextractMissionSource(req, res, next) {
   try {
     const mission = await teacherService.reextractMissionSource(
@@ -377,6 +392,7 @@ module.exports = {
   getDraftMissions,
   getRecentMissions,
   updateMission,
+  deleteMission,
   reextractMissionSource,
   getStudentDailyTrend,
   getStudentSessionBreakdown,

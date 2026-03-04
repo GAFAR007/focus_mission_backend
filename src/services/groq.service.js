@@ -1023,15 +1023,15 @@ async function generateEssayBuilderDraft({
         `Task focus: ${taskCodes.join(", ")}`
       : "Task focus: none specified",
       "Return JSON only with this shape:",
-      '{"type":"ESSAY_BUILDER","learnFirst":{"title":"LEARN FIRST","bullets":["..."],"miniExample":"..."},"builder":{"title":"BUILD YOUR ESSAY (A/B/C/D ONLY)","targetSentenceCount":6,"sentences":[{"id":"s1","role":"topic","parts":[{"type":"blank","blankId":"b1","hint":"topic","options":{"A":"...","B":"...","C":"...","D":"..."}},{"type":"text","value":" is important because "},{"type":"blank","blankId":"b2","hint":"reason","options":{"A":"...","B":"...","C":"...","D":"..."}},{"type":"text","value":"."}]}]}}',
+      '{"type":"ESSAY_BUILDER","learnFirst":{"title":"LEARN FIRST","bullets":["..."],"miniExample":"..."},"builder":{"title":"BUILD YOUR ESSAY (A/B/C/D ONLY)","targetSentenceCount":10,"sentences":[{"id":"s1","role":"topic","parts":[{"type":"blank","blankId":"b1","hint":"topic","correctKey":"A","options":{"A":"...","B":"...","C":"...","D":"..."}},{"type":"text","value":" is important because "},{"type":"blank","blankId":"b2","hint":"reason","correctKey":"C","options":{"A":"...","B":"...","C":"...","D":"..."}},{"type":"text","value":"."}]}]}}',
       "Rules:",
       "- Use ONLY the provided unit text. Do not add outside facts.",
       "- Calm, SEN-friendly language.",
       "- learnFirst: 3–6 bullets, total 60–120 words, and a 2–3 sentence miniExample.",
-      "- builder.targetSentenceCount must be 6.",
-      "- roles: topic, detail, detail, detail, detail, conclusion.",
+      "- builder.targetSentenceCount must be 10.",
+      "- roles must include one topic sentence, detail sentences, and one conclusion sentence.",
       "- total blanks across all sentences: 10–14.",
-      "- each blank must have exactly 4 options A/B/C/D.",
+      "- each blank must have exactly 4 options A/B/C/D and a correctKey with one of A/B/C/D.",
       "- only one option is the best fit; other options are plausible but less correct.",
       "- student must NOT type anything.",
       "Unit text:",
@@ -1059,8 +1059,14 @@ async function generateEssayBuilderDraft({
     throw createError(502, "Groq essay builder draft is missing required sections.");
   }
 
-  if (targetSentenceCount !== 6) {
-    throw createError(502, "Groq essay builder must include 6 sentences.");
+  if (targetSentenceCount !== 10) {
+    throw createError(502, "Groq essay builder must include 10 sentences.");
+  }
+
+  // WHY: The guided workflow is locked to 10 steps, so the sentence array must
+  // exactly match the target count to avoid incomplete or overlong missions.
+  if (sentences.length !== 10) {
+    throw createError(502, "Groq essay builder must return exactly 10 sentences.");
   }
 
   const blankCount = sentences.reduce((total, sentence) => {
@@ -1076,8 +1082,12 @@ async function generateEssayBuilderDraft({
         return false;
       }
       const options = part.options || {};
+      const correctKey = String(part.correctKey || "").toUpperCase();
       const keys = Object.keys(options);
-      return !["A", "B", "C", "D"].every((key) => keys.includes(key));
+      return (
+        !["A", "B", "C", "D"].every((key) => keys.includes(key)) ||
+        !["A", "B", "C", "D"].includes(correctKey)
+      );
     });
   });
 
@@ -1089,7 +1099,7 @@ async function generateEssayBuilderDraft({
 
   // WHY: Each blank must offer four fixed options so students never type.
   if (invalidBlank) {
-    throw createError(502, "Essay builder blanks must include A/B/C/D options.");
+    throw createError(502, "Essay builder blanks must include A/B/C/D options and a valid correctKey.");
   }
 
   return {
