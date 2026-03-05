@@ -42,6 +42,26 @@ function toOptionLetter(index) {
   return letters[normalizedIndex] || "";
 }
 
+function buildOptionMap(options) {
+  const safeOptions = Array.isArray(options) ?
+      options
+    : [];
+  return {
+    A: String(
+      safeOptions[0] || "",
+    ).trim(),
+    B: String(
+      safeOptions[1] || "",
+    ).trim(),
+    C: String(
+      safeOptions[2] || "",
+    ).trim(),
+    D: String(
+      safeOptions[3] || "",
+    ).trim(),
+  };
+}
+
 function normalizeText(value) {
   return String(value || "")
     .replace(/\s+/g, " ")
@@ -149,6 +169,8 @@ function buildQuestionEvidence({
             options.length ?
             options[selectedIndex]
           : "";
+        const optionMap =
+          buildOptionMap(options);
         const selectedOptionLetter = toOptionLetter(
           selectedIndex,
         );
@@ -186,6 +208,7 @@ function buildQuestionEvidence({
           questionText: String(
             question?.prompt || "",
           ).trim(),
+          options: optionMap,
           selectedOptionLetter,
           selectedAnswer,
           correctOptionLetter,
@@ -310,6 +333,8 @@ function buildLegacyQuestionEvidence({
               String(option || "").trim(),
           )
         : [];
+      const optionMap =
+        buildOptionMap(options);
       const correctIndex = Number(
         question?.correctIndex,
       );
@@ -328,6 +353,7 @@ function buildLegacyQuestionEvidence({
         questionText: String(
           question?.prompt || "",
         ).trim(),
+        options: optionMap,
         selectedOptionLetter:
           reconstructedCorrect ?
             correctOptionLetter
