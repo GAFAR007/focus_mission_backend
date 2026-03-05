@@ -89,6 +89,7 @@ const WEEKDAY_LOOKUP = {
   sun: "Sunday",
   sunday: "Sunday",
 };
+const ESSAY_SUBMISSION_MIN_WORDS = 100;
 const MISSION_REQUIRED_CORRECT_BY_TOTAL = Object.freeze({
   5: 4,
   8: 6,
@@ -96,6 +97,13 @@ const MISSION_REQUIRED_CORRECT_BY_TOTAL = Object.freeze({
   15: 11,
   20: 14,
 });
+
+function countWords(value) {
+  return String(value || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+}
 
 function calculateRequiredCorrectAnswers(totalCount) {
   const normalizedTotal = Math.max(0, Number(totalCount || 0));
@@ -707,6 +715,7 @@ async function completeSession(payload) {
   const missionId = String(payload.missionId || "").trim();
   let completedMission = null;
   let missionToPersist = null;
+  let isEssayBuilderMission = false;
 
   if (missionId) {
     const mission = await Mission.findOne({
@@ -720,6 +729,7 @@ async function completeSession(payload) {
     if (mission) {
       completedMission = mission;
       const isEssayBuilder = mission.draftFormat === "ESSAY_BUILDER";
+      isEssayBuilderMission = isEssayBuilder;
       const totalQuestions = Array.isArray(mission.questions)
         ? mission.questions.length
         : 0;
@@ -783,6 +793,43 @@ async function completeSession(payload) {
       422,
       `You need at least ${requiredCorrectAnswers} correct answers out of ${missionQuestionCount} to submit. Please retry this mission.`,
     );
+  }
+
+  if (isEssayBuilderMission) {
+    if (
+      missionQuestionCount > 0 &&
+      correctAnswers < missionQuestionCount
+    ) {
+      // WHY: Essay builder is a guided sequence; final submission requires all
+      // sentence checks correct before the free-write response is accepted.
+      throw createError(
+        422,
+        "Complete every guided sentence correctly before submitting your final essay response.",
+      );
+    }
+
+    const submissionEssayText = String(
+      payload?.resultEvidence
+        ?.essayBuilder
+        ?.finalEssayText ||
+        payload?.resultEvidence
+          ?.essayBuilder
+          ?.submissionEssayText ||
+        "",
+    ).trim();
+    const submissionWordCount =
+      countWords(submissionEssayText);
+    if (
+      submissionWordCount <
+      ESSAY_SUBMISSION_MIN_WORDS
+    ) {
+      // WHY: Essay submission requires a final written response to confirm
+      // understanding beyond guided option selection.
+      throw createError(
+        422,
+        `Write at least ${ESSAY_SUBMISSION_MIN_WORDS} words in the final essay response before submitting.`,
+      );
+    }
   }
 
   if (missionToPersist) {
