@@ -89,6 +89,25 @@ const WEEKDAY_LOOKUP = {
   sun: "Sunday",
   sunday: "Sunday",
 };
+const MISSION_REQUIRED_CORRECT_BY_TOTAL = Object.freeze({
+  5: 4,
+  8: 6,
+  10: 7,
+  15: 11,
+  20: 14,
+});
+
+function calculateRequiredCorrectAnswers(totalCount) {
+  const normalizedTotal = Math.max(0, Number(totalCount || 0));
+  if (normalizedTotal === 0) {
+    return 0;
+  }
+  return Number(
+    MISSION_REQUIRED_CORRECT_BY_TOTAL[
+      normalizedTotal
+    ] || 0,
+  );
+}
 
 function normalizeWeekday(day) {
   const normalized = String(day || "")
@@ -687,6 +706,7 @@ async function completeSession(payload) {
   let missionSubjectId = payload.subjectId;
   const missionId = String(payload.missionId || "").trim();
   let completedMission = null;
+  let missionToPersist = null;
 
   if (missionId) {
     const mission = await Mission.findOne({
@@ -732,11 +752,7 @@ async function completeSession(payload) {
         xpAwarded = challengeXpForSession + assessmentXpForSession;
       }
 
-      mission.latestScoreCorrect = correctAnswers;
-      mission.latestScoreTotal = missionQuestionCount;
-      mission.latestScorePercent = scorePercent;
-      mission.latestXpEarned = xpAwarded;
-      await mission.save();
+      missionToPersist = mission;
     }
   } else {
     completedQuestions = Math.max(0, completedQuestions);
@@ -751,6 +767,30 @@ async function completeSession(payload) {
     } else {
       challengeXpForSession = calculateChallengeXp(scorePercent);
     }
+  }
+
+  const requiredCorrectAnswers = calculateRequiredCorrectAnswers(
+    missionQuestionCount,
+  );
+  if (
+    requiredCorrectAnswers > 0 &&
+    correctAnswers < requiredCorrectAnswers
+  ) {
+    // WHY: Submission must meet a minimum mastery bar so mission completion
+    // reflects understanding for configured mission sizes; below-threshold
+    // attempts stay in retry flow.
+    throw createError(
+      422,
+      `You need at least ${requiredCorrectAnswers} correct answers out of ${missionQuestionCount} to submit. Please retry this mission.`,
+    );
+  }
+
+  if (missionToPersist) {
+    missionToPersist.latestScoreCorrect = correctAnswers;
+    missionToPersist.latestScoreTotal = missionQuestionCount;
+    missionToPersist.latestScorePercent = scorePercent;
+    missionToPersist.latestXpEarned = xpAwarded;
+    await missionToPersist.save();
   }
 
   const [student, todaySessionLogs] = await Promise.all([
