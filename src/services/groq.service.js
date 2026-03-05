@@ -169,9 +169,281 @@ function enforceSentenceRole(
     : "detail";
 }
 
+function countEssayBuilderBlanks(
+  sentences,
+) {
+  return (
+    Array.isArray(sentences) ?
+      sentences
+    : []
+  ).reduce(
+    (sum, sentence) =>
+      sum +
+      (Array.isArray(
+        sentence?.parts,
+      ) ?
+        sentence.parts
+      : []
+      ).filter(
+        (part) =>
+          part &&
+          part.type ===
+            "blank",
+      ).length,
+    0,
+  );
+}
+
+function extractEssayKeywordsFromSource(
+  unitText,
+) {
+  const source = String(
+    unitText || "",
+  ).toLowerCase();
+  const selected = [];
+
+  const stopWords = new Set([
+    "the",
+    "and",
+    "that",
+    "with",
+    "from",
+    "this",
+    "your",
+    "their",
+    "into",
+    "about",
+    "over",
+    "under",
+    "also",
+    "more",
+    "than",
+    "have",
+    "will",
+    "such",
+    "just",
+    "text",
+    "task",
+    "write",
+    "words",
+    "student",
+    "lesson",
+    "topic",
+    "question",
+    "answer",
+    "option",
+    "choose",
+    "essay",
+    "builder",
+  ]);
+  const tokens = source
+    .split(/[^a-z]+/g)
+    .map((word) => word.trim())
+    .filter(
+      (word) =>
+        word.length >= 4 &&
+        !stopWords.has(word),
+    );
+
+  const counts = new Map();
+  for (const token of tokens) {
+    counts.set(
+      token,
+      Number(
+        counts.get(token) || 0,
+      ) + 1,
+    );
+  }
+
+  const ranked = Array.from(
+    counts.entries(),
+  )
+    .sort((left, right) => {
+      if (right[1] !== left[1]) {
+        return right[1] - left[1];
+      }
+      return left[0].localeCompare(
+        right[0],
+      );
+    })
+    .map((entry) => entry[0]);
+
+  for (const word of ranked) {
+    if (
+      !selected.includes(word)
+    ) {
+      selected.push(word);
+    }
+    if (selected.length >= 6) {
+      break;
+    }
+  }
+
+  if (!selected.length) {
+    return [
+      "key concept",
+      "main point",
+      "lesson detail",
+      "supporting idea",
+    ];
+  }
+
+  return selected;
+}
+
+function buildAutoEssayBlankOptions(
+  keywords,
+  seedIndex,
+) {
+  const safeKeywords =
+    Array.isArray(keywords) &&
+    keywords.length > 0 ?
+      keywords
+    : [
+        "lifestyle",
+        "health",
+        "wellbeing",
+        "routine",
+      ];
+  const candidatePool = [
+    safeKeywords[
+      seedIndex %
+        safeKeywords.length
+    ],
+    safeKeywords[
+      (seedIndex + 1) %
+        safeKeywords.length
+    ],
+    "daily habits",
+    "support routines",
+    "balanced choices",
+  ]
+    .map((value) =>
+      String(value || "").trim(),
+    )
+    .filter(Boolean);
+
+  const distinct = [];
+  for (const value of candidatePool) {
+    if (
+      !distinct.includes(value)
+    ) {
+      distinct.push(value);
+    }
+  }
+
+  while (distinct.length < 4) {
+    distinct.push(
+      `option ${distinct.length + 1}`,
+    );
+  }
+
+  return {
+    A: distinct[0],
+    B: distinct[1],
+    C: distinct[2],
+    D: distinct[3],
+  };
+}
+
+function buildAutoEssaySentence({
+  sentenceIndex,
+  blankIndex,
+  keywords,
+}) {
+  const options =
+    buildAutoEssayBlankOptions(
+      keywords,
+      blankIndex,
+    );
+  const answerHint =
+    options.A || "main idea";
+
+  return {
+    id: `s${sentenceIndex + 1}`,
+    role: "detail",
+    learnFirst: {
+      title: "LEARN FIRST",
+      bullets: [
+        "Read the sentence clue and focus on the key lifestyle factor.",
+        "Choose the option that best matches the lesson wording.",
+        `Look for ${answerHint} as the clearest fit.`,
+      ],
+    },
+    parts: [
+      {
+        type: "text",
+        value:
+          "A key idea in this lesson is ",
+      },
+      {
+        type: "blank",
+        blankId:
+          `auto_b${blankIndex + 1}`,
+        hint: "Pick the best factor",
+        options,
+      },
+      {
+        type: "text",
+        value:
+          ", which supports the main point of this lesson.",
+      },
+    ],
+  };
+}
+
+function ensureEssayDraftBlankMinimum(
+  sentences,
+  unitText,
+) {
+  const nextSentences = Array.isArray(
+    sentences,
+  ) ?
+      [...sentences]
+    : [];
+  const keywords =
+    extractEssayKeywordsFromSource(
+      unitText,
+    );
+  let blankCount =
+    countEssayBuilderBlanks(
+      nextSentences,
+    );
+
+  // WHY: The draft contract requires at least 10 blanks for the guided
+  // sentence-builder interaction. Auto-padding avoids wasting retries when the
+  // model under-generates by one or two blanks.
+  let guard = 0;
+  while (
+    blankCount <
+      ESSAY_TARGET_BLANK_MIN &&
+    guard < 20
+  ) {
+    nextSentences.push(
+      buildAutoEssaySentence(
+        {
+          sentenceIndex:
+            nextSentences.length,
+          blankIndex:
+            blankCount,
+          keywords,
+        },
+      ),
+    );
+    blankCount =
+      countEssayBuilderBlanks(
+        nextSentences,
+      );
+    guard += 1;
+  }
+
+  return nextSentences;
+}
+
 function sanitizeEssayBuilderDraft(
   draftJson,
   mode,
+  unitText = "",
 ) {
   const normalizedMode =
     normalizeEssayMode(
@@ -191,7 +463,7 @@ function sanitizeEssayBuilderDraft(
       draftJson.builder.sentences
     : [];
 
-  const sentences =
+  const mappedSentences =
     rawSentences.map(
       (sentence, index, items) => {
         const parts = Array.isArray(
@@ -231,17 +503,26 @@ function sanitizeEssayBuilderDraft(
       },
     );
 
+  const minimumBlankSentences =
+    ensureEssayDraftBlankMinimum(
+      mappedSentences,
+      unitText,
+    );
+  const sentences =
+    minimumBlankSentences.map(
+      (sentence, index, items) => ({
+        ...sentence,
+        role:
+          enforceSentenceRole(
+            sentence?.role,
+            index,
+            items.length,
+          ),
+      }),
+    );
   const blankCount =
-    sentences.reduce(
-      (sum, sentence) =>
-        sum +
-        sentence.parts.filter(
-          (part) =>
-            part &&
-            part.type ===
-              "blank",
-        ).length,
-      0,
+    countEssayBuilderBlanks(
+      sentences,
     );
   const rawTargets =
     draftJson?.targets &&
@@ -269,13 +550,14 @@ function sanitizeEssayBuilderDraft(
           modeConfig.targetWordMax,
       ),
       targetSentenceCount: Number(
-        rawTargets.targetSentenceCount ||
-          sentences.length ||
+        sentences.length ||
+          rawTargets.targetSentenceCount ||
           modeConfig.targetSentenceCount,
       ),
       targetBlankCount: Number(
-        rawTargets.targetBlankCount ||
-          blankCount,
+        blankCount ||
+          rawTargets.targetBlankCount ||
+          ESSAY_TARGET_BLANK_MIN,
       ),
     },
     sentences,
@@ -1867,6 +2149,7 @@ async function generateEssayBuilderDraft({
         sanitizeEssayBuilderDraft(
           parsed,
           normalizedMode,
+          sourceSanitization.text,
         );
       const validation =
         validateEssayBuilderDraft(
