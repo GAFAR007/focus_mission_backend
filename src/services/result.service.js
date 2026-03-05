@@ -13,6 +13,7 @@
 const Mission = require("../models/Mission");
 const ResultPackage = require("../models/ResultPackage");
 const ResultScreenshot = require("../models/ResultScreenshot");
+const SessionLog = require("../models/SessionLog");
 const SendLog = require("../models/SendLog");
 const User = require("../models/User");
 
@@ -30,6 +31,15 @@ function countWords(value) {
     .trim()
     .split(/\s+/)
     .filter(Boolean).length;
+}
+
+function toOptionLetter(index) {
+  const normalizedIndex = Number(index);
+  if (!Number.isInteger(normalizedIndex)) {
+    return "";
+  }
+  const letters = ["A", "B", "C", "D"];
+  return letters[normalizedIndex] || "";
 }
 
 function normalizeText(value) {
@@ -139,6 +149,9 @@ function buildQuestionEvidence({
             options.length ?
             options[selectedIndex]
           : "";
+        const selectedOptionLetter = toOptionLetter(
+          selectedIndex,
+        );
         const remainingOptions =
           options.filter(
             (
@@ -153,22 +166,231 @@ function buildQuestionEvidence({
           Number(
             question?.correctIndex,
           );
+        const correctIndex = Number(
+          question?.correctIndex,
+        );
+        const correctAnswer =
+          correctIndex >= 0 &&
+          correctIndex <
+            options.length ?
+            options[correctIndex]
+          : "";
+        const correctOptionLetter = toOptionLetter(
+          correctIndex,
+        );
+        const maxPoints = 1;
+        const pointsEarned =
+          correctness ? 1 : 0;
 
         return {
           questionText: String(
             question?.prompt || "",
           ).trim(),
+          selectedOptionLetter,
           selectedAnswer,
+          correctOptionLetter,
+          correctAnswer,
           remainingOptions,
           correctness,
+          maxPoints,
+          pointsEarned,
+          attempted:
+            selectedAnswer.length > 0,
         };
       },
     )
   : [];
+  const totalPointsEarned =
+    perQuestion.reduce(
+      (sum, question) =>
+        sum +
+        Number(
+          question?.pointsEarned || 0,
+        ),
+      0,
+    );
+  const totalPointsPossible =
+    perQuestion.reduce(
+      (sum, question) =>
+        sum +
+        Number(
+          question?.maxPoints || 0,
+        ),
+      0,
+    );
+  const questionsAnsweredCount =
+    perQuestion.filter(
+      (question) =>
+        question?.attempted === true,
+    ).length;
 
   return {
     format: "QUESTIONS",
+    questionsAnsweredCount,
+    totalPointsEarned,
+    totalPointsPossible,
     questions: perQuestion,
+  };
+}
+
+function resolveMissionScoreSnapshot(
+  mission,
+) {
+  const fallbackTotal =
+    mission?.draftFormat ===
+    "ESSAY_BUILDER" ?
+      Number(
+        mission?.draftJson?.targets
+          ?.targetSentenceCount || 0,
+      )
+    : Array.isArray(mission?.questions) ?
+      mission.questions.length
+    : 0;
+  const scoreTotal = Math.max(
+    0,
+    Number(
+      mission?.latestScoreTotal ||
+        fallbackTotal ||
+        0,
+    ),
+  );
+  const scoreCorrect = Math.max(
+    0,
+    Math.min(
+      Number(
+        mission?.latestScoreCorrect ||
+          0,
+      ),
+      scoreTotal,
+    ),
+  );
+  const scorePercent =
+    scoreTotal > 0 ?
+      Math.round(
+        (scoreCorrect / scoreTotal) * 100,
+      )
+    : 0;
+
+  return {
+    scoreCorrect,
+    scoreTotal,
+    scorePercent,
+  };
+}
+
+function buildLegacyQuestionEvidence({
+  missionQuestions,
+  scoreCorrect,
+  scoreTotal,
+}) {
+  const questions = Array.isArray(
+    missionQuestions,
+  ) ?
+      missionQuestions
+    : [];
+  const normalizedTotal = Math.max(
+    questions.length,
+    Number(scoreTotal || 0),
+  );
+  const normalizedCorrect = Math.max(
+    0,
+    Math.min(
+      Number(scoreCorrect || 0),
+      normalizedTotal,
+    ),
+  );
+
+  const perQuestion = questions.map(
+    (question, index) => {
+      const options = Array.isArray(
+        question?.options,
+      ) ?
+          question.options.map(
+            (option) =>
+              String(option || "").trim(),
+          )
+        : [];
+      const correctIndex = Number(
+        question?.correctIndex,
+      );
+      const correctOptionLetter =
+        toOptionLetter(correctIndex);
+      const correctAnswer =
+        correctIndex >= 0 &&
+        correctIndex <
+          options.length ?
+          options[correctIndex]
+        : "";
+      const reconstructedCorrect =
+        index < normalizedCorrect;
+
+      return {
+        questionText: String(
+          question?.prompt || "",
+        ).trim(),
+        selectedOptionLetter:
+          reconstructedCorrect ?
+            correctOptionLetter
+          : "",
+        selectedAnswer:
+          reconstructedCorrect ?
+            correctAnswer
+          : "",
+        correctOptionLetter,
+        correctAnswer,
+        remainingOptions:
+          options.filter(
+            (
+              _value,
+              optionIndex,
+            ) =>
+              optionIndex !==
+              correctIndex,
+          ),
+        correctness:
+          reconstructedCorrect,
+        maxPoints: 1,
+        pointsEarned:
+          reconstructedCorrect ? 1 : 0,
+        attempted:
+          index <
+          Number(scoreTotal || 0),
+        legacySelectionUnavailable:
+          true,
+      };
+    },
+  );
+
+  return {
+    format: "QUESTIONS",
+    questionsAnsweredCount: Math.min(
+      Number(scoreTotal || 0),
+      normalizedTotal,
+    ),
+    totalPointsEarned: normalizedCorrect,
+    totalPointsPossible:
+      normalizedTotal,
+    questions: perQuestion,
+    legacyBackfill: true,
+    legacyBackfillReason:
+      "This result package was reconstructed from saved mission score totals.",
+  };
+}
+
+function buildLegacyEssayEvidence({
+  draftJson,
+}) {
+  const baseEvidence =
+    buildEssayEvidence({
+      draftJson: draftJson || {},
+      essayBuilderEvidence: {},
+    });
+
+  return {
+    ...baseEvidence,
+    legacyBackfill: true,
+    legacyBackfillReason:
+      "This result package was reconstructed from saved mission totals; original blank selections were not preserved.",
   };
 }
 
@@ -734,6 +956,18 @@ async function createResultPackageForCompletion({
         ),
       )
     : 0;
+  const previousAttemptCount =
+    await ResultPackage.countDocuments({
+      missionId: mission._id,
+      studentId: mission.studentId,
+    });
+  const completionAttemptNumber =
+    Math.max(
+      1,
+      Number(
+        previousAttemptCount || 0,
+      ) + 1,
+    );
   const evidence = missionType ===
       "ESSAY_BUILDER" ?
       buildEssayEvidence({
@@ -752,6 +986,13 @@ async function createResultPackageForCompletion({
             ?.questionResponses ||
           [],
       });
+  const evidenceWithAttempt =
+    {
+      ...evidence,
+      completionAttemptNumber,
+      triesToComplete:
+        completionAttemptNumber,
+    };
 
   const resultPackage =
     await ResultPackage.create(
@@ -819,7 +1060,8 @@ async function createResultPackageForCompletion({
             xpAwarded || 0,
           ),
         },
-        evidence,
+        evidence:
+          evidenceWithAttempt,
         latestSendStatus:
           "not_sent",
       },
@@ -835,6 +1077,240 @@ async function createResultPackageForCompletion({
   );
 
   return resultPackage;
+}
+
+async function ensureResultPackageForMission({
+  teacherId,
+  missionId,
+}) {
+  const mission = await Mission.findById(
+    missionId,
+  )
+    .populate("subjectId", "name")
+    .lean();
+  if (!mission) {
+    throw createError(
+      404,
+      "Mission not found.",
+    );
+  }
+  if (
+    String(
+      mission.createdBy || "",
+    ) !== String(teacherId || "")
+  ) {
+    throw createError(
+      403,
+      "You do not have access to this mission.",
+    );
+  }
+
+  const linkedResultPackageId = String(
+    mission.latestResultPackageId ||
+      "",
+  ).trim();
+  if (linkedResultPackageId) {
+    const linked =
+      await ResultPackage.findById(
+        linkedResultPackageId,
+      )
+        .select("_id")
+        .lean();
+    if (linked) {
+      return {
+        resultPackageId: String(
+          linked._id,
+        ),
+        created: false,
+      };
+    }
+  }
+
+  // WHY: Older missions may have a saved result package that was never linked
+  // on the mission document, so we recover it before creating anything new.
+  const existing =
+    await ResultPackage.findOne({
+      missionId: mission._id,
+      studentId: mission.studentId,
+    })
+      .sort({ createdAt: -1 })
+      .select("_id")
+      .lean();
+  if (existing) {
+    await Mission.findByIdAndUpdate(
+      mission._id,
+      {
+        latestResultPackageId:
+          existing._id,
+      },
+    );
+    return {
+      resultPackageId: String(
+        existing._id,
+      ),
+      created: false,
+    };
+  }
+
+  const scoreSnapshot =
+    resolveMissionScoreSnapshot(
+      mission,
+    );
+  const xpAwarded = Math.max(
+    0,
+    Number(
+      mission.latestXpEarned || 0,
+    ),
+  );
+  if (
+    scoreSnapshot.scoreTotal <= 0 &&
+    xpAwarded <= 0
+  ) {
+    return {
+      resultPackageId: "",
+      created: false,
+      reason:
+        "mission_not_completed",
+    };
+  }
+
+  const student = await User.findById(
+    mission.studentId,
+  )
+    .select("name")
+    .lean();
+  const sessionLog =
+    await SessionLog.findOne({
+      missionId: mission._id,
+      studentId: mission.studentId,
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+  const submitTime =
+    sessionLog?.createdAt ?
+      new Date(
+        sessionLog.createdAt,
+      )
+    : mission.updatedAt ?
+      new Date(mission.updatedAt)
+    : mission.createdAt ?
+      new Date(mission.createdAt)
+    : new Date();
+  const missionType =
+    mission.draftFormat ===
+    "ESSAY_BUILDER" ?
+      "ESSAY_BUILDER"
+    : "QUESTIONS";
+  const previousAttemptCount =
+    await ResultPackage.countDocuments({
+      missionId: mission._id,
+      studentId: mission.studentId,
+    });
+  const completionAttemptNumber =
+    Math.max(
+      1,
+      Number(
+        previousAttemptCount || 0,
+      ) + 1,
+    );
+  const evidence =
+    missionType ===
+    "ESSAY_BUILDER" ?
+      buildLegacyEssayEvidence({
+        draftJson:
+          mission.draftJson || {},
+      })
+    : buildLegacyQuestionEvidence({
+        missionQuestions:
+          mission.questions || [],
+        scoreCorrect:
+          scoreSnapshot.scoreCorrect,
+        scoreTotal:
+          scoreSnapshot.scoreTotal,
+      });
+  const evidenceWithAttempt = {
+    ...evidence,
+    completionAttemptNumber,
+    triesToComplete:
+      completionAttemptNumber,
+  };
+
+  const resultPackage =
+    await ResultPackage.create({
+      studentId: mission.studentId,
+      teacherId:
+        mission.createdBy || null,
+      missionId: mission._id,
+      sessionLogId:
+        sessionLog?._id || null,
+      subjectId:
+        mission.subjectId &&
+        typeof mission.subjectId ===
+          "object" ?
+          mission.subjectId._id
+        : mission.subjectId,
+      missionType,
+      meta: {
+        studentName: String(
+          student?.name || "",
+        ).trim(),
+        studentId: String(
+          mission.studentId || "",
+        ),
+        teacherId: String(
+          mission.createdBy || "",
+        ),
+        missionId: String(
+          mission._id || "",
+        ),
+        missionTitle: String(
+          mission.title || "",
+        ).trim(),
+        subject: String(
+          mission?.subjectId?.name ||
+            "",
+        ).trim(),
+        taskCodes: Array.isArray(
+          mission.taskCodes,
+        ) ?
+          mission.taskCodes
+        : [],
+        assignedDate: String(
+          mission.availableOnDate || "",
+        ).trim(),
+        startTime: null,
+        submitTime,
+        durationSeconds: 0,
+        score: {
+          correct:
+            scoreSnapshot.scoreCorrect,
+          total:
+            scoreSnapshot.scoreTotal,
+          percent:
+            scoreSnapshot.scorePercent,
+        },
+        xpAwarded,
+      },
+      evidence:
+        evidenceWithAttempt,
+      latestSendStatus:
+        "not_sent",
+    });
+
+  await Mission.findByIdAndUpdate(
+    mission._id,
+    {
+      latestResultPackageId:
+        resultPackage._id,
+    },
+  );
+
+  return {
+    resultPackageId: String(
+      resultPackage._id,
+    ),
+    created: true,
+  };
 }
 
 async function getResultPackageForTeacher({
@@ -1309,6 +1785,7 @@ async function getResultScreenshotForTeacher({
 
 module.exports = {
   createResultPackageForCompletion,
+  ensureResultPackageForMission,
   getResultPackageForTeacher,
   sendResultPackage,
   processPendingEmailRetries,

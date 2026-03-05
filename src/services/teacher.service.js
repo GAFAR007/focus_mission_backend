@@ -28,6 +28,9 @@ const {
   planUnitFromSourceWithGroq,
 } = require("./groq.service");
 const {
+  ensureResultPackageForMission,
+} = require("./result.service");
+const {
   extractTextFromUploadedSource,
 } = require("./sourceExtraction.service");
 const { serializeMission } = require("../utils/missionSerializer");
@@ -1070,6 +1073,60 @@ async function listRecentMissions(teacherId, studentId) {
     .limit(RECENT_MISSIONS_HISTORY_LIMIT)
     .populate("subjectId", "name icon color")
     .lean();
+
+  // WHY: Historical missions completed before the result-package rollout can be
+  // missing latestResultPackageId. We backfill/link them here so teachers can
+  // still send results from old assigned missions.
+  await Promise.all(
+    missions.map(async (mission) => {
+      if (
+        mission?.latestResultPackageId ||
+        (
+          Number(
+            mission?.latestScoreTotal || 0,
+          ) <= 0 &&
+          Number(
+            mission?.latestXpEarned || 0,
+          ) <= 0
+        )
+      ) {
+        return;
+      }
+
+      try {
+        const ensured =
+          await ensureResultPackageForMission(
+            {
+              teacherId,
+              missionId: String(
+                mission?._id || "",
+              ),
+            },
+          );
+        if (
+          ensured?.resultPackageId
+        ) {
+          mission.latestResultPackageId =
+            ensured.resultPackageId;
+        }
+      } catch (error) {
+        console.warn(
+          "[results] backfill skipped for mission",
+          {
+            missionId: String(
+              mission?._id || "",
+            ),
+            teacherId: String(
+              teacherId || "",
+            ),
+            reason: String(
+              error?.message || "",
+            ),
+          },
+        );
+      }
+    }),
+  );
 
   return missions.map(serializeMission);
 }
