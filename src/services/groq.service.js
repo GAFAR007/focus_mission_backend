@@ -732,6 +732,87 @@ function trimSourceTextForAi(
   return `${trimmed.slice(0, maxCharacters)}\n\n[Source text trimmed for AI draft length.]`;
 }
 
+function lineContainsWordCountInstruction(
+  line,
+) {
+  const normalized = String(
+    line || "",
+  )
+    .trim()
+    .toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  // WHY: Only strip explicit "write X words" style instructions, not normal
+  // curriculum content that happens to include the word "word" in another
+  // context.
+  const hasWordToken =
+    /\bword(s)?\b/.test(
+      normalized,
+    );
+  const hasNumericRange =
+    /\b\d{2,4}\s*[-–to]{1,3}\s*\d{2,4}\b/.test(
+      normalized,
+    );
+  const hasNumericWords =
+    /\b\d{2,4}\s*word(s)?\b/.test(
+      normalized,
+    );
+  const hasInstructionVerb =
+    /\b(write|minimum|max(?:imum)?|at least|no more than|between|approx(?:\.|imately)?|around|target)\b/.test(
+      normalized,
+    );
+
+  return (
+    hasWordToken &&
+    (hasNumericRange || hasNumericWords) &&
+    hasInstructionVerb
+  );
+}
+
+function sanitizeEssayBuilderSourceText(
+  unitText,
+) {
+  const sourceText = String(
+    unitText || "",
+  )
+    .replace(/\r/g, "")
+    .trim();
+  if (!sourceText) {
+    return {
+      text: "",
+      removedCount: 0,
+    };
+  }
+
+  const lines = sourceText.split("\n");
+  const keptLines = [];
+  let removedCount = 0;
+
+  for (const line of lines) {
+    if (
+      lineContainsWordCountInstruction(
+        line,
+      )
+    ) {
+      removedCount += 1;
+      continue;
+    }
+    keptLines.push(line);
+  }
+
+  const sanitizedText = keptLines
+    .join("\n")
+    .trim();
+  return {
+    text:
+      sanitizedText ||
+      sourceText,
+    removedCount,
+  };
+}
+
 function isAnswerExplicitlyTaught(
   learningText,
   answerText,
@@ -1689,15 +1770,43 @@ async function generateEssayBuilderDraft({
   missionDraftId = "",
   allowOverflowBlanks = false,
 }) {
-  const aiSourceText = trimSourceTextForAi(unitText);
   const normalizedMode = normalizeEssayMode(mode);
   const modeConfig =
     ensureEssayModeConfig(
       normalizedMode,
     );
+  const sourceSanitization =
+    sanitizeEssayBuilderSourceText(
+      unitText,
+    );
+  const aiSourceText =
+    trimSourceTextForAi(
+      sourceSanitization.text,
+    );
   let lastValidationErrors = [];
   let lastError = null;
   let lastModel = "";
+
+  if (
+    sourceSanitization.removedCount > 0
+  ) {
+    console.warn(
+      "[groq] essay_builder_source_sanitized",
+      {
+        missionDraftId:
+          String(
+            missionDraftId || "",
+          ).trim() || null,
+        teacherId:
+          String(
+            teacherId || "",
+          ).trim() || null,
+        mode: normalizedMode,
+        removedCount:
+          sourceSanitization.removedCount,
+      },
+    );
+  }
 
   for (
     let attempt = 1;
@@ -1741,6 +1850,7 @@ async function generateEssayBuilderDraft({
             `- Prefer total blanks between ${ESSAY_TARGET_BLANK_MIN} and ${ESSAY_TARGET_BLANK_MAX}. Only exceed if needed to keep draft above minimum words.`,
             `- targetWordMin must be >= ${ESSAY_TARGET_WORD_MIN} and targetWordMax must be <= ${ESSAY_TARGET_WORD_MAX}.`,
             "- targetSentenceCount and targetBlankCount must match the actual generated totals.",
+            "- Ignore any source-internal word-count instruction that conflicts with mode targets. Mode targets are the only valid word limits.",
             "- Draft must produce a complete essay paragraph when blanks are filled.",
             "Unit text:",
             aiSourceText,
