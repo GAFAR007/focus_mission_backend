@@ -77,8 +77,9 @@ function ensureEssayModeConfig(mode) {
 
 function cleanSentenceLearnFirst(
   learnFirst,
+  sentenceParts = [],
 ) {
-  const bullets = Array.isArray(
+  const rawBullets = Array.isArray(
     learnFirst?.bullets,
   ) ?
       learnFirst.bullets
@@ -86,16 +87,91 @@ function cleanSentenceLearnFirst(
         .filter(Boolean)
     : [];
 
+  const normalize = (value) =>
+    String(value || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  const isGenericBullet = (bullet) => {
+    const text = normalize(bullet);
+    if (!text || countWords(text) < 6) {
+      return true;
+    }
+    const genericMarkers = [
+      "choose the best option",
+      "use the sentence clue",
+      "pick the best option",
+      "read and choose",
+      "a b c d",
+    ];
+    return genericMarkers.some((marker) => text.includes(marker));
+  };
+
+  const blankParts = (
+    Array.isArray(sentenceParts) ?
+      sentenceParts
+    : []
+  ).filter((part) => part && part.type === "blank");
+  const firstBlank = blankParts[0] || null;
+  const correctOption = String(firstBlank?.correctOption || "A")
+    .trim()
+    .toUpperCase();
+  const correctOptionText = String(
+    firstBlank?.options?.[correctOption] || "",
+  ).trim();
+  const optionsSummary = ["A", "B", "C", "D"]
+    .map((key) =>
+      String(firstBlank?.options?.[key] || "").trim() ?
+        `${key}: ${String(firstBlank.options[key]).trim()}`
+      : "",
+    )
+    .filter(Boolean)
+    .join(" | ");
+  const sentenceContext = normalizeEssayText(
+    (Array.isArray(sentenceParts) ? sentenceParts : [])
+      .map((part) =>
+        part && part.type === "text" ?
+          String(part.value || "")
+        : "_____",
+      )
+      .join(""),
+  );
+
+  const fallbackBullets = [
+    sentenceContext ?
+      `Sentence focus: ${sentenceContext}`
+    : "Read the sentence carefully and identify the main idea before choosing.",
+    correctOptionText ?
+      `Best-fit clue: ${correctOptionText} matches the lesson meaning most accurately.`
+    : "Pick the option that keeps the sentence accurate to the lesson content.",
+    optionsSummary ?
+      `Compare options: ${optionsSummary}. Select the strongest match for this sentence.`
+    : "Compare all A/B/C/D options and select the one that best matches the taught point.",
+  ];
+
+  const preferredBullets = rawBullets.filter(
+    (bullet) => !isGenericBullet(bullet),
+  );
   const uniqueBullets = [];
-  for (const bullet of bullets) {
-    if (!uniqueBullets.includes(bullet)) {
-      uniqueBullets.push(bullet);
+  for (const bullet of [
+    ...preferredBullets,
+    ...rawBullets,
+    ...fallbackBullets,
+  ]) {
+    const trimmed = String(bullet || "").trim();
+    if (!trimmed || uniqueBullets.includes(trimmed)) {
+      continue;
+    }
+    uniqueBullets.push(trimmed);
+    if (uniqueBullets.length >= 6) {
+      break;
     }
   }
 
   while (uniqueBullets.length < 3) {
     uniqueBullets.push(
-      "Use the sentence clue and choose the best option from A/B/C/D.",
+      fallbackBullets[uniqueBullets.length % fallbackBullets.length],
     );
   }
 
@@ -128,6 +204,16 @@ function cleanEssayPart(
       },
       {},
     );
+    const normalizedCorrectOption = String(
+      part?.correctOption || "A",
+    )
+      .trim()
+      .toUpperCase();
+    const correctOption = ["A", "B", "C", "D"].includes(
+      normalizedCorrectOption,
+    ) ?
+        normalizedCorrectOption
+      : "A";
     return {
       type: "blank",
       blankId:
@@ -137,6 +223,7 @@ function cleanEssayPart(
         part?.hint || "",
       ).trim(),
       options,
+      correctOption,
     };
   }
 
@@ -353,6 +440,9 @@ function buildAutoEssaySentence({
     );
   const answerHint =
     options.A || "main idea";
+  const optionsSummary = ["A", "B", "C", "D"]
+    .map((key) => `${key}: ${options[key]}`)
+    .join(" | ");
 
   return {
     id: `s${sentenceIndex + 1}`,
@@ -360,9 +450,9 @@ function buildAutoEssaySentence({
     learnFirst: {
       title: "LEARN FIRST",
       bullets: [
-        "Read the sentence clue and focus on the key lifestyle factor.",
-        "Choose the option that best matches the lesson wording.",
-        `Look for ${answerHint} as the clearest fit.`,
+        "Read the sentence context first so you know what evidence is needed.",
+        `Best-fit clue: ${answerHint} is the strongest match for this sentence meaning.`,
+        `Option comparison: ${optionsSummary}. Pick the choice that stays most accurate.`,
       ],
     },
     parts: [
@@ -377,6 +467,7 @@ function buildAutoEssaySentence({
           `auto_b${blankIndex + 1}`,
         hint: "Pick the best factor",
         options,
+        correctOption: "A",
       },
       {
         type: "text",
@@ -482,6 +573,7 @@ function sanitizeEssayBuilderDraft(
           learnFirst:
             cleanSentenceLearnFirst(
               sentence?.learnFirst,
+              parts,
             ),
           parts: parts.map(
             (
@@ -743,6 +835,20 @@ function validateEssayBuilderDraft(
           `Sentence ${index + 1} is missing LEARN FIRST bullets.`,
         );
       }
+      if (learnBullets.length < 3) {
+        errors.push(
+          `Sentence ${index + 1} needs at least three LEARN FIRST bullets.`,
+        );
+      }
+      const learnWordCount = learnBullets.reduce(
+        (sum, bullet) => sum + countWords(bullet),
+        0,
+      );
+      if (learnWordCount < 18) {
+        errors.push(
+          `Sentence ${index + 1} LEARN FIRST guidance is too short.`,
+        );
+      }
 
       blankParts.forEach(
         (
@@ -781,6 +887,28 @@ function validateEssayBuilderDraft(
           if (missingOptionText) {
             errors.push(
               `Sentence ${index + 1} blank ${blankIndex + 1} has an empty option.`,
+            );
+          }
+          const correctOption = String(
+            part?.correctOption || "",
+          )
+            .trim()
+            .toUpperCase();
+          if (
+            !["A", "B", "C", "D"].includes(
+              correctOption,
+            )
+          ) {
+            errors.push(
+              `Sentence ${index + 1} blank ${blankIndex + 1} must include correctOption A/B/C/D.`,
+            );
+          } else if (
+            !String(
+              options?.[correctOption] || "",
+            ).trim()
+          ) {
+            errors.push(
+              `Sentence ${index + 1} blank ${blankIndex + 1} has empty text for correctOption ${correctOption}.`,
             );
           }
         },
@@ -2115,14 +2243,17 @@ async function generateEssayBuilderDraft({
               `Regeneration reason: ${regenerationReason}`
             : "Regeneration reason: none",
             "Return JSON only with this shape:",
-            '{"type":"ESSAY_BUILDER","mode":"NORMAL","targets":{"targetWordMin":100,"targetWordMax":350,"targetSentenceCount":10,"targetBlankCount":10},"sentences":[{"id":"s1","role":"topic","learnFirst":{"title":"LEARN FIRST","bullets":["...","...","..."]},"parts":[{"type":"text","value":"..."},{"type":"blank","blankId":"b1","hint":"short hint","options":{"A":"...","B":"...","C":"...","D":"..."}},{"type":"text","value":"..."}]}]}',
+            '{"type":"ESSAY_BUILDER","mode":"NORMAL","targets":{"targetWordMin":100,"targetWordMax":350,"targetSentenceCount":10,"targetBlankCount":10},"sentences":[{"id":"s1","role":"topic","learnFirst":{"title":"LEARN FIRST","bullets":["...","...","..."]},"parts":[{"type":"text","value":"..."},{"type":"blank","blankId":"b1","hint":"short hint","options":{"A":"...","B":"...","C":"...","D":"..."},"correctOption":"A"},{"type":"text","value":"..."}]}]}',
             "Rules:",
             "- Use ONLY the provided unit text. Do not add outside facts.",
             "- Calm, SEN-friendly, concrete language.",
-            "- Every sentence must include sentence-level LEARN FIRST with title and bullets.",
+            "- Every sentence must include sentence-level LEARN FIRST with title and at least three detailed bullets.",
+            "- LEARN FIRST bullets must teach sentence meaning clearly with concrete clues/examples from the source.",
             "- Every sentence must include at least one blank.",
             "- Every blank must have exactly four options: A, B, C, D.",
+            "- Every blank must include correctOption as A/B/C/D.",
             "- Exactly one option should be the best fit. Others can be plausible but less correct.",
+            "- LEARN FIRST must make the correct option understandable before the student chooses.",
             "- First sentence role must be topic. Last must be conclusion. Middle must be detail.",
             `- Prefer total blanks between ${ESSAY_TARGET_BLANK_MIN} and ${ESSAY_TARGET_BLANK_MAX}. Only exceed if needed to keep draft above minimum words.`,
             `- targetWordMin must be >= ${ESSAY_TARGET_WORD_MIN} and targetWordMax must be <= ${ESSAY_TARGET_WORD_MAX}.`,
