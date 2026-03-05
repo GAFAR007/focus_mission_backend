@@ -62,6 +62,29 @@ function buildOptionMap(options) {
   };
 }
 
+function buildBlankOptionMap(options) {
+  const safeOptions =
+    options &&
+    typeof options ===
+      "object" ?
+      options
+    : {};
+  return {
+    A: String(
+      safeOptions.A || "",
+    ).trim(),
+    B: String(
+      safeOptions.B || "",
+    ).trim(),
+    C: String(
+      safeOptions.C || "",
+    ).trim(),
+    D: String(
+      safeOptions.D || "",
+    ).trim(),
+  };
+}
+
 function normalizeText(value) {
   return String(value || "")
     .replace(/\s+/g, " ")
@@ -498,18 +521,52 @@ function buildEssaySentenceOutput(
       )
         .trim()
         .toUpperCase();
+      const options =
+        buildBlankOptionMap(
+          part?.options,
+        );
+      const correctOptionLetter = String(
+        part?.correctOption || "",
+      )
+        .trim()
+        .toUpperCase();
+      const normalizedCorrectOption =
+        ["A", "B", "C", "D"].includes(
+          correctOptionLetter,
+        ) ?
+          correctOptionLetter
+        : "";
       const selectedText = String(
-        part?.options?.[
+        options[
           selectedOption
+        ] || "",
+      ).trim();
+      const correctText = String(
+        options[
+          normalizedCorrectOption
         ] || "",
       ).trim();
       buffer.push(selectedText);
       blankEvidence.push({
         blankId,
+        hint: String(
+          part?.hint || "",
+        ).trim(),
+        options,
         chosenOptionLetter:
           selectedOption,
         chosenOptionText:
           selectedText,
+        correctOptionLetter:
+          normalizedCorrectOption,
+        correctOptionText:
+          correctText,
+        isCorrect:
+          selectedOption &&
+          normalizedCorrectOption ?
+            selectedOption ===
+            normalizedCorrectOption
+          : false,
       });
       continue;
     }
