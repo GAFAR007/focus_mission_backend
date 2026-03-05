@@ -1152,7 +1152,12 @@ function buildResultReportPdfBuffer({
     (resolve, reject) => {
       const doc = new PDFDocument({
         size: "A4",
-        margin: 40,
+        margins: {
+          top: 40,
+          bottom: 40,
+          left: 40,
+          right: 40,
+        },
       });
       const chunks = [];
       doc.on("data", (chunk) => {
@@ -1171,90 +1176,328 @@ function buildResultReportPdfBuffer({
       const evidence =
         resultPackage?.evidence ||
         {};
+      const colors = {
+        brand: "#2563eb",
+        heading: "#1d4ed8",
+        text: "#111827",
+        muted: "#6b7280",
+        line: "#dbeafe",
+        good: "#16a34a",
+        bad: "#dc2626",
+        warn: "#d97706",
+        info: "#0ea5e9",
+      };
+      const contentWidth =
+        doc.page.width -
+        doc.page.margins.left -
+        doc.page.margins.right;
+      const pageBottom =
+        () =>
+          doc.page.height -
+          doc.page.margins.bottom;
 
-      const addLine = (
-        value = "",
-      ) => {
+      const drawPageStripe = () => {
+        doc.save();
         doc
-          .fontSize(10)
-          .fillColor("#111111")
-          .text(String(value || ""), {
-            width: 515,
-          });
+          .rect(
+            0,
+            0,
+            doc.page.width,
+            12,
+          )
+          .fill(colors.brand);
+        doc.restore();
       };
 
-      const addSection = (
+      const ensureSpace = (
+        requiredHeight = 24,
+      ) => {
+        if (
+          doc.y + requiredHeight >
+          pageBottom()
+        ) {
+          doc.addPage();
+        }
+      };
+
+      const sectionTitle = (
         title,
       ) => {
-        doc.moveDown(0.7);
-        doc
-          .fontSize(13)
-          .fillColor("#1e3a8a")
-          .text(String(title || ""));
+        ensureSpace(34);
         doc.moveDown(0.2);
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(14)
+          .fillColor(colors.heading)
+          .text(
+            String(title || ""),
+          );
+        doc
+          .moveTo(
+            doc.page.margins.left,
+            doc.y + 2,
+          )
+          .lineTo(
+            doc.page.width -
+              doc.page.margins.right,
+            doc.y + 2,
+          )
+          .strokeColor(colors.line)
+          .lineWidth(1)
+          .stroke();
+        doc.moveDown(0.5);
       };
 
+      const keyValue = (
+        label,
+        value,
+      ) => {
+        ensureSpace(18);
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(10)
+          .fillColor(colors.heading)
+          .text(
+            `${String(label || "").trim()}: `,
+            { continued: true },
+          );
+        doc
+          .font("Helvetica")
+          .fontSize(10)
+          .fillColor(colors.text)
+          .text(
+            String(value || "")
+              .trim(),
+          );
+      };
+
+      const writeLine = ({
+        text = "",
+        color = colors.text,
+        size = 10,
+        bold = false,
+        indent = 0,
+      }) => {
+        ensureSpace(16);
+        doc
+          .font(
+            bold ?
+              "Helvetica-Bold"
+            : "Helvetica",
+          )
+          .fontSize(size)
+          .fillColor(color)
+          .text(
+            String(text || ""),
+            doc.page.margins.left +
+              indent,
+            doc.y,
+            {
+              width:
+                contentWidth -
+                indent,
+            },
+          );
+      };
+
+      const writeResultPill = (
+        label,
+        isGood,
+      ) => {
+        ensureSpace(20);
+        const text = String(
+          label || "",
+        ).trim();
+        const x =
+          doc.page.margins.left;
+        const y = doc.y;
+        const width =
+          Math.min(
+            contentWidth,
+            doc.widthOfString(
+              text,
+              {
+                font:
+                  "Helvetica-Bold",
+                size: 9,
+              },
+            ) + 16,
+          );
+        const height = 16;
+        doc.save();
+        doc
+          .roundedRect(
+            x,
+            y,
+            width,
+            height,
+            8,
+          )
+          .fill(
+            isGood ?
+              "#dcfce7"
+            : "#fee2e2",
+          );
+        doc.restore();
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(9)
+          .fillColor(
+            isGood ?
+              colors.good
+            : colors.bad,
+          )
+          .text(
+            text,
+            x + 8,
+            y + 4,
+            {
+              width: width - 12,
+            },
+          );
+        doc.y = y + height + 4;
+      };
+
+      doc.on("pageAdded", () => {
+        drawPageStripe();
+        // WHY: New pages keep the same branded top stripe and spacing so
+        // multi-page evidence remains visually consistent and readable.
+        doc.y =
+          doc.page.margins.top + 8;
+      });
+
+      drawPageStripe();
+      doc.save();
       doc
+        .roundedRect(
+          doc.page.margins.left,
+          26,
+          contentWidth,
+          72,
+          12,
+        )
+        .fill(colors.brand);
+      doc.restore();
+      doc
+        .font("Helvetica-Bold")
         .fontSize(18)
-        .fillColor("#0f172a")
+        .fillColor("#ffffff")
         .text(
           "Focus Mission Full Result Report",
-          {
-            align: "center",
-          },
+          doc.page.margins.left + 14,
+          44,
+          { width: contentWidth - 28 },
         );
-      doc.moveDown(0.8);
+      doc
+        .font("Helvetica")
+        .fontSize(10)
+        .fillColor("#dbeafe")
+        .text(
+          `Generated: ${new Date().toISOString()}`,
+          doc.page.margins.left + 14,
+          70,
+          { width: contentWidth - 28 },
+        );
+      doc.y = 110;
 
-      addSection("Meta");
-      addLine(
-        `Student: ${String(meta.studentName || "").trim()}`,
+      sectionTitle("Meta");
+      keyValue(
+        "Student",
+        String(
+          meta.studentName || "",
+        ).trim(),
       );
-      addLine(
-        `Student ID: ${String(meta.studentId || "").trim()}`,
+      keyValue(
+        "Student ID",
+        String(
+          meta.studentId || "",
+        ).trim(),
       );
-      addLine(
-        `Teacher ID: ${String(meta.teacherId || "").trim()}`,
+      keyValue(
+        "Teacher ID",
+        String(
+          meta.teacherId || "",
+        ).trim(),
       );
-      addLine(
-        `Mission: ${String(meta.missionTitle || "").trim()}`,
+      keyValue(
+        "Mission",
+        String(
+          meta.missionTitle || "",
+        ).trim(),
       );
-      addLine(
-        `Mission ID: ${String(meta.missionId || "").trim()}`,
+      keyValue(
+        "Mission ID",
+        String(
+          meta.missionId || "",
+        ).trim(),
       );
-      addLine(
-        `Subject: ${String(meta.subject || "").trim()}`,
+      keyValue(
+        "Subject",
+        String(
+          meta.subject || "",
+        ).trim(),
       );
-      addLine(
-        `Task Codes: ${Array.isArray(meta.taskCodes) ? meta.taskCodes.join(", ") : ""}`,
+      keyValue(
+        "Task Codes",
+        Array.isArray(
+          meta.taskCodes,
+        ) ?
+          meta.taskCodes.join(", ")
+        : "",
       );
-      addLine(
-        `Assigned Date: ${String(meta.assignedDate || "").trim()}`,
+      keyValue(
+        "Assigned Date",
+        String(
+          meta.assignedDate || "",
+        ).trim(),
       );
-      addLine(
-        `Start Time: ${meta.startTime ? new Date(meta.startTime).toISOString() : ""}`,
+      keyValue(
+        "Start Time",
+        meta.startTime ?
+          new Date(
+            meta.startTime,
+          ).toISOString()
+        : "",
       );
-      addLine(
-        `Submit Time: ${meta.submitTime ? new Date(meta.submitTime).toISOString() : ""}`,
+      keyValue(
+        "Submit Time",
+        meta.submitTime ?
+          new Date(
+            meta.submitTime,
+          ).toISOString()
+        : "",
       );
-      addLine(
-        `Duration (seconds): ${Number(meta.durationSeconds || 0)}`,
+      keyValue(
+        "Duration (seconds)",
+        Number(
+          meta.durationSeconds || 0,
+        ),
       );
-      addLine(
-        `Score: ${Number(score.correct || 0)}/${Number(score.total || 0)} (${Number(score.percent || 0)}%)`,
+      keyValue(
+        "Score",
+        `${Number(score.correct || 0)}/${Number(score.total || 0)} (${Number(score.percent || 0)}%)`,
       );
-      addLine(
-        `XP Awarded: ${Number(meta.xpAwarded || 0)}`,
+      keyValue(
+        "XP Awarded",
+        Number(meta.xpAwarded || 0),
       );
-      addLine(
-        `Format: ${String(evidence.format || resultPackage?.missionType || "").trim()}`,
+      keyValue(
+        "Format",
+        String(
+          evidence.format ||
+            resultPackage
+              ?.missionType ||
+            "",
+        ).trim(),
       );
       if (screenshotUrl) {
-        addLine(
-          `Screenshot URL: ${String(screenshotUrl).trim()}`,
+        keyValue(
+          "Screenshot URL",
+          String(screenshotUrl).trim(),
         );
       }
 
-      addSection("Evidence");
+      sectionTitle("Evidence");
 
       if (
         String(
@@ -1262,11 +1505,16 @@ function buildResultReportPdfBuffer({
         ).toUpperCase() ===
         "QUESTIONS"
       ) {
-        addLine(
-          `Questions Answered: ${Number(evidence.questionsAnsweredCount || 0)}`,
+        keyValue(
+          "Questions Answered",
+          Number(
+            evidence.questionsAnsweredCount ||
+              0,
+          ),
         );
-        addLine(
-          `Points: ${Number(evidence.totalPointsEarned || 0)}/${Number(evidence.totalPointsPossible || 0)}`,
+        keyValue(
+          "Points",
+          `${Number(evidence.totalPointsEarned || 0)}/${Number(evidence.totalPointsPossible || 0)}`,
         );
         doc.moveDown(0.4);
 
@@ -1287,36 +1535,57 @@ function buildResultReportPdfBuffer({
                 "object" ?
                 question.options
               : {};
-            doc
-              .fontSize(11)
-              .fillColor("#0f172a")
-              .text(
-                `Q${index + 1}: ${String(question?.questionText || "").trim()}`,
-              );
-            addLine(
-              `A) ${String(options.A || "").trim()}`,
-            );
-            addLine(
-              `B) ${String(options.B || "").trim()}`,
-            );
-            addLine(
-              `C) ${String(options.C || "").trim()}`,
-            );
-            addLine(
-              `D) ${String(options.D || "").trim()}`,
-            );
-            addLine(
-              `Correct: ${String(question?.correctOptionLetter || "").trim()}) ${String(question?.correctAnswer || "").trim()}`,
-            );
-            addLine(
-              `Selected: ${String(question?.selectedOptionLetter || "").trim()}) ${String(question?.selectedAnswer || "").trim()}`,
-            );
-            addLine(
+            writeLine({
+              text: `Q${index + 1}: ${String(question?.questionText || "").trim()}`,
+              size: 11,
+              bold: true,
+              color: colors.heading,
+            });
+            writeLine({
+              text: `A) ${String(options.A || "").trim()}`,
+              color: colors.muted,
+              indent: 10,
+            });
+            writeLine({
+              text: `B) ${String(options.B || "").trim()}`,
+              color: colors.muted,
+              indent: 10,
+            });
+            writeLine({
+              text: `C) ${String(options.C || "").trim()}`,
+              color: colors.muted,
+              indent: 10,
+            });
+            writeLine({
+              text: `D) ${String(options.D || "").trim()}`,
+              color: colors.muted,
+              indent: 10,
+            });
+            writeLine({
+              text: `Correct: ${String(question?.correctOptionLetter || "").trim()}) ${String(question?.correctAnswer || "").trim()}`,
+              color: colors.good,
+              bold: true,
+              indent: 10,
+            });
+            writeLine({
+              text: `Selected: ${String(question?.selectedOptionLetter || "").trim()}) ${String(question?.selectedAnswer || "").trim()}`,
+              color:
+                question?.correctness ?
+                  colors.info
+                : colors.warn,
+              bold: true,
+              indent: 10,
+            });
+            writeResultPill(
               `Result: ${question?.correctness ? "Correct" : "Incorrect"}`,
+              question?.correctness ===
+                true,
             );
-            addLine(
-              `Points: ${Number(question?.pointsEarned || 0)}/${Number(question?.maxPoints || 0)}`,
-            );
+            writeLine({
+              text: `Points: ${Number(question?.pointsEarned || 0)}/${Number(question?.maxPoints || 0)}`,
+              color: colors.text,
+              indent: 10,
+            });
             doc.moveDown(0.5);
           },
         );
@@ -1326,14 +1595,22 @@ function buildResultReportPdfBuffer({
         ).toUpperCase() ===
         "ESSAY_BUILDER"
       ) {
-        addLine(
-          `Mode: ${String(evidence?.mode || "").trim()}`,
+        keyValue(
+          "Mode",
+          String(
+            evidence?.mode || "",
+          ).trim(),
         );
-        addLine(
-          `Word Count: ${Number(evidence?.finalWordCount || 0)}`,
+        keyValue(
+          "Word Count",
+          Number(
+            evidence?.finalWordCount ||
+              0,
+          ),
         );
-        addLine(
-          `Blank Completion: ${Number(evidence?.blankCompletionCount || 0)}/${Number(evidence?.blankTargetCount || 0)}`,
+        keyValue(
+          "Blank Completion",
+          `${Number(evidence?.blankCompletionCount || 0)}/${Number(evidence?.blankTargetCount || 0)}`,
         );
         doc.moveDown(0.4);
 
@@ -1356,17 +1633,24 @@ function buildResultReportPdfBuffer({
               );
             const bullets =
               Array.isArray(
-                sentence?.learnFirstBullets,
+              sentence?.learnFirstBullets,
               ) ?
                 sentence.learnFirstBullets
               : [];
             if (bullets.length) {
-              addLine("Learn First:");
+              writeLine({
+                text: "Learn First:",
+                bold: true,
+                color: colors.warn,
+                indent: 10,
+              });
               bullets.forEach(
                 (bullet) => {
-                  addLine(
-                    `- ${String(bullet || "").trim()}`,
-                  );
+                  writeLine({
+                    text: `- ${String(bullet || "").trim()}`,
+                    color: colors.text,
+                    indent: 18,
+                  });
                 },
               );
             }
@@ -1383,54 +1667,82 @@ function buildResultReportPdfBuffer({
                 blankIndex,
               ) => {
                 const options =
-                  blank?.options &&
+                blank?.options &&
                   typeof blank.options ===
                     "object" ?
                     blank.options
                   : {};
-                addLine(
-                  `Blank ${blankIndex + 1}${blank?.blankId ? ` (${String(blank.blankId).trim()})` : ""}:`,
-                );
-                addLine(
-                  `Hint: ${String(blank?.hint || "").trim()}`,
-                );
-                addLine(
-                  `A) ${String(options.A || "").trim()}`,
-                );
-                addLine(
-                  `B) ${String(options.B || "").trim()}`,
-                );
-                addLine(
-                  `C) ${String(options.C || "").trim()}`,
-                );
-                addLine(
-                  `D) ${String(options.D || "").trim()}`,
-                );
-                addLine(
-                  `Correct: ${String(blank?.correctOptionLetter || "").trim()}) ${String(blank?.correctOptionText || "").trim()}`,
-                );
-                addLine(
-                  `Selected: ${String(blank?.chosenOptionLetter || "").trim()}) ${String(blank?.chosenOptionText || "").trim()}`,
-                );
-                addLine(
+                writeLine({
+                  text: `Blank ${blankIndex + 1}${blank?.blankId ? ` (${String(blank.blankId).trim()})` : ""}:`,
+                  bold: true,
+                  color: colors.info,
+                  indent: 10,
+                });
+                writeLine({
+                  text: `Hint: ${String(blank?.hint || "").trim()}`,
+                  color: colors.muted,
+                  indent: 18,
+                });
+                writeLine({
+                  text: `A) ${String(options.A || "").trim()}`,
+                  color: colors.muted,
+                  indent: 18,
+                });
+                writeLine({
+                  text: `B) ${String(options.B || "").trim()}`,
+                  color: colors.muted,
+                  indent: 18,
+                });
+                writeLine({
+                  text: `C) ${String(options.C || "").trim()}`,
+                  color: colors.muted,
+                  indent: 18,
+                });
+                writeLine({
+                  text: `D) ${String(options.D || "").trim()}`,
+                  color: colors.muted,
+                  indent: 18,
+                });
+                writeLine({
+                  text: `Correct: ${String(blank?.correctOptionLetter || "").trim()}) ${String(blank?.correctOptionText || "").trim()}`,
+                  color: colors.good,
+                  bold: true,
+                  indent: 18,
+                });
+                writeLine({
+                  text: `Selected: ${String(blank?.chosenOptionLetter || "").trim()}) ${String(blank?.chosenOptionText || "").trim()}`,
+                  color:
+                    blank?.isCorrect ?
+                      colors.info
+                    : colors.warn,
+                  bold: true,
+                  indent: 18,
+                });
+                writeResultPill(
                   `Result: ${blank?.isCorrect ? "Correct" : "Incorrect"}`,
+                  blank?.isCorrect ===
+                    true,
                 );
               },
             );
-            addLine(
-              `Sentence Output: ${String(sentence?.fullSentenceOutput || "").trim()}`,
-            );
+            writeLine({
+              text: `Sentence Output: ${String(sentence?.fullSentenceOutput || "").trim()}`,
+              color: colors.text,
+              bold: true,
+              indent: 10,
+            });
             doc.moveDown(0.5);
           },
         );
 
-        addSection("Final Essay");
-        addLine(
-          String(
+        sectionTitle("Final Essay");
+        writeLine({
+          text: String(
             evidence?.finalEssayText ||
               "",
           ).trim(),
-        );
+          color: colors.text,
+        });
       }
 
       // WHY: PDF attachment gives teachers a shareable full-page artifact that
