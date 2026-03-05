@@ -25,7 +25,7 @@ function serializeMission(mission) {
     ? mission.subjectId
     : null;
   const essayTargetCount = mission.draftFormat === "ESSAY_BUILDER"
-    ? Number(mission?.draftJson?.builder?.targetSentenceCount || 0)
+    ? Number(mission?.draftJson?.targets?.targetSentenceCount || 0)
     : 0;
   const questionCount =
     essayTargetCount > 0 ? essayTargetCount : (mission.questions || []).length;
@@ -54,6 +54,7 @@ function serializeMission(mission) {
     sourceFileName: mission.sourceFileName || "",
     sourceFileType: mission.sourceFileType || "",
     draftFormat: mission.draftFormat || "QUESTIONS",
+    essayMode: mission.essayMode || "",
     draftJson: mission.draftJson || null,
     source: mission.source || "bank",
     status: mission.status || "published",
@@ -66,6 +67,9 @@ function serializeMission(mission) {
     scoreCorrect,
     scoreTotal,
     scorePercent,
+    latestResultPackageId: mission.latestResultPackageId
+      ? String(mission.latestResultPackageId)
+      : "",
     createdAt: mission.createdAt
       ? new Date(mission.createdAt).toISOString()
       : null,
@@ -102,6 +106,7 @@ function buildQuestionBankMission({
     sourceFileName: "",
     sourceFileType: "",
     draftFormat: "QUESTIONS",
+    essayMode: "",
     draftJson: null,
     source: "bank",
     status: "published",
@@ -114,6 +119,7 @@ function buildQuestionBankMission({
     scoreCorrect: 0,
     scoreTotal: questions.length,
     scorePercent: 0,
+    latestResultPackageId: "",
     createdAt: null,
     publishedAt: null,
     availableOnDate: "",

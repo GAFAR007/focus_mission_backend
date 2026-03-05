@@ -94,12 +94,64 @@ router.post(
       .withMessage("Focus score must be between 0 and 100."),
     body("correctAnswers")
       .optional()
-      .isInt({ min: 0, max: 10 })
-      .withMessage("correctAnswers must be between 0 and 10."),
+      .isInt({ min: 0, max: 60 })
+      .withMessage("correctAnswers must be between 0 and 60."),
     body("completedQuestions")
       .optional()
-      .isInt({ min: 0, max: 10 })
-      .withMessage("Completed questions must be between 0 and 10."),
+      .isInt({ min: 0, max: 60 })
+      .withMessage("Completed questions must be between 0 and 60."),
+    body("startTime")
+      .optional()
+      .isISO8601()
+      .withMessage("startTime must be a valid ISO timestamp."),
+    body("submitTime")
+      .optional()
+      .isISO8601()
+      .withMessage("submitTime must be a valid ISO timestamp."),
+    body("resultEvidence")
+      .optional()
+      .isObject()
+      .withMessage("resultEvidence must be an object."),
+    body("resultEvidence.questionResponses")
+      .optional()
+      .isArray({ max: 60 })
+      .withMessage("questionResponses must include up to 60 entries."),
+    body("resultEvidence.questionResponses.*.questionIndex")
+      .optional()
+      .isInt({ min: 0, max: 59 })
+      .withMessage("questionIndex must be between 0 and 59."),
+    body("resultEvidence.questionResponses.*.selectedIndex")
+      .optional()
+      .isInt({ min: 0, max: 3 })
+      .withMessage("selectedIndex must be between 0 and 3."),
+    body("resultEvidence.essayBuilder")
+      .optional()
+      .isObject()
+      .withMessage("essayBuilder evidence must be an object."),
+    body("resultEvidence.essayBuilder.sentenceResponses")
+      .optional()
+      .isArray({ max: 60 })
+      .withMessage("sentenceResponses must include up to 60 entries."),
+    body("resultEvidence.essayBuilder.sentenceResponses.*.sentenceId")
+      .optional()
+      .isString()
+      .withMessage("sentenceId must be a string."),
+    body("resultEvidence.essayBuilder.sentenceResponses.*.blankSelections")
+      .optional()
+      .isArray({ max: 40 })
+      .withMessage("blankSelections must include up to 40 entries."),
+    body(
+      "resultEvidence.essayBuilder.sentenceResponses.*.blankSelections.*.blankId",
+    )
+      .optional()
+      .isString()
+      .withMessage("blankId must be a string."),
+    body(
+      "resultEvidence.essayBuilder.sentenceResponses.*.blankSelections.*.selectedOption",
+    )
+      .optional()
+      .isIn(["A", "B", "C", "D"])
+      .withMessage("selectedOption must be A, B, C, or D."),
     validateRequest,
   ],
   studentController.completeSession,

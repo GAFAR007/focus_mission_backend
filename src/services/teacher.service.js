@@ -169,6 +169,32 @@ function normalizeDraftFormat(value) {
   return normalized;
 }
 
+const ESSAY_MODE_OPTIONS = ["NORMAL", "STRETCH_15", "STRETCH_20"];
+
+function normalizeEssayMode(value, { required = false } = {}) {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (!normalized) {
+    if (required) {
+      throw createError(
+        400,
+        "essayMode is required when draftFormat is ESSAY_BUILDER.",
+      );
+    }
+    return "NORMAL";
+  }
+
+  // WHY: Essay mode selects the teacher's fixed daily matrix workload, so only
+  // approved mode keys can drive the AI generation prompt.
+  if (!ESSAY_MODE_OPTIONS.includes(normalized)) {
+    throw createError(
+      400,
+      "Essay mode must be NORMAL, STRETCH_15, or STRETCH_20.",
+    );
+  }
+
+  return normalized;
+}
+
 function normalizeQuestions(questions) {
   if (!Array.isArray(questions) || questions.length < 1 || questions.length > 10) {
     throw createError(400, "Mission drafts must include between 1 and 10 questions.");
@@ -861,11 +887,14 @@ async function generateMission(teacherId, payload) {
   });
 
   const draftFormat = normalizeDraftFormat(payload.draftFormat);
+  const essayMode = draftFormat === "ESSAY_BUILDER"
+    ? normalizeEssayMode(payload.essayMode, { required: true })
+    : normalizeEssayMode(payload.essayMode);
   const questionCount = normalizeQuestionCount(payload.questionCount || 5);
   const xpReward = draftFormat === "ESSAY_BUILDER"
-    // WHY: Essay drafts default to the full 50 XP reward to match the longer
-    // 10-sentence guided writing workload.
-    ? normalizeXpReward(payload.xpReward || 50)
+    // WHY: Daily essay modes are fixed at 50 XP across NORMAL/STRETCH options
+    // so reward consistency is independent from sentence count mode.
+    ? 50
     : isAssessmentQuestionCount(questionCount)
       ? 50
       : normalizeXpReward(payload.xpReward || 20);
@@ -880,6 +909,10 @@ async function generateMission(teacherId, payload) {
     questionCount,
     taskCodes: normalizedTaskCodes,
     unitText,
+    mode: essayMode,
+    teacherId,
+    missionDraftId: String(payload.missionDraftId || "").trim(),
+    allowOverflowBlanks: essayMode === "STRETCH_20",
   };
 
   // WHY: Draft format determines the Groq generation path (questions vs essay builder)
@@ -897,6 +930,7 @@ async function generateMission(teacherId, payload) {
     sourceUnitText: unitText,
     sourceRawText: String(payload.sourceRawText || payload.unitText || "").trim(),
     draftFormat,
+    essayMode: draftFormat === "ESSAY_BUILDER" ? essayMode : null,
     draftJson: generated.draftJson || null,
     source: "groq",
     status: "draft",
@@ -947,11 +981,14 @@ async function previewMission(teacherId, payload) {
   });
 
   const draftFormat = normalizeDraftFormat(payload.draftFormat);
+  const essayMode = draftFormat === "ESSAY_BUILDER"
+    ? normalizeEssayMode(payload.essayMode, { required: true })
+    : normalizeEssayMode(payload.essayMode);
   const questionCount = normalizeQuestionCount(payload.questionCount || 5);
   const xpReward = draftFormat === "ESSAY_BUILDER"
-    // WHY: Essay drafts default to the full 50 XP reward to match the longer
-    // 10-sentence guided writing workload.
-    ? normalizeXpReward(payload.xpReward || 50)
+    // WHY: Essay matrix modes keep a fixed 50 XP reward for predictable daily
+    // scoring regardless of sentence/blank target size.
+    ? 50
     : isAssessmentQuestionCount(questionCount)
       ? 50
       : normalizeXpReward(payload.xpReward || 20);
@@ -966,6 +1003,10 @@ async function previewMission(teacherId, payload) {
     questionCount,
     taskCodes: normalizedTaskCodes,
     unitText,
+    mode: essayMode,
+    teacherId,
+    missionDraftId: String(payload.missionDraftId || "").trim(),
+    allowOverflowBlanks: essayMode === "STRETCH_20",
   };
   // WHY: Preview must mirror the same draft format as the final generation
   // so the teacher reviews exactly what Groq will produce.
@@ -980,6 +1021,7 @@ async function previewMission(teacherId, payload) {
     sourceUnitText: unitText,
     sourceRawText: String(payload.sourceRawText || payload.unitText || "").trim(),
     draftFormat,
+    essayMode: draftFormat === "ESSAY_BUILDER" ? essayMode : null,
     draftJson: generated.draftJson || null,
     source: "groq",
     status: "draft",
@@ -1103,7 +1145,13 @@ async function updateMission(teacherId, missionId, payload) {
   }
 
   if (payload.xpReward !== undefined) {
-    mission.xpReward = normalizeXpReward(payload.xpReward);
+    if (mission.draftFormat === "ESSAY_BUILDER") {
+      // WHY: Essay mode rewards are fixed by policy, so manual XP edits must
+      // not override the daily 50 XP contract.
+      mission.xpReward = 50;
+    } else {
+      mission.xpReward = normalizeXpReward(payload.xpReward);
+    }
   }
 
   if (payload.sourceFileName !== undefined) {
@@ -1118,9 +1166,21 @@ async function updateMission(teacherId, missionId, payload) {
     // WHY: Teachers can switch a saved draft into essay-builder mode before
     // publishing, so updates must persist the selected format explicitly.
     mission.draftFormat = normalizeDraftFormat(payload.draftFormat);
+    mission.essayMode = mission.draftFormat === "ESSAY_BUILDER"
+      ? normalizeEssayMode(payload.essayMode)
+      : null;
+    if (mission.draftFormat === "ESSAY_BUILDER") {
+      mission.xpReward = 50;
+    }
     if (mission.draftFormat === "ESSAY_BUILDER" && payload.questions === undefined) {
       mission.questions = [];
     }
+  }
+
+  if (payload.essayMode !== undefined) {
+    mission.essayMode = mission.draftFormat === "ESSAY_BUILDER"
+      ? normalizeEssayMode(payload.essayMode, { required: true })
+      : null;
   }
 
   if (payload.draftJson !== undefined) {
@@ -1148,6 +1208,11 @@ async function updateMission(teacherId, missionId, payload) {
   if (isAssessmentQuestionCount(Array.isArray(mission.questions) ? mission.questions.length : 0)) {
     // WHY: Assessment-mode rewards are fixed at 50 XP so score-based scaling
     // remains predictable and aligned with the daily performance model.
+    mission.xpReward = 50;
+  }
+
+  if (mission.draftFormat === "ESSAY_BUILDER") {
+    mission.essayMode = normalizeEssayMode(mission.essayMode || "NORMAL");
     mission.xpReward = 50;
   }
 

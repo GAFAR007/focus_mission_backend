@@ -358,6 +358,30 @@ router.post(
       .withMessage(
         "Difficulty must be easy, medium, or hard.",
       ),
+    body("draftFormat")
+      .optional()
+      .isIn(["QUESTIONS", "ESSAY_BUILDER"])
+      .withMessage(
+        "draftFormat must be QUESTIONS or ESSAY_BUILDER.",
+      ),
+    body("essayMode")
+      .optional()
+      .isIn(["NORMAL", "STRETCH_15", "STRETCH_20"])
+      .withMessage(
+        "essayMode must be NORMAL, STRETCH_15, or STRETCH_20.",
+      ),
+    body("essayMode")
+      .custom((value, { req }) => {
+        const format = String(req.body?.draftFormat || "QUESTIONS")
+          .trim()
+          .toUpperCase();
+        if (format === "ESSAY_BUILDER" && !String(value || "").trim()) {
+          throw new Error(
+            "essayMode is required when draftFormat is ESSAY_BUILDER.",
+          );
+        }
+        return true;
+      }),
     body("questionCount")
       .optional()
       .custom((value) =>
@@ -451,6 +475,30 @@ router.post(
       .withMessage(
         "Difficulty must be easy, medium, or hard.",
       ),
+    body("draftFormat")
+      .optional()
+      .isIn(["QUESTIONS", "ESSAY_BUILDER"])
+      .withMessage(
+        "draftFormat must be QUESTIONS or ESSAY_BUILDER.",
+      ),
+    body("essayMode")
+      .optional()
+      .isIn(["NORMAL", "STRETCH_15", "STRETCH_20"])
+      .withMessage(
+        "essayMode must be NORMAL, STRETCH_15, or STRETCH_20.",
+      ),
+    body("essayMode")
+      .custom((value, { req }) => {
+        const format = String(req.body?.draftFormat || "QUESTIONS")
+          .trim()
+          .toUpperCase();
+        if (format === "ESSAY_BUILDER" && !String(value || "").trim()) {
+          throw new Error(
+            "essayMode is required when draftFormat is ESSAY_BUILDER.",
+          );
+        }
+        return true;
+      }),
     body("questionCount")
       .optional()
       .custom((value) =>
@@ -555,6 +603,30 @@ router.patch(
       .withMessage(
         "Difficulty must be easy, medium, or hard.",
       ),
+    body("draftFormat")
+      .optional()
+      .isIn(["QUESTIONS", "ESSAY_BUILDER"])
+      .withMessage(
+        "draftFormat must be QUESTIONS or ESSAY_BUILDER.",
+      ),
+    body("essayMode")
+      .optional()
+      .isIn(["NORMAL", "STRETCH_15", "STRETCH_20"])
+      .withMessage(
+        "essayMode must be NORMAL, STRETCH_15, or STRETCH_20.",
+      ),
+    body("essayMode")
+      .custom((value, { req }) => {
+        const format = String(req.body?.draftFormat || "")
+          .trim()
+          .toUpperCase();
+        if (format === "ESSAY_BUILDER" && !String(value || "").trim()) {
+          throw new Error(
+            "essayMode is required when draftFormat is ESSAY_BUILDER.",
+          );
+        }
+        return true;
+      }),
     body("taskCodes")
       .optional()
       .isArray({ max: 8 })
@@ -611,6 +683,92 @@ router.delete(
     validateRequest,
   ],
   teacherController.deleteMission,
+);
+
+router.get(
+  "/results/:resultPackageId",
+  [
+    param("resultPackageId")
+      .isMongoId()
+      .withMessage(
+        "Valid resultPackageId is required.",
+      ),
+    validateRequest,
+  ],
+  teacherController.getResultPackage,
+);
+
+router.post(
+  "/results/:resultPackageId/send",
+  [
+    param("resultPackageId")
+      .isMongoId()
+      .withMessage(
+        "Valid resultPackageId is required.",
+      ),
+    body("recipients")
+      .optional()
+      .isArray({ max: 10 })
+      .withMessage(
+        "recipients must include up to 10 emails.",
+      ),
+    body("recipients.*")
+      .optional()
+      .isEmail()
+      .withMessage(
+        "Each recipient must be a valid email.",
+      ),
+    body("channels")
+      .isObject()
+      .withMessage(
+        "channels object is required.",
+      ),
+    body("channels.inApp")
+      .isBoolean()
+      .withMessage(
+        "channels.inApp must be true or false.",
+      ),
+    body("channels.email")
+      .isBoolean()
+      .withMessage(
+        "channels.email must be true or false.",
+      ),
+    body("screenshotUrl")
+      .optional()
+      .isString()
+      .withMessage(
+        "screenshotUrl must be a string.",
+      ),
+    validateRequest,
+  ],
+  teacherController.sendResultPackage,
+);
+
+router.post(
+  "/results/:resultPackageId/screenshot",
+  upload.single("screenshotFile"),
+  [
+    param("resultPackageId")
+      .isMongoId()
+      .withMessage(
+        "Valid resultPackageId is required.",
+      ),
+    validateRequest,
+  ],
+  teacherController.uploadResultScreenshot,
+);
+
+router.get(
+  "/results/screenshots/:screenshotId",
+  [
+    param("screenshotId")
+      .isMongoId()
+      .withMessage(
+        "Valid screenshotId is required.",
+      ),
+    validateRequest,
+  ],
+  teacherController.getResultScreenshot,
 );
 
 module.exports = router;

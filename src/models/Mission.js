@@ -108,6 +108,13 @@ const missionSchema = new mongoose.Schema(
       // WHY: Daily missions can be standard questions or essay-builder drafts,
       // and the frontend must know which rendering path to use.
     },
+    essayMode: {
+      type: String,
+      enum: ["NORMAL", "STRETCH_15", "STRETCH_20"],
+      default: null,
+      // WHY: Essay builder missions use a fixed teacher-selected matrix mode so
+      // generated sentence/word targets remain explicit and auditable.
+    },
     draftJson: {
       type: mongoose.Schema.Types.Mixed,
       default: null,
@@ -204,6 +211,13 @@ const missionSchema = new mongoose.Schema(
       default: 0,
       // WHY: XP for assigned missions is score-based, so each mission must
       // keep the last earned XP value for panel and card progress rendering.
+    },
+    latestResultPackageId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ResultPackage",
+      default: null,
+      // WHY: Teachers need one-click access to the newest auditable result
+      // package linked to this mission from the session dashboard.
     },
     questions: {
       type: [missionQuestionSchema],

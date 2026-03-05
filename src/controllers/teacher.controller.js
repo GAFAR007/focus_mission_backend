@@ -13,6 +13,7 @@
  */
 const mongoose = require("mongoose");
 const SessionLog = require("../models/SessionLog");
+const resultService = require("../services/result.service");
 const teacherService = require("../services/teacher.service");
 
 const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -379,6 +380,73 @@ async function getStudentBehaviourTrend(req, res, next) {
   }
 }
 
+async function getResultPackage(req, res, next) {
+  try {
+    const resultPackage =
+      await resultService.getResultPackageForTeacher({
+        teacherId: req.user.id,
+        resultPackageId: req.params.resultPackageId,
+      });
+    res.json({ resultPackage });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function sendResultPackage(req, res, next) {
+  try {
+    const sent = await resultService.sendResultPackage({
+      teacherId: req.user.id,
+      resultPackageId: req.params.resultPackageId,
+      recipients: req.body.recipients,
+      channels: req.body.channels,
+      screenshotUrl: req.body.screenshotUrl,
+    });
+    res.status(201).json(sent);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function uploadResultScreenshot(req, res, next) {
+  try {
+    const uploaded =
+      await resultService.uploadResultScreenshot({
+        teacherId: req.user.id,
+        resultPackageId: req.params.resultPackageId,
+        file: req.file,
+      });
+    res.status(201).json(uploaded);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getResultScreenshot(req, res, next) {
+  try {
+    const screenshot =
+      await resultService.getResultScreenshotForTeacher({
+        teacherId: req.user.id,
+        screenshotId: req.params.screenshotId,
+      });
+
+    const screenshotData = Buffer.isBuffer(screenshot.data)
+      ? screenshot.data
+      : Buffer.from(
+          screenshot?.data?.data || screenshot?.data?.buffer || [],
+        );
+    res.setHeader("Content-Type", screenshot.mimeType || "image/png");
+    res.setHeader("Content-Length", String(screenshotData.length));
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="${screenshot.fileName || `${screenshot._id}.png`}"`,
+    );
+    res.send(screenshotData);
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   getStudents,
   createTimetable,
@@ -398,4 +466,8 @@ module.exports = {
   getStudentSessionBreakdown,
   getStudentSubjectAnalytics,
   getStudentBehaviourTrend,
+  getResultPackage,
+  sendResultPackage,
+  uploadResultScreenshot,
+  getResultScreenshot,
 };

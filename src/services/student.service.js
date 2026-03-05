@@ -16,6 +16,7 @@ const Subject = require("../models/Subject");
 const Target = require("../models/Target");
 const Timetable = require("../models/Timetable");
 const User = require("../models/User");
+const resultService = require("./result.service");
 const {
   buildQuestionBankMission,
   serializeMission,
@@ -685,6 +686,7 @@ async function completeSession(payload) {
   let missionQuestionCount = completedQuestions;
   let missionSubjectId = payload.subjectId;
   const missionId = String(payload.missionId || "").trim();
+  let completedMission = null;
 
   if (missionId) {
     const mission = await Mission.findOne({
@@ -693,9 +695,10 @@ async function completeSession(payload) {
       subjectId: payload.subjectId,
       sessionType: payload.sessionType,
       $or: [{ status: "published" }, { status: { $exists: false } }],
-    });
+    }).populate("subjectId", "name");
 
     if (mission) {
+      completedMission = mission;
       const isEssayBuilder = mission.draftFormat === "ESSAY_BUILDER";
       const totalQuestions = Array.isArray(mission.questions)
         ? mission.questions.length
@@ -857,6 +860,19 @@ async function completeSession(payload) {
     createdBy: payload.createdBy || payload.studentId,
   });
 
+  const resultPackage = await resultService.createResultPackageForCompletion({
+    student,
+    mission: completedMission,
+    sessionLog,
+    scoreCorrect: correctAnswers,
+    scoreTotal: missionQuestionCount,
+    scorePercent,
+    xpAwarded: totalXpAwarded,
+    startTime: payload.startTime,
+    submitTime: payload.submitTime,
+    resultEvidence: payload.resultEvidence,
+  });
+
   // WHY: XP is applied only on explicit completion so rewards remain tied to
   // finished work and deterministic score rules.
   student.xp = Math.max(0, Number(student.xp || 0) + totalXpAwarded);
@@ -900,6 +916,7 @@ async function completeSession(payload) {
     student: {
       ...serializeStudent(student),
     },
+    resultPackageId: resultPackage ? String(resultPackage._id || "") : "",
   };
 }
 
