@@ -1,12 +1,13 @@
 /**
  * WHAT:
- * updateStaffPassword rotates teacher and mentor passwords in the live DB.
+ * updateStaffPassword rotates teacher, mentor, and management passwords in the
+ * live DB.
  * WHY:
  * Existing seeded accounts may still have older hashes, so staff sign-in needs
  * one explicit update utility without reseeding all data.
  * HOW:
- * Hash the provided password once, update all teacher/mentor users, and print
- * how many accounts were changed.
+ * Hash the provided password once, update all teacher/mentor/management users,
+ * and print how many accounts were changed.
  */
 require("dotenv").config();
 
@@ -28,7 +29,15 @@ async function updateStaffPassword() {
 
   const passwordHash = await bcrypt.hash(nextPassword, 10);
   const result = await User.updateMany(
-    { role: { $in: ["teacher", "mentor"] } },
+    {
+      role: {
+        $in: [
+          "teacher",
+          "mentor",
+          "management",
+        ],
+      },
+    },
     { $set: { passwordHash } },
   );
 

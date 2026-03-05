@@ -18,6 +18,21 @@ function createError(statusCode, message) {
   return error;
 }
 
+function resolveAccessRole(role) {
+  const normalized = String(
+    role || "",
+  )
+    .trim()
+    .toLowerCase();
+  if (
+    normalized === "management"
+  ) {
+    // WHY: Management uses the mentor workspace and permissions in MVP.
+    return "mentor";
+  }
+  return normalized;
+}
+
 async function protect(req, _res, next) {
   try {
     const authorization = req.headers.authorization || "";
@@ -38,7 +53,12 @@ async function protect(req, _res, next) {
 
     req.user = {
       id: String(user._id),
-      role: user.role,
+      role: resolveAccessRole(
+        user.role,
+      ),
+      sourceRole: String(
+        user.role || "",
+      ),
       name: user.name,
     };
 

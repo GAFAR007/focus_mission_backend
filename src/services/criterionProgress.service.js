@@ -160,11 +160,15 @@ async function assertUserCanAccessStudent({
     return student;
   }
 
-  if (requesterRole === "teacher" || requesterRole === "mentor") {
+  if (
+    requesterRole === "teacher" ||
+    requesterRole === "mentor" ||
+    requesterRole === "management"
+  ) {
     const owner = await User.findById(requesterId).select("assignedStudents").lean();
 
-    // WHY: Teacher and mentor access must stay tied to assigned learners so
-    // progress cannot be inspected outside the accountable support chain.
+    // WHY: Teacher, mentor, and management access must stay tied to assigned
+    // learners so progress cannot be inspected outside the support chain.
     const isAssigned = Boolean(
       owner?.assignedStudents?.some(
         (assignedStudentId) => String(assignedStudentId) === String(studentId),

@@ -74,6 +74,7 @@ async function seed() {
     artBotTeacher,
     citizenshipBotTeacher,
     mentor,
+    management,
   ] = await User.create([
     {
       name: "Mohammed",
@@ -218,6 +219,15 @@ async function seed() {
         "Gafar Temitayo Razak",
       avatar:
         "https://api.dicebear.com/9.x/adventurer/svg?seed=Gafar%20Temitayo%20Razak",
+    },
+    {
+      name: "Aqsa Bi | SEN",
+      email: "aqsa.bi@flexiblelearning.org.uk",
+      passwordHash: staffPasswordHash,
+      role: "management",
+      avatarSeed: "Aqsa Bi SEN",
+      avatar:
+        "https://api.dicebear.com/9.x/adventurer/svg?seed=Aqsa%20Bi%20SEN",
     },
   ]);
 
@@ -1063,6 +1073,9 @@ async function seed() {
     User.findByIdAndUpdate(mentor._id, {
       assignedStudents: [student._id, johnStudent._id],
     }),
+    User.findByIdAndUpdate(management._id, {
+      assignedStudents: [student._id, johnStudent._id],
+    }),
   ]);
 
   console.log("Seed complete.");
@@ -1104,6 +1117,9 @@ async function seed() {
   );
   console.log(
     `Mentor login: mentor@focusmission.app / ${staffSeedPassword}`,
+  );
+  console.log(
+    `Management login: aqsa.bi@flexiblelearning.org.uk / ${staffSeedPassword}`,
   );
   console.log(
     `Sample English criterion: ${characterisationCriterion.title}`,

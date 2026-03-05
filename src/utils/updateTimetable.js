@@ -79,10 +79,15 @@ async function findTeacherId(email) {
 async function findMentorId(email) {
   const user = await User.findOne({
     email: email.toLowerCase().trim(),
-    role: "mentor",
+    role: {
+      $in: [
+        "mentor",
+        "management",
+      ],
+    },
   });
   if (!user) {
-    throw new Error(`Mentor not found: ${email}`);
+    throw new Error(`Mentor/management user not found: ${email}`);
   }
   return user._id;
 }

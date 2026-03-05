@@ -1,6 +1,6 @@
 /**
  * WHAT:
- * User stores authenticated student, teacher, and mentor identities.
+ * User stores authenticated student, teacher, mentor, and management identities.
  * WHY:
  * Focus Mission uses role-controlled access, assigned relationships, and
  * learner continuity signals such as XP and login-day tracking.
@@ -31,11 +31,11 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ["student", "teacher", "mentor"],
+      enum: ["student", "teacher", "mentor", "management"],
       required: true,
       index: true,
       // WHY: Role is the main permission boundary across student learning,
-      // teacher authoring, and mentor review flows.
+      // teacher authoring, and mentor/management review flows.
     },
     subjectSpecialty: {
       type: String,
@@ -124,7 +124,7 @@ const userSchema = new mongoose.Schema(
       {
         type: mongoose.Schema.Types.ObjectId,
         ref: "User",
-        // WHY: Teachers and mentors need stable student links so mission and
+        // WHY: Teachers, mentors, and management need stable student links so mission and
         // review actions stay auditable and permission-safe.
       },
     ],
