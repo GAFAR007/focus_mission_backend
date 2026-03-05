@@ -11,6 +11,7 @@
  */
 
 const Mission = require("../models/Mission");
+const PDFDocument = require("pdfkit");
 const ResultPackage = require("../models/ResultPackage");
 const ResultScreenshot = require("../models/ResultScreenshot");
 const SessionLog = require("../models/SessionLog");
@@ -915,23 +916,556 @@ function resolveLatestSendStatus(
   return "not_sent";
 }
 
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function buildFullResultReportText({
+  resultPackage,
+  screenshotUrl = "",
+}) {
+  const meta =
+    resultPackage?.meta || {};
+  const score =
+    meta?.score || {};
+  const evidence =
+    resultPackage?.evidence || {};
+  const lines = [
+    "Focus Mission Full Result Report",
+    "================================",
+    "",
+    `Student: ${String(meta.studentName || "").trim()}`,
+    `Student ID: ${String(meta.studentId || "").trim()}`,
+    `Teacher ID: ${String(meta.teacherId || "").trim()}`,
+    `Mission: ${String(meta.missionTitle || "").trim()}`,
+    `Mission ID: ${String(meta.missionId || "").trim()}`,
+    `Subject: ${String(meta.subject || "").trim()}`,
+    `Task Codes: ${Array.isArray(meta.taskCodes) ? meta.taskCodes.join(", ") : ""}`,
+    `Assigned Date: ${String(meta.assignedDate || "").trim()}`,
+    `Start Time: ${meta.startTime ? new Date(meta.startTime).toISOString() : ""}`,
+    `Submit Time: ${meta.submitTime ? new Date(meta.submitTime).toISOString() : ""}`,
+    `Duration Seconds: ${Number(meta.durationSeconds || 0)}`,
+    `Score: ${Number(score.correct || 0)}/${Number(score.total || 0)} (${Number(score.percent || 0)}%)`,
+    `XP Awarded: ${Number(meta.xpAwarded || 0)}`,
+    `Format: ${String(evidence.format || resultPackage?.missionType || "").trim()}`,
+  ];
+
+  if (screenshotUrl) {
+    lines.push(
+      `Screenshot URL: ${String(screenshotUrl).trim()}`,
+    );
+  }
+
+  const triesToComplete = Number(
+    evidence?.triesToComplete ||
+      evidence?.completionAttemptNumber ||
+      0,
+  );
+  if (triesToComplete > 0) {
+    lines.push(
+      `Tries To Complete: ${triesToComplete}`,
+    );
+  }
+
+  lines.push("", "Evidence", "--------");
+
+  if (
+    String(
+      evidence?.format || "",
+    ).toUpperCase() ===
+    "QUESTIONS"
+  ) {
+    lines.push(
+      `Questions Answered: ${Number(evidence.questionsAnsweredCount || 0)}`,
+      `Points: ${Number(evidence.totalPointsEarned || 0)}/${Number(evidence.totalPointsPossible || 0)}`,
+      "",
+    );
+
+    const questions =
+      Array.isArray(
+        evidence?.questions,
+      ) ?
+        evidence.questions
+      : [];
+    questions.forEach(
+      (question, index) => {
+        const options =
+          question?.options &&
+          typeof question.options ===
+            "object" ?
+            question.options
+          : {};
+        lines.push(
+          `Q${index + 1}: ${String(question?.questionText || "").trim()}`,
+          `A) ${String(options.A || "").trim()}`,
+          `B) ${String(options.B || "").trim()}`,
+          `C) ${String(options.C || "").trim()}`,
+          `D) ${String(options.D || "").trim()}`,
+          `Correct: ${String(question?.correctOptionLetter || "").trim()}) ${String(question?.correctAnswer || "").trim()}`,
+          `Selected: ${String(question?.selectedOptionLetter || "").trim()}) ${String(question?.selectedAnswer || "").trim()}`,
+          `Result: ${question?.correctness ? "Correct" : "Incorrect"}`,
+          `Points: ${Number(question?.pointsEarned || 0)}/${Number(question?.maxPoints || 0)}`,
+          "",
+        );
+      },
+    );
+    return lines
+      .filter(
+        (line) =>
+          line !== undefined &&
+          line !== null,
+      )
+      .join("\n");
+  }
+
+  if (
+    String(
+      evidence?.format || "",
+    ).toUpperCase() ===
+    "ESSAY_BUILDER"
+  ) {
+    lines.push(
+      `Mode: ${String(evidence?.mode || "").trim()}`,
+      `Word Count: ${Number(evidence?.finalWordCount || 0)}`,
+      `Blank Completion: ${Number(evidence?.blankCompletionCount || 0)}/${Number(evidence?.blankTargetCount || 0)}`,
+      "",
+    );
+    const perSentence = Array.isArray(
+      evidence?.perSentence,
+    ) ?
+        evidence.perSentence
+      : [];
+    perSentence.forEach(
+      (sentence, index) => {
+        lines.push(
+          `Sentence ${index + 1}: ${String(sentence?.role || "").trim()}`,
+        );
+        const bullets = Array.isArray(
+          sentence?.learnFirstBullets,
+        ) ?
+            sentence.learnFirstBullets
+          : [];
+        if (bullets.length) {
+          lines.push("Learn First:");
+          bullets.forEach(
+            (bullet) => {
+              lines.push(
+                `- ${String(bullet || "").trim()}`,
+              );
+            },
+          );
+        }
+
+        const blankSelections =
+          Array.isArray(
+            sentence?.blankSelections,
+          ) ?
+            sentence.blankSelections
+          : [];
+        blankSelections.forEach(
+          (blank, blankIndex) => {
+            const options =
+              blank?.options &&
+              typeof blank.options ===
+                "object" ?
+                blank.options
+              : {};
+            lines.push(
+              `Blank ${blankIndex + 1}${blank?.blankId ? ` (${String(blank.blankId).trim()})` : ""}:`,
+              `Hint: ${String(blank?.hint || "").trim()}`,
+              `A) ${String(options.A || "").trim()}`,
+              `B) ${String(options.B || "").trim()}`,
+              `C) ${String(options.C || "").trim()}`,
+              `D) ${String(options.D || "").trim()}`,
+              `Correct: ${String(blank?.correctOptionLetter || "").trim()}) ${String(blank?.correctOptionText || "").trim()}`,
+              `Selected: ${String(blank?.chosenOptionLetter || "").trim()}) ${String(blank?.chosenOptionText || "").trim()}`,
+              `Result: ${blank?.isCorrect ? "Correct" : "Incorrect"}`,
+            );
+          },
+        );
+        lines.push(
+          `Sentence Output: ${String(sentence?.fullSentenceOutput || "").trim()}`,
+          "",
+        );
+      },
+    );
+
+    lines.push(
+      "Final Essay",
+      "-----------",
+      String(
+        evidence?.finalEssayText || "",
+      ).trim(),
+      "",
+    );
+  }
+
+  return lines
+    .filter(
+      (line) =>
+        line !== undefined &&
+        line !== null,
+    )
+    .join("\n");
+}
+
+function buildResultAttachmentName(
+  resultPackage,
+  extension = "txt",
+) {
+  const missionTitle = String(
+    resultPackage?.meta
+      ?.missionTitle || "result",
+  )
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+  const missionId = String(
+    resultPackage?.meta?.missionId ||
+      resultPackage?._id ||
+      "",
+  )
+    .replace(/[^a-zA-Z0-9]+/g, "")
+    .slice(0, 12);
+  const safeTitle =
+    missionTitle || "result";
+  const safeId = missionId || "report";
+  const normalizedExtension = String(
+    extension || "txt",
+  )
+    .replace(/[^a-z0-9]+/gi, "")
+    .toLowerCase();
+  return `focus-mission-${safeTitle}-${safeId}.${normalizedExtension || "txt"}`;
+}
+
+function buildResultReportPdfBuffer({
+  resultPackage,
+  screenshotUrl = "",
+}) {
+  return new Promise(
+    (resolve, reject) => {
+      const doc = new PDFDocument({
+        size: "A4",
+        margin: 40,
+      });
+      const chunks = [];
+      doc.on("data", (chunk) => {
+        chunks.push(chunk);
+      });
+      doc.on("error", reject);
+      doc.on("end", () => {
+        resolve(Buffer.concat(chunks));
+      });
+
+      const meta =
+        resultPackage?.meta ||
+        {};
+      const score =
+        meta?.score || {};
+      const evidence =
+        resultPackage?.evidence ||
+        {};
+
+      const addLine = (
+        value = "",
+      ) => {
+        doc
+          .fontSize(10)
+          .fillColor("#111111")
+          .text(String(value || ""), {
+            width: 515,
+          });
+      };
+
+      const addSection = (
+        title,
+      ) => {
+        doc.moveDown(0.7);
+        doc
+          .fontSize(13)
+          .fillColor("#1e3a8a")
+          .text(String(title || ""));
+        doc.moveDown(0.2);
+      };
+
+      doc
+        .fontSize(18)
+        .fillColor("#0f172a")
+        .text(
+          "Focus Mission Full Result Report",
+          {
+            align: "center",
+          },
+        );
+      doc.moveDown(0.8);
+
+      addSection("Meta");
+      addLine(
+        `Student: ${String(meta.studentName || "").trim()}`,
+      );
+      addLine(
+        `Student ID: ${String(meta.studentId || "").trim()}`,
+      );
+      addLine(
+        `Teacher ID: ${String(meta.teacherId || "").trim()}`,
+      );
+      addLine(
+        `Mission: ${String(meta.missionTitle || "").trim()}`,
+      );
+      addLine(
+        `Mission ID: ${String(meta.missionId || "").trim()}`,
+      );
+      addLine(
+        `Subject: ${String(meta.subject || "").trim()}`,
+      );
+      addLine(
+        `Task Codes: ${Array.isArray(meta.taskCodes) ? meta.taskCodes.join(", ") : ""}`,
+      );
+      addLine(
+        `Assigned Date: ${String(meta.assignedDate || "").trim()}`,
+      );
+      addLine(
+        `Start Time: ${meta.startTime ? new Date(meta.startTime).toISOString() : ""}`,
+      );
+      addLine(
+        `Submit Time: ${meta.submitTime ? new Date(meta.submitTime).toISOString() : ""}`,
+      );
+      addLine(
+        `Duration (seconds): ${Number(meta.durationSeconds || 0)}`,
+      );
+      addLine(
+        `Score: ${Number(score.correct || 0)}/${Number(score.total || 0)} (${Number(score.percent || 0)}%)`,
+      );
+      addLine(
+        `XP Awarded: ${Number(meta.xpAwarded || 0)}`,
+      );
+      addLine(
+        `Format: ${String(evidence.format || resultPackage?.missionType || "").trim()}`,
+      );
+      if (screenshotUrl) {
+        addLine(
+          `Screenshot URL: ${String(screenshotUrl).trim()}`,
+        );
+      }
+
+      addSection("Evidence");
+
+      if (
+        String(
+          evidence?.format || "",
+        ).toUpperCase() ===
+        "QUESTIONS"
+      ) {
+        addLine(
+          `Questions Answered: ${Number(evidence.questionsAnsweredCount || 0)}`,
+        );
+        addLine(
+          `Points: ${Number(evidence.totalPointsEarned || 0)}/${Number(evidence.totalPointsPossible || 0)}`,
+        );
+        doc.moveDown(0.4);
+
+        const questions =
+          Array.isArray(
+            evidence?.questions,
+          ) ?
+            evidence.questions
+          : [];
+        questions.forEach(
+          (
+            question,
+            index,
+          ) => {
+            const options =
+              question?.options &&
+              typeof question.options ===
+                "object" ?
+                question.options
+              : {};
+            doc
+              .fontSize(11)
+              .fillColor("#0f172a")
+              .text(
+                `Q${index + 1}: ${String(question?.questionText || "").trim()}`,
+              );
+            addLine(
+              `A) ${String(options.A || "").trim()}`,
+            );
+            addLine(
+              `B) ${String(options.B || "").trim()}`,
+            );
+            addLine(
+              `C) ${String(options.C || "").trim()}`,
+            );
+            addLine(
+              `D) ${String(options.D || "").trim()}`,
+            );
+            addLine(
+              `Correct: ${String(question?.correctOptionLetter || "").trim()}) ${String(question?.correctAnswer || "").trim()}`,
+            );
+            addLine(
+              `Selected: ${String(question?.selectedOptionLetter || "").trim()}) ${String(question?.selectedAnswer || "").trim()}`,
+            );
+            addLine(
+              `Result: ${question?.correctness ? "Correct" : "Incorrect"}`,
+            );
+            addLine(
+              `Points: ${Number(question?.pointsEarned || 0)}/${Number(question?.maxPoints || 0)}`,
+            );
+            doc.moveDown(0.5);
+          },
+        );
+      } else if (
+        String(
+          evidence?.format || "",
+        ).toUpperCase() ===
+        "ESSAY_BUILDER"
+      ) {
+        addLine(
+          `Mode: ${String(evidence?.mode || "").trim()}`,
+        );
+        addLine(
+          `Word Count: ${Number(evidence?.finalWordCount || 0)}`,
+        );
+        addLine(
+          `Blank Completion: ${Number(evidence?.blankCompletionCount || 0)}/${Number(evidence?.blankTargetCount || 0)}`,
+        );
+        doc.moveDown(0.4);
+
+        const sentences =
+          Array.isArray(
+            evidence?.perSentence,
+          ) ?
+            evidence.perSentence
+          : [];
+        sentences.forEach(
+          (
+            sentence,
+            sentenceIndex,
+          ) => {
+            doc
+              .fontSize(11)
+              .fillColor("#0f172a")
+              .text(
+                `Sentence ${sentenceIndex + 1} (${String(sentence?.role || "").trim()})`,
+              );
+            const bullets =
+              Array.isArray(
+                sentence?.learnFirstBullets,
+              ) ?
+                sentence.learnFirstBullets
+              : [];
+            if (bullets.length) {
+              addLine("Learn First:");
+              bullets.forEach(
+                (bullet) => {
+                  addLine(
+                    `- ${String(bullet || "").trim()}`,
+                  );
+                },
+              );
+            }
+
+            const blanks =
+              Array.isArray(
+                sentence?.blankSelections,
+              ) ?
+                sentence.blankSelections
+              : [];
+            blanks.forEach(
+              (
+                blank,
+                blankIndex,
+              ) => {
+                const options =
+                  blank?.options &&
+                  typeof blank.options ===
+                    "object" ?
+                    blank.options
+                  : {};
+                addLine(
+                  `Blank ${blankIndex + 1}${blank?.blankId ? ` (${String(blank.blankId).trim()})` : ""}:`,
+                );
+                addLine(
+                  `Hint: ${String(blank?.hint || "").trim()}`,
+                );
+                addLine(
+                  `A) ${String(options.A || "").trim()}`,
+                );
+                addLine(
+                  `B) ${String(options.B || "").trim()}`,
+                );
+                addLine(
+                  `C) ${String(options.C || "").trim()}`,
+                );
+                addLine(
+                  `D) ${String(options.D || "").trim()}`,
+                );
+                addLine(
+                  `Correct: ${String(blank?.correctOptionLetter || "").trim()}) ${String(blank?.correctOptionText || "").trim()}`,
+                );
+                addLine(
+                  `Selected: ${String(blank?.chosenOptionLetter || "").trim()}) ${String(blank?.chosenOptionText || "").trim()}`,
+                );
+                addLine(
+                  `Result: ${blank?.isCorrect ? "Correct" : "Incorrect"}`,
+                );
+              },
+            );
+            addLine(
+              `Sentence Output: ${String(sentence?.fullSentenceOutput || "").trim()}`,
+            );
+            doc.moveDown(0.5);
+          },
+        );
+
+        addSection("Final Essay");
+        addLine(
+          String(
+            evidence?.finalEssayText ||
+              "",
+          ).trim(),
+        );
+      }
+
+      // WHY: PDF attachment gives teachers a shareable full-page artifact that
+      // mirrors result-report evidence beyond short email summary text.
+      doc.end();
+    },
+  );
+}
+
 async function sendResultEmail({
   recipients,
   resultPackage,
   screenshotUrl = "",
 }) {
   const subject = `Focus Mission Result: ${resultPackage.meta.missionTitle}`;
-  const body = [
-    `Student: ${resultPackage.meta.studentName}`,
-    `Mission: ${resultPackage.meta.missionTitle}`,
-    `Score: ${resultPackage.meta.score.correct}/${resultPackage.meta.score.total} (${resultPackage.meta.score.percent}%)`,
-    `XP Awarded: ${resultPackage.meta.xpAwarded}`,
-    screenshotUrl ?
-      `Screenshot: ${screenshotUrl}`
-    : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const fullReportText =
+    buildFullResultReportText({
+      resultPackage,
+      screenshotUrl,
+    });
+  const htmlContent = `<div style="font-family: Arial, Helvetica, sans-serif; white-space: pre-wrap;">${escapeHtml(fullReportText)}</div>`;
+  const attachmentName =
+    buildResultAttachmentName(
+      resultPackage,
+      "pdf",
+    );
+  const attachmentContent =
+    (
+      await buildResultReportPdfBuffer(
+        {
+          resultPackage,
+          screenshotUrl,
+        },
+      )
+    ).toString("base64");
 
   const brevoApiKey = String(
     process.env.BREVO_API_KEY || "",
@@ -973,7 +1507,15 @@ async function sendResultEmail({
             }),
           ),
           subject,
-          textContent: body,
+          textContent: fullReportText,
+          htmlContent,
+          attachment: [
+            {
+              name: attachmentName,
+              content:
+                attachmentContent,
+            },
+          ],
           params: {
             resultPackageId: String(
               resultPackage._id,
@@ -1020,7 +1562,7 @@ async function sendResultEmail({
       body: JSON.stringify({
         to: recipients,
         subject,
-        body,
+        body: fullReportText,
         resultPackageId: String(
           resultPackage._id,
         ),
