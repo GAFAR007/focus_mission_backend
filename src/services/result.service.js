@@ -1253,22 +1253,39 @@ function buildResultReportPdfBuffer({
         value,
       ) => {
         ensureSpace(18);
+        const normalizedValue = String(
+          value ?? "",
+        ).trim() || "-";
+        const rowStartY = doc.y;
+        const labelX =
+          doc.page.margins.left;
+        const labelWidth = 132;
+        const valueX =
+          labelX + labelWidth + 8;
         doc
           .font("Helvetica-Bold")
           .fontSize(10)
           .fillColor(colors.heading)
-          .text(
-            `${String(label || "").trim()}: `,
-            { continued: true },
-          );
+          .text(`${String(label || "").trim()}:`, labelX, rowStartY, {
+            width: labelWidth,
+          });
+        const labelBottomY = doc.y;
         doc
           .font("Helvetica")
           .fontSize(10)
           .fillColor(colors.text)
-          .text(
-            String(value || "")
-              .trim(),
-          );
+          .text(normalizedValue, valueX, rowStartY, {
+            width:
+              contentWidth -
+              labelWidth -
+              8,
+          });
+        // WHY: Force row cursor to the lower of label/value blocks so long or
+        // empty values never overlap the next metadata row.
+        doc.y = Math.max(
+          labelBottomY,
+          doc.y,
+        );
       };
 
       const writeLine = ({
