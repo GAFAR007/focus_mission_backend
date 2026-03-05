@@ -121,8 +121,20 @@ async function login({ email, password }) {
     await user.save();
   }
 
+  const token = createToken(user);
+  if (String(process.env.LOG_LOGIN_TOKEN || "").trim().toLowerCase() === "true") {
+    // WHY: Temporary debugging support can print the issued token so manual
+    // API testing is possible without separate login tooling.
+    console.log("[auth] login token issued", {
+      userId: String(user._id),
+      email: user.email,
+      role: user.role,
+      token,
+    });
+  }
+
   return {
-    token: createToken(user),
+    token,
     user: serializeUser(user),
   };
 }
