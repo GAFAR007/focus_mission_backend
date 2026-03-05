@@ -1114,6 +1114,25 @@ async function updateMission(teacherId, missionId, payload) {
     mission.sourceFileType = String(payload.sourceFileType || "").trim();
   }
 
+  if (payload.draftFormat !== undefined) {
+    // WHY: Teachers can switch a saved draft into essay-builder mode before
+    // publishing, so updates must persist the selected format explicitly.
+    mission.draftFormat = normalizeDraftFormat(payload.draftFormat);
+    if (mission.draftFormat === "ESSAY_BUILDER" && payload.questions === undefined) {
+      mission.questions = [];
+    }
+  }
+
+  if (payload.draftJson !== undefined) {
+    // WHY: Essay-builder publishing depends on the saved draft JSON, so this
+    // update path must preserve the teacher-reviewed sentence scaffold.
+    mission.draftJson =
+      payload.draftJson &&
+      typeof payload.draftJson === "object" ?
+        payload.draftJson
+      : null;
+  }
+
   if (payload.questions !== undefined) {
     if (mission.draftFormat === "ESSAY_BUILDER") {
       // WHY: Essay builder missions do not store question lists, so updates

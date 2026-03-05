@@ -33,6 +33,260 @@ function countWords(value) {
     .filter(Boolean).length;
 }
 
+function normalizeEssayLearnFirst(
+  learnFirst,
+  fallbackLearnFirst = {},
+  sentence = null,
+) {
+  const fallbackTitle = String(
+    fallbackLearnFirst?.title || "",
+  ).trim();
+  const title =
+    String(learnFirst?.title || "").trim() ||
+    fallbackTitle ||
+    "Learn First";
+
+  const sanitizedBullets = Array.isArray(
+    learnFirst?.bullets,
+  ) ?
+      learnFirst.bullets
+        .map((bullet) => String(bullet || "").trim())
+        .filter(Boolean)
+    : [];
+
+  const sentenceFallbackBullets = buildSentenceFallbackBullets(
+    sentence,
+  );
+  const globalFallbackBullets = Array.isArray(
+    fallbackLearnFirst?.bullets,
+  ) ?
+      fallbackLearnFirst.bullets
+        .map((bullet) => String(bullet || "").trim())
+        .filter(Boolean)
+    : [];
+
+  const mergedBullets = [
+    ...sanitizedBullets,
+    ...sentenceFallbackBullets,
+    ...globalFallbackBullets,
+    "Use the sentence clues and pick the best fit from A/B/C/D.",
+    "Choose options that match the taught idea before moving on.",
+    "Read each sentence frame carefully before selecting an option.",
+  ].filter(Boolean);
+
+  const uniqueBullets = [];
+  for (const bullet of mergedBullets) {
+    if (!uniqueBullets.includes(bullet)) {
+      uniqueBullets.push(bullet);
+    }
+  }
+
+  const bullets = uniqueBullets.slice(
+    0,
+    6,
+  );
+
+  while (bullets.length < 3) {
+    bullets.push(
+      "Use the sentence clues and pick the best fit from A/B/C/D.",
+    );
+  }
+
+  const sentenceExample =
+    buildSentenceIdealText(sentence);
+  const miniExample =
+    String(learnFirst?.miniExample || "").trim() ||
+    sentenceExample ||
+    String(
+      fallbackLearnFirst?.miniExample || "",
+    ).trim() ||
+    "Read the sentence frame, choose the best options, then continue.";
+
+  return {
+    title,
+    bullets,
+    miniExample,
+  };
+}
+
+function buildSentenceFallbackBullets(
+  sentence,
+) {
+  if (!sentence || typeof sentence !== "object") {
+    return [];
+  }
+
+  const parts = Array.isArray(sentence.parts) ?
+      sentence.parts
+    : [];
+  const blankParts = parts.filter(
+    (part) =>
+      part &&
+      part.type === "blank",
+  );
+  const bullets = [];
+
+  const roleLabel = String(
+    sentence.role || "essay",
+  ).trim();
+  if (roleLabel) {
+    bullets.push(
+      `Focus on the ${roleLabel} sentence idea while choosing options.`,
+    );
+  }
+
+  for (
+    let index = 0;
+    index < blankParts.length;
+    index += 1
+  ) {
+    const part = blankParts[index];
+    const hint = String(
+      part.hint || `blank ${index + 1}`,
+    ).trim();
+    const correctKey = String(
+      part.correctKey || "",
+    )
+      .trim()
+      .toUpperCase();
+    const optionText = String(
+      part?.options?.[correctKey] || "",
+    ).trim();
+    if (!optionText) {
+      continue;
+    }
+    const normalizedHint =
+      hint.charAt(0).toUpperCase() +
+      hint.slice(1);
+    bullets.push(
+      `${normalizedHint} should match: ${optionText}.`,
+    );
+  }
+
+  return bullets;
+}
+
+function buildSentenceIdealText(
+  sentence,
+) {
+  if (!sentence || typeof sentence !== "object") {
+    return "";
+  }
+
+  const parts = Array.isArray(sentence.parts) ?
+      sentence.parts
+    : [];
+  const buffer = [];
+  for (const part of parts) {
+    if (!part || typeof part !== "object") {
+      continue;
+    }
+
+    if (part.type === "blank") {
+      const correctKey = String(
+        part.correctKey || "",
+      )
+        .trim()
+        .toUpperCase();
+      const optionText = String(
+        part?.options?.[correctKey] || "",
+      ).trim();
+      buffer.push(optionText);
+      continue;
+    }
+
+    buffer.push(
+      String(part.value || ""),
+    );
+  }
+
+  return buffer
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function sanitizeEssayBuilderDraft(
+  draftJson,
+) {
+  const builder =
+    draftJson?.builder &&
+    typeof draftJson.builder ===
+      "object" ?
+      draftJson.builder
+    : {};
+  const rawSentences = Array.isArray(
+    builder.sentences,
+  ) ?
+      builder.sentences
+    : [];
+
+  const normalizedGlobalLearnFirst =
+    normalizeEssayLearnFirst(
+      draftJson?.learnFirst,
+    );
+  const normalizedSentences =
+    rawSentences.map(
+      (sentence, index) => {
+        const normalizedSentence =
+          sentence &&
+          typeof sentence === "object" ?
+            {
+              ...sentence,
+              id:
+                String(
+                  sentence.id ||
+                    `s${index + 1}`,
+                ).trim() ||
+                `s${index + 1}`,
+              role: String(
+                sentence.role ||
+                  "detail",
+              ).trim(),
+              parts: Array.isArray(
+                sentence.parts,
+              ) ?
+                  sentence.parts
+                : [],
+            }
+          : {
+              id: `s${index + 1}`,
+              role: "detail",
+              parts: [],
+            };
+
+        return {
+          ...normalizedSentence,
+          learnFirst:
+            normalizeEssayLearnFirst(
+              normalizedSentence.learnFirst,
+              normalizedGlobalLearnFirst,
+              normalizedSentence,
+            ),
+        };
+      },
+    );
+
+  return {
+    ...draftJson,
+    type: String(
+      draftJson?.type || "",
+    ).trim(),
+    learnFirst:
+      normalizedGlobalLearnFirst,
+    builder: {
+      ...builder,
+      title: String(
+        builder.title || "",
+      ).trim(),
+      targetSentenceCount: Number(
+        builder.targetSentenceCount || 0,
+      ),
+      sentences: normalizedSentences,
+    },
+  };
+}
+
 function clamp(value, min, max) {
   return Math.min(
     Math.max(value, min),
@@ -1023,11 +1277,12 @@ async function generateEssayBuilderDraft({
         `Task focus: ${taskCodes.join(", ")}`
       : "Task focus: none specified",
       "Return JSON only with this shape:",
-      '{"type":"ESSAY_BUILDER","learnFirst":{"title":"LEARN FIRST","bullets":["..."],"miniExample":"..."},"builder":{"title":"BUILD YOUR ESSAY (A/B/C/D ONLY)","targetSentenceCount":10,"sentences":[{"id":"s1","role":"topic","parts":[{"type":"blank","blankId":"b1","hint":"topic","correctKey":"A","options":{"A":"...","B":"...","C":"...","D":"..."}},{"type":"text","value":" is important because "},{"type":"blank","blankId":"b2","hint":"reason","correctKey":"C","options":{"A":"...","B":"...","C":"...","D":"..."}},{"type":"text","value":"."}]}]}}',
+      '{"type":"ESSAY_BUILDER","learnFirst":{"title":"LEARN FIRST","bullets":["..."],"miniExample":"..."},"builder":{"title":"BUILD YOUR ESSAY (A/B/C/D ONLY)","targetSentenceCount":10,"sentences":[{"id":"s1","role":"topic","learnFirst":{"title":"LEARN FIRST","bullets":["...","...","..."],"miniExample":"..."},"parts":[{"type":"blank","blankId":"b1","hint":"topic","correctKey":"A","options":{"A":"...","B":"...","C":"...","D":"..."}},{"type":"text","value":" is important because "},{"type":"blank","blankId":"b2","hint":"reason","correctKey":"C","options":{"A":"...","B":"...","C":"...","D":"..."}},{"type":"text","value":"."}]}]}}',
       "Rules:",
       "- Use ONLY the provided unit text. Do not add outside facts.",
       "- Calm, SEN-friendly language.",
       "- learnFirst: 3–6 bullets, total 60–120 words, and a 2–3 sentence miniExample.",
+      "- every sentence must include its own learnFirst object (title, 3-6 bullets, miniExample) focused on that sentence only.",
       "- builder.targetSentenceCount must be 10.",
       "- roles must include one topic sentence, detail sentences, and one conclusion sentence.",
       "- total blanks across all sentences: 10–14.",
@@ -1045,7 +1300,7 @@ async function generateEssayBuilderDraft({
     throw createError(502, "Groq did not return a valid essay builder draft.");
   }
 
-  const draftJson = parsed;
+  const draftJson = sanitizeEssayBuilderDraft(parsed);
   if (draftJson.type !== "ESSAY_BUILDER") {
     throw createError(502, "Groq did not return ESSAY_BUILDER draft data.");
   }
@@ -1091,6 +1346,19 @@ async function generateEssayBuilderDraft({
     });
   });
 
+  const invalidSentenceLearnFirst = sentences.some((sentence) => {
+    const sentenceLearnFirst = sentence?.learnFirst || {};
+    const bullets = Array.isArray(sentenceLearnFirst.bullets)
+      ? sentenceLearnFirst.bullets
+      : [];
+    return (
+      !String(sentenceLearnFirst.title || "").trim() ||
+      bullets.length < 3 ||
+      bullets.length > 6 ||
+      !String(sentenceLearnFirst.miniExample || "").trim()
+    );
+  });
+
   // WHY: Essay builder must stay within a guided blank count so the activity
   // remains structured and suitable for SEN learners.
   if (blankCount < 10 || blankCount > 14) {
@@ -1100,6 +1368,12 @@ async function generateEssayBuilderDraft({
   // WHY: Each blank must offer four fixed options so students never type.
   if (invalidBlank) {
     throw createError(502, "Essay builder blanks must include A/B/C/D options and a valid correctKey.");
+  }
+
+  // WHY: Students need sentence-level teaching scaffolds so each fill-in step
+  // has focused guidance before they choose A/B/C/D options.
+  if (invalidSentenceLearnFirst) {
+    throw createError(502, "Each essay sentence must include a sentence-level Learn First block.");
   }
 
   return {
