@@ -920,17 +920,6 @@ async function sendResultEmail({
   resultPackage,
   screenshotUrl = "",
 }) {
-  const webhookUrl = String(
-    process.env.RESULT_EMAIL_WEBHOOK_URL ||
-      "",
-  ).trim();
-  if (!webhookUrl) {
-    throw createError(
-      503,
-      "Email provider is not configured.",
-    );
-  }
-
   const subject = `Focus Mission Result: ${resultPackage.meta.missionTitle}`;
   const body = [
     `Student: ${resultPackage.meta.studentName}`,
@@ -944,8 +933,82 @@ async function sendResultEmail({
     .filter(Boolean)
     .join("\n");
 
-  // WHY: Delivery is delegated to a configurable webhook so environments can
-  // plug in any provider without hardcoding one transport in app logic.
+  const brevoApiKey = String(
+    process.env.BREVO_API_KEY || "",
+  ).trim();
+  if (brevoApiKey) {
+    const brevoSenderEmail = normalizeEmail(
+      process.env.BREVO_SENDER_EMAIL,
+    );
+    const brevoSenderName = String(
+      process.env.BREVO_SENDER_NAME ||
+        "Focus Mission",
+    ).trim();
+    if (!isValidEmail(brevoSenderEmail)) {
+      throw createError(
+        503,
+        "BREVO_SENDER_EMAIL is missing or invalid.",
+      );
+    }
+
+    const brevoResponse = await fetch(
+      "https://api.brevo.com/v3/smtp/email",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type":
+            "application/json",
+          accept: "application/json",
+          "api-key": brevoApiKey,
+        },
+        body: JSON.stringify({
+          sender: {
+            email:
+              brevoSenderEmail,
+            name: brevoSenderName,
+          },
+          to: recipients.map(
+            (email) => ({
+              email,
+            }),
+          ),
+          subject,
+          textContent: body,
+          params: {
+            resultPackageId: String(
+              resultPackage._id,
+            ),
+            screenshotUrl: String(
+              screenshotUrl || "",
+            ).trim(),
+          },
+        }),
+      },
+    );
+    if (!brevoResponse.ok) {
+      const text =
+        await brevoResponse.text();
+      throw createError(
+        502,
+        `Brevo returned ${brevoResponse.status}: ${text || "empty response"}`,
+      );
+    }
+    return;
+  }
+
+  const webhookUrl = String(
+    process.env.RESULT_EMAIL_WEBHOOK_URL ||
+      "",
+  ).trim();
+  if (!webhookUrl) {
+    throw createError(
+      503,
+      "Email provider is not configured.",
+    );
+  }
+
+  // WHY: Keep webhook fallback for existing environments while supporting
+  // direct Brevo transport when BREVO_API_KEY is configured.
   const response = await fetch(
     webhookUrl,
     {
