@@ -159,14 +159,9 @@ function enforceSentenceRole(
   if (index === totalSentences - 1) {
     return "conclusion";
   }
-  const normalized = String(role || "")
-    .trim()
-    .toLowerCase();
-  return normalized === "topic" ||
-      normalized === "detail" ||
-      normalized === "conclusion" ?
-      normalized
-    : "detail";
+  // WHY: Only the first and last sentences may be topic/conclusion. Every
+  // middle sentence must be normalized to detail for deterministic validation.
+  return "detail";
 }
 
 function countEssayBuilderBlanks(
