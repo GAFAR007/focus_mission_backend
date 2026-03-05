@@ -40,6 +40,9 @@ const {
   isAssessmentQuestionCount,
 } = require("../utils/xpPolicy");
 
+const DRAFT_MISSIONS_LIMIT = 5;
+const RECENT_MISSIONS_HISTORY_LIMIT = 50;
+
 function createError(statusCode, message) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -1048,7 +1051,7 @@ async function listDraftMissions(teacherId, studentId) {
     status: "draft",
   })
     .sort({ updatedAt: -1, createdAt: -1 })
-    .limit(5)
+    .limit(DRAFT_MISSIONS_LIMIT)
     .populate("subjectId", "name icon color")
     .lean();
 
@@ -1062,7 +1065,9 @@ async function listRecentMissions(teacherId, studentId) {
     $or: [{ status: "published" }, { status: { $exists: false } }],
   })
     .sort({ publishedAt: -1, createdAt: -1 })
-    .limit(5)
+    // WHY: Teachers need mission history visibility for sending result reports
+    // from previously assigned work, not only the latest five rows.
+    .limit(RECENT_MISSIONS_HISTORY_LIMIT)
     .populate("subjectId", "name icon color")
     .lean();
 
