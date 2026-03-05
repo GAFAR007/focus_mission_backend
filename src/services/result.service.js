@@ -92,6 +92,47 @@ function normalizeText(value) {
     .trim();
 }
 
+function isWordChar(value) {
+  return /[A-Za-z0-9]/.test(
+    String(value || ""),
+  );
+}
+
+function joinSentenceSegments(
+  segments,
+) {
+  let result = "";
+  for (const segmentRaw of (
+    Array.isArray(segments)
+  ) ?
+    segments
+  : []) {
+    const segment = String(
+      segmentRaw || "",
+    ).trim();
+    if (!segment) {
+      continue;
+    }
+    if (!result) {
+      result = segment;
+      continue;
+    }
+    const leftChar =
+      result[result.length - 1];
+    const rightChar = segment[0];
+    const needsSpace =
+      isWordChar(leftChar) &&
+      isWordChar(rightChar);
+    result = `${result}${needsSpace ? " " : ""}${segment}`;
+  }
+  return normalizeText(
+    result.replace(
+      /\s+([,.;:!?])/g,
+      "$1",
+    ),
+  );
+}
+
 function normalizeEmail(email) {
   return String(email || "")
     .trim()
@@ -580,8 +621,8 @@ function buildEssaySentenceOutput(
   return {
     blanks: blankEvidence,
     fullSentenceOutput:
-      normalizeText(
-        buffer.join(""),
+      joinSentenceSegments(
+        buffer,
       ),
   };
 }
