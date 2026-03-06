@@ -923,6 +923,53 @@ async function assertTeacherAccess(
   );
 }
 
+async function assertManagementAccess(
+  managementId,
+  resultPackage,
+) {
+  const managementUser =
+    await User.findById(
+      managementId,
+    )
+      .select("role assignedStudents")
+      .lean();
+
+  if (
+    !managementUser ||
+    String(
+      managementUser.role || "",
+    ) !== "management"
+  ) {
+    throw createError(
+      403,
+      "Management access is required.",
+    );
+  }
+
+  const assignedStudents = Array.isArray(
+    managementUser.assignedStudents,
+  ) ?
+      managementUser.assignedStudents.map(
+        (value) => String(value || ""),
+      )
+    : [];
+
+  if (
+    !assignedStudents.includes(
+      String(
+        resultPackage?.studentId || "",
+      ),
+    )
+  ) {
+    // WHY: Management may review result evidence only for students explicitly
+    // assigned to them, which preserves the audit boundary for reporting.
+    throw createError(
+      403,
+      "You do not have access to this result package.",
+    );
+  }
+}
+
 function resolveLatestSendStatus(
   sendLog,
 ) {
@@ -2405,6 +2452,40 @@ async function getResultPackageForTeacher({
   );
 }
 
+async function getResultPackageForManagement({
+  managementId,
+  resultPackageId,
+}) {
+  const resultPackage =
+    await ResultPackage.findById(
+      resultPackageId,
+    ).lean();
+  if (!resultPackage) {
+    throw createError(
+      404,
+      "Result package not found.",
+    );
+  }
+
+  await assertManagementAccess(
+    managementId,
+    resultPackage,
+  );
+  const sendLogs =
+    await SendLog.find({
+      resultPackageId,
+    })
+      .sort({
+        createdAt: -1,
+      })
+      .limit(20)
+      .lean();
+  return serializeResultPackage(
+    resultPackage,
+    sendLogs,
+  );
+}
+
 async function sendResultPackage({
   teacherId,
   resultPackageId,
@@ -2844,6 +2925,7 @@ async function getResultScreenshotForTeacher({
 module.exports = {
   createResultPackageForCompletion,
   ensureResultPackageForMission,
+  getResultPackageForManagement,
   getResultPackageForTeacher,
   sendResultPackage,
   processPendingEmailRetries,

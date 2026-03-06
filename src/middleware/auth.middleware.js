@@ -80,7 +80,30 @@ function authorizeRoles(...allowedRoles) {
   };
 }
 
+function authorizeSourceRoles(...allowedSourceRoles) {
+  return (req, _res, next) => {
+    if (
+      !req.user ||
+      !allowedSourceRoles.includes(
+        String(req.user.sourceRole || ""),
+      )
+    ) {
+      // WHY: Management-only routes must not become available to mentors just
+      // because management is aliased to mentor for legacy MVP access checks.
+      return next(
+        createError(
+          403,
+          "You do not have access to this resource.",
+        ),
+      );
+    }
+
+    return next();
+  };
+}
+
 module.exports = {
   protect,
   authorizeRoles,
+  authorizeSourceRoles,
 };
