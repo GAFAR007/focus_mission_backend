@@ -9,7 +9,10 @@
  * delegate to management.controller.
  */
 const express = require("express");
-const { param } = require("express-validator");
+const {
+  body,
+  param,
+} = require("express-validator");
 
 const managementController = require("../controllers/management.controller");
 const {
@@ -25,6 +28,40 @@ const router = express.Router();
 router.use(
   protect,
   authorizeSourceRoles("management"),
+);
+
+router.post(
+  "/users",
+  [
+    body("name")
+      .notEmpty()
+      .withMessage(
+        "Name is required.",
+      ),
+    body("email")
+      .isEmail()
+      .withMessage(
+        "Valid email is required.",
+      ),
+    body("password")
+      .isLength({ min: 8 })
+      .withMessage(
+        "Password must be at least 8 characters.",
+      ),
+    body("role")
+      .isIn(["student", "teacher"])
+      .withMessage(
+        "Role must be student or teacher.",
+      ),
+    body("subjectSpecialty")
+      .optional()
+      .isString()
+      .withMessage(
+        "subjectSpecialty must be text.",
+      ),
+    validateRequest,
+  ],
+  managementController.createUser,
 );
 
 router.get(

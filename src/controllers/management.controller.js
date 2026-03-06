@@ -50,7 +50,27 @@ async function getResultPackage(
   }
 }
 
+async function createUser(
+  req,
+  res,
+  next,
+) {
+  try {
+    const user =
+      await managementService.createManagedUser(
+        {
+          managementId: req.user.id,
+          payload: req.body,
+        },
+      );
+    res.status(201).json({ user });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
+  createUser,
   getStudentResults,
   getResultPackage,
 };
