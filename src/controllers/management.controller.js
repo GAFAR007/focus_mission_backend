@@ -69,8 +69,84 @@ async function createUser(
   }
 }
 
+async function listSubjects(
+  _req,
+  res,
+  next,
+) {
+  try {
+    const subjects =
+      await managementService.listSubjects();
+    res.json({ subjects });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getSubjectCertificationSettings(
+  req,
+  res,
+  next,
+) {
+  try {
+    const certification =
+      await managementService.getSubjectCertificationSettings(
+        {
+          subjectId: req.params.subjectId,
+        },
+      );
+    res.json({ certification });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function updateSubjectCertificationSettings(
+  req,
+  res,
+  next,
+) {
+  try {
+    const certification =
+      await managementService.updateSubjectCertificationSettings(
+        {
+          subjectId: req.params.subjectId,
+          payload: req.body,
+        },
+      );
+    res.json({ certification });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getStudentCertification(
+  req,
+  res,
+  next,
+) {
+  try {
+    const certifications =
+      await managementService.getStudentCertification(
+        {
+          managementId: req.user.id,
+          studentId: req.params.studentId,
+        },
+      );
+    res.json({
+      certifications,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   createUser,
   getStudentResults,
   getResultPackage,
+  getStudentCertification,
+  getSubjectCertificationSettings,
+  listSubjects,
+  updateSubjectCertificationSettings,
 };

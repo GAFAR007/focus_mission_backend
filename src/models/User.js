@@ -100,6 +100,35 @@ const userSchema = new mongoose.Schema(
       // WHY: Subject-completion bonus XP must stay idempotent, so each awarded
       // subject is tracked explicitly per learner.
     },
+    subjectCertificationAwards: {
+      type: [
+        {
+          subjectId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Subject",
+            required: true,
+          },
+          awardedAt: {
+            type: Date,
+            required: true,
+          },
+          requiredTaskCodesSnapshot: {
+            type: [String],
+            default: [],
+          },
+          averagePassedScoreAtUnlock: {
+            type: Number,
+            min: 0,
+            max: 100,
+            default: 0,
+          },
+        },
+      ],
+      default: [],
+      // WHY: Task-focus certification is separate from the older
+      // assessment-completion reward, so its unlock history must be tracked in
+      // its own audit-safe award list.
+    },
     firstLoginAt: {
       type: Date,
       default: null,

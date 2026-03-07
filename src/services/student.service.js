@@ -17,10 +17,14 @@ const Target = require("../models/Target");
 const Timetable = require("../models/Timetable");
 const User = require("../models/User");
 const resultService = require("./result.service");
+const subjectCertificationService = require("./subjectCertification.service");
 const {
   buildQuestionBankMission,
   serializeMission,
 } = require("../utils/missionSerializer");
+const {
+  calculateRequiredCorrectAnswers,
+} = require("../utils/missionPassPolicy");
 const { serializeJourney } = require("../utils/userJourney");
 const {
   ASSESSMENT_MAX_XP,
@@ -90,13 +94,6 @@ const WEEKDAY_LOOKUP = {
   sunday: "Sunday",
 };
 const ESSAY_SUBMISSION_MIN_WORDS = 100;
-const MISSION_REQUIRED_CORRECT_BY_TOTAL = Object.freeze({
-  5: 4,
-  8: 6,
-  10: 7,
-  15: 11,
-  20: 14,
-});
 
 function countWords(value) {
   return String(value || "")
@@ -122,18 +119,6 @@ function buildTheoryResponseMap(theoryResponses) {
     });
   }
   return responsesByIndex;
-}
-
-function calculateRequiredCorrectAnswers(totalCount) {
-  const normalizedTotal = Math.max(0, Number(totalCount || 0));
-  if (normalizedTotal === 0) {
-    return 0;
-  }
-  return Number(
-    MISSION_REQUIRED_CORRECT_BY_TOTAL[
-      normalizedTotal
-    ] || 0,
-  );
 }
 
 function normalizeWeekday(day) {
@@ -528,9 +513,13 @@ async function getDashboard(studentId) {
     .populate("subjectId")
     .lean();
   const todaySessionLogs = await SessionLog.find({ studentId, dateKey }).lean();
-  const [targetSummary, subjectProgressResult] = await Promise.all([
+  const [targetSummary, subjectProgressResult, subjectCertification] = await Promise.all([
     getTargetXpSummary(studentId, dateKey),
     getSubjectProgressData(studentId),
+    subjectCertificationService.getStudentCertificationSummaries({
+      studentId,
+      applyAwards: true,
+    }),
   ]);
   const dayPerformance = summarizeDailyPerformance(todaySessionLogs);
   const totalDailyXp = clampNumber(
@@ -562,6 +551,7 @@ async function getDashboard(studentId) {
       subjectProgressResult.subjectProgress,
       student,
     ),
+    subjectCertification,
     today: timetable ? serializeTimetableEntry(timetable) : null,
     recentSessions,
   };
@@ -736,6 +726,9 @@ async function completeSession(payload) {
   let missionToPersist = null;
   let isEssayBuilderMission = false;
   let isTheoryMission = false;
+  let theoryReviewPending = false;
+  let resultPackageScoreCorrect = 0;
+  let resultPackageScoreTotal = 0;
 
   if (missionId) {
     const mission = await Mission.findOne({
@@ -768,6 +761,8 @@ async function completeSession(payload) {
           : 0;
         challengeXpForSession = calculateChallengeXp(scorePercent);
         xpAwarded = challengeXpForSession;
+        resultPackageScoreCorrect = correctAnswers;
+        resultPackageScoreTotal = missionQuestionCount;
       } else if (isTheory) {
         const theoryResponsesByIndex = buildTheoryResponseMap(
           payload?.resultEvidence?.theoryResponses,
@@ -802,12 +797,17 @@ async function completeSession(payload) {
           }
         }
 
-        // WHY: Theory is a teacher-reviewed short-answer mission. Completion is
-        // based on every question receiving a sufficient written response.
-        correctAnswers = totalQuestions;
-        scorePercent = totalQuestions > 0 ? 100 : 0;
-        challengeXpForSession = calculateChallengeXp(scorePercent);
-        xpAwarded = challengeXpForSession;
+        // WHY: Theory is a teacher-reviewed short-answer mission. Completion
+        // stores evidence immediately, but XP remains pending until the
+        // teacher finishes manual scoring.
+        correctAnswers = 0;
+        scorePercent = 0;
+        challengeXpForSession = 0;
+        assessmentXpForSession = 0;
+        xpAwarded = 0;
+        theoryReviewPending = true;
+        resultPackageScoreCorrect = 0;
+        resultPackageScoreTotal = 0;
       } else {
         missionQuestionCount = totalQuestions;
         completedQuestions = totalQuestions;
@@ -822,6 +822,8 @@ async function completeSession(payload) {
           challengeXpForSession = calculateChallengeXp(scorePercent);
         }
         xpAwarded = challengeXpForSession + assessmentXpForSession;
+        resultPackageScoreCorrect = correctAnswers;
+        resultPackageScoreTotal = missionQuestionCount;
       }
 
       missionToPersist = mission;
@@ -839,6 +841,8 @@ async function completeSession(payload) {
     } else {
       challengeXpForSession = calculateChallengeXp(scorePercent);
     }
+    resultPackageScoreCorrect = correctAnswers;
+    resultPackageScoreTotal = missionQuestionCount;
   }
 
   if (!isTheoryMission) {
@@ -897,10 +901,20 @@ async function completeSession(payload) {
   }
 
   if (missionToPersist) {
-    missionToPersist.latestScoreCorrect = correctAnswers;
-    missionToPersist.latestScoreTotal = missionQuestionCount;
-    missionToPersist.latestScorePercent = scorePercent;
-    missionToPersist.latestXpEarned = xpAwarded;
+    if (isTheoryMission) {
+      // WHY: Pending theory reviews should not masquerade as auto-scored
+      // completion, so the live mission snapshot stays neutral until teacher
+      // scoring is finalized.
+      missionToPersist.latestScoreCorrect = 0;
+      missionToPersist.latestScoreTotal = 0;
+      missionToPersist.latestScorePercent = 0;
+      missionToPersist.latestXpEarned = 0;
+    } else {
+      missionToPersist.latestScoreCorrect = correctAnswers;
+      missionToPersist.latestScoreTotal = missionQuestionCount;
+      missionToPersist.latestScorePercent = scorePercent;
+      missionToPersist.latestXpEarned = xpAwarded;
+    }
     await missionToPersist.save();
   }
 
@@ -914,7 +928,8 @@ async function completeSession(payload) {
   }
 
   const dayPerformance = summarizeDailyPerformance(todaySessionLogs);
-  const attendanceXpForSession = dayPerformance.attendanceXp > 0 ? 0 : ATTENDANCE_XP;
+  const attendanceXpForSession =
+    isTheoryMission ? 0 : dayPerformance.attendanceXp > 0 ? 0 : ATTENDANCE_XP;
   const nextAttendanceXp = clampNumber(
     dayPerformance.attendanceXp + attendanceXpForSession,
     0,
@@ -1015,9 +1030,9 @@ async function completeSession(payload) {
     student,
     mission: completedMission,
     sessionLog,
-    scoreCorrect: correctAnswers,
-    scoreTotal: missionQuestionCount,
-    scorePercent,
+    scoreCorrect: resultPackageScoreCorrect,
+    scoreTotal: resultPackageScoreTotal,
+    scorePercent: isTheoryMission ? 0 : scorePercent,
     xpAwarded: totalXpAwarded,
     startTime: payload.startTime,
     submitTime: payload.submitTime,
@@ -1032,9 +1047,13 @@ async function completeSession(payload) {
   student.streakBadgeUnlocked = streakState.streakBadgeUnlocked;
   await student.save();
 
-  const [targetSummary, subjectProgressResult] = await Promise.all([
+  const [targetSummary, subjectProgressResult, subjectCertification] = await Promise.all([
     getTargetXpSummary(payload.studentId, dateKey),
     getSubjectProgressData(payload.studentId),
+    subjectCertificationService.getStudentCertificationSummaries({
+      studentId: payload.studentId,
+      applyAwards: true,
+    }),
   ]);
 
   return {
@@ -1064,10 +1083,13 @@ async function completeSession(payload) {
       subjectProgressResult.subjectProgress,
       student,
     ),
+    subjectCertification,
     student: {
       ...serializeStudent(student),
     },
     resultPackageId: resultPackage ? String(resultPackage._id || "") : "",
+    theoryReviewStatus: theoryReviewPending ? "pending_review" : "",
+    theoryXpPending: theoryReviewPending,
   };
 }
 

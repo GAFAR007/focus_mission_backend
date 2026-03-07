@@ -1,7 +1,7 @@
 /**
  * WHAT:
- * result.service owns mission result package creation, retrieval, screenshot
- * storage, send actions, and email retry processing.
+ * result.service owns mission result package creation, retrieval, theory score
+ * finalization, screenshot storage, send actions, and email retry processing.
  * WHY:
  * Mission evidence must remain auditable and reliably deliverable even when an
  * email channel fails transiently.
@@ -17,9 +17,14 @@ const ResultScreenshot = require("../models/ResultScreenshot");
 const SessionLog = require("../models/SessionLog");
 const SendLog = require("../models/SendLog");
 const User = require("../models/User");
+const subjectCertificationService = require("./subjectCertification.service");
 
 let retryWorkerHandle = null;
 let retryWorkerRunning = false;
+const THEORY_REVIEW_PENDING = "pending_review";
+const THEORY_REVIEW_SCORED = "scored";
+const THEORY_XP_MAX_FALLBACK = 50;
+const THEORY_FEEDBACK_MAX_LENGTH = 1000;
 
 function createError(statusCode, message) {
   const error = new Error(message);
@@ -324,6 +329,7 @@ function buildQuestionEvidence({
 function buildTheoryEvidence({
   missionQuestions,
   theoryResponses,
+  xpMax = THEORY_XP_MAX_FALLBACK,
 }) {
   const responseByIndex = new Map();
   for (const response of Array.isArray(theoryResponses) ? theoryResponses : []) {
@@ -364,18 +370,112 @@ function buildTheoryEvidence({
             : studentWordCount,
           meetsMinimumWords,
           attempted,
+          teacherScorePercent: null,
+          teacherFeedback: "",
+          scoredBy: "",
+          scoredAt: null,
         };
       })
     : [];
 
   return {
     format: "THEORY",
+    reviewStatus: THEORY_REVIEW_PENDING,
     questionsAnsweredCount: perQuestion.filter((question) => question?.attempted).length,
     completedResponsesCount: perQuestion.filter(
       (question) => question?.meetsMinimumWords === true,
     ).length,
     totalQuestions: perQuestion.length,
+    averageTeacherScorePercent: 0,
+    xpAwarded: 0,
+    xpMax: Math.max(0, Number(xpMax || THEORY_XP_MAX_FALLBACK)),
     questions: perQuestion,
+  };
+}
+
+function normalizeTheoryReviewPayload({
+  questions,
+  expectedCount,
+}) {
+  if (!Array.isArray(questions) || questions.length !== expectedCount) {
+    throw createError(
+      400,
+      `Theory scoring must include exactly ${expectedCount} question score entries.`,
+    );
+  }
+
+  const normalized = new Map();
+  for (const question of questions) {
+    const questionIndex = Number(question?.questionIndex);
+    const teacherScorePercent = Number(question?.teacherScorePercent);
+    const teacherFeedback = String(question?.teacherFeedback || "").trim();
+
+    if (
+      !Number.isInteger(questionIndex) ||
+      questionIndex < 0 ||
+      questionIndex >= expectedCount
+    ) {
+      throw createError(
+        400,
+        "Each theory questionIndex must match an existing question.",
+      );
+    }
+
+    if (normalized.has(questionIndex)) {
+      throw createError(
+        400,
+        "Theory scoring payload includes duplicate question indexes.",
+      );
+    }
+
+    if (
+      !Number.isInteger(teacherScorePercent) ||
+      teacherScorePercent < 0 ||
+      teacherScorePercent > 100
+    ) {
+      throw createError(
+        400,
+        "Each theory teacherScorePercent must be an integer between 0 and 100.",
+      );
+    }
+
+    if (teacherFeedback.length > THEORY_FEEDBACK_MAX_LENGTH) {
+      throw createError(
+        400,
+        `Theory teacherFeedback must be ${THEORY_FEEDBACK_MAX_LENGTH} characters or fewer.`,
+      );
+    }
+
+    normalized.set(questionIndex, {
+      questionIndex,
+      teacherScorePercent,
+      teacherFeedback,
+    });
+  }
+
+  return normalized;
+}
+
+function buildTheoryScoreOutcome({
+  scoredQuestions,
+  xpMax = THEORY_XP_MAX_FALLBACK,
+}) {
+  const scores = Array.isArray(scoredQuestions)
+    ? scoredQuestions.map((question) => Number(question?.teacherScorePercent || 0))
+    : [];
+  const questionCount = scores.length;
+  const averageTeacherScorePercent = questionCount > 0
+    ? scores.reduce((sum, value) => sum + value, 0) / questionCount
+    : 0;
+  const roundedScorePercent = Math.round(averageTeacherScorePercent);
+  const earnedXp = Math.round(
+    (averageTeacherScorePercent / 100) * Math.max(0, Number(xpMax || THEORY_XP_MAX_FALLBACK)),
+  );
+
+  return {
+    averageTeacherScorePercent,
+    roundedScorePercent,
+    earnedXp,
   };
 }
 
@@ -529,15 +629,32 @@ function buildLegacyQuestionEvidence({
 function buildLegacyTheoryEvidence({
   missionQuestions,
   scoreTotal,
+  scorePercent = 0,
+  xpAwarded = 0,
+  xpMax = THEORY_XP_MAX_FALLBACK,
 }) {
   const questions = Array.isArray(missionQuestions) ? missionQuestions : [];
   const attemptedCount = Math.min(Number(scoreTotal || 0), questions.length);
+  const normalizedXpAwarded = Math.max(0, Number(xpAwarded || 0));
+  const normalizedScorePercent = Math.max(
+    0,
+    Math.min(100, Number(scorePercent || 0)),
+  );
+  const reviewStatus = normalizedXpAwarded > 0 || normalizedScorePercent > 0
+    ? THEORY_REVIEW_SCORED
+    : THEORY_REVIEW_PENDING;
 
   return {
     format: "THEORY",
+    reviewStatus,
     questionsAnsweredCount: attemptedCount,
     completedResponsesCount: attemptedCount,
     totalQuestions: questions.length,
+    averageTeacherScorePercent: reviewStatus === THEORY_REVIEW_SCORED
+      ? normalizedScorePercent
+      : 0,
+    xpAwarded: normalizedXpAwarded,
+    xpMax: Math.max(0, Number(xpMax || THEORY_XP_MAX_FALLBACK)),
     questions: questions.map((question, index) => ({
       questionText: String(question?.prompt || "").trim(),
       learnFirst: String(question?.learningText || "").trim(),
@@ -549,6 +666,10 @@ function buildLegacyTheoryEvidence({
       studentWordCount: 0,
       meetsMinimumWords: index < attemptedCount,
       attempted: index < attemptedCount,
+      teacherScorePercent: null,
+      teacherFeedback: "",
+      scoredBy: "",
+      scoredAt: null,
       legacySelectionUnavailable: true,
     })),
     legacyBackfill: true,
@@ -974,10 +1095,59 @@ function serializeResultPackage(
           resultPackage.updatedAt,
         ).toISOString()
       : null,
+    certification:
+      resultPackage?.certification &&
+      typeof resultPackage.certification === "object" ?
+        resultPackage.certification
+      : null,
     sendLogs: sendLogs.map(
       serializeSendLog,
     ),
   };
+}
+
+async function serializeResultPackageWithCertification(
+  resultPackage,
+  sendLogs = [],
+) {
+  let certification = null;
+  const missionId = String(
+    resultPackage?.missionId || "",
+  ).trim();
+
+  if (missionId) {
+    const mission = await Mission.findById(
+      missionId,
+    )
+      .populate(
+        "subjectId",
+        "name icon color certificationEnabled requiredCertificationTaskCodes certificationLabel",
+      )
+      .lean();
+
+    if (mission) {
+      certification =
+        await subjectCertificationService.getMissionCertificationSummary(
+          {
+            mission,
+            resultPackage,
+            subject:
+              mission?.subjectId &&
+              typeof mission.subjectId === "object" ?
+                mission.subjectId
+              : null,
+          },
+        );
+    }
+  }
+
+  return serializeResultPackage(
+    {
+      ...resultPackage,
+      certification,
+    },
+    sendLogs,
+  );
 }
 
 async function assertTeacherAccess(
@@ -1207,6 +1377,9 @@ function buildFullResultReportText({
     "THEORY"
   ) {
     lines.push(
+      `Review Status: ${String(evidence.reviewStatus || THEORY_REVIEW_PENDING).trim()}`,
+      `Average Teacher Score: ${Number(evidence.averageTeacherScorePercent || 0)}%`,
+      `XP Awarded: ${Number(evidence.xpAwarded || 0)}/${Number(evidence.xpMax || THEORY_XP_MAX_FALLBACK)}`,
       `Questions Answered: ${Number(evidence.questionsAnsweredCount || 0)}/${Number(evidence.totalQuestions || 0)}`,
       `Responses Meeting Minimum Words: ${Number(evidence.completedResponsesCount || 0)}/${Number(evidence.totalQuestions || 0)}`,
       "",
@@ -1222,6 +1395,8 @@ function buildFullResultReportText({
         `Student Words: ${Number(question?.studentWordCount || 0)}`,
         `Student Answer: ${String(question?.studentAnswer || "").trim()}`,
         `Minimum Met: ${question?.meetsMinimumWords ? "Yes" : "No"}`,
+        `Teacher Score: ${question?.teacherScorePercent === null || question?.teacherScorePercent === undefined ? "-" : `${Number(question?.teacherScorePercent || 0)}/100`}`,
+        `Teacher Feedback: ${String(question?.teacherFeedback || "").trim() || "-"}`,
         "",
       );
     });
@@ -1825,6 +2000,20 @@ function buildResultReportPdfBuffer({
         "THEORY"
       ) {
         keyValue(
+          "Review Status",
+          String(
+            evidence.reviewStatus || THEORY_REVIEW_PENDING,
+          ).trim(),
+        );
+        keyValue(
+          "Average Teacher Score",
+          `${Number(evidence.averageTeacherScorePercent || 0)}%`,
+        );
+        keyValue(
+          "XP Awarded",
+          `${Number(evidence.xpAwarded || 0)}/${Number(evidence.xpMax || THEORY_XP_MAX_FALLBACK)}`,
+        );
+        keyValue(
           "Questions Answered",
           `${Number(evidence.questionsAnsweredCount || 0)}/${Number(evidence.totalQuestions || 0)}`,
         );
@@ -1867,6 +2056,17 @@ function buildResultReportPdfBuffer({
           });
           writeLine({
             text: `Student Answer: ${String(question?.studentAnswer || "").trim()}`,
+            color: colors.text,
+            indent: 10,
+          });
+          writeLine({
+            text: `Teacher Score: ${question?.teacherScorePercent === null || question?.teacherScorePercent === undefined ? "-" : `${Number(question?.teacherScorePercent || 0)}/100`}`,
+            color: colors.info,
+            bold: true,
+            indent: 10,
+          });
+          writeLine({
+            text: `Teacher Feedback: ${String(question?.teacherFeedback || "").trim() || "-"}`,
             color: colors.text,
             indent: 10,
           });
@@ -2273,6 +2473,7 @@ async function createResultPackageForCompletion({
           resultEvidence
             ?.theoryResponses ||
           [],
+        xpMax: Number(mission?.xpReward || THEORY_XP_MAX_FALLBACK),
       })
     : buildQuestionEvidence({
         missionQuestions:
@@ -2521,6 +2722,11 @@ async function ensureResultPackageForMission({
           mission.questions || [],
         scoreTotal:
           scoreSnapshot.scoreTotal,
+        scorePercent:
+          scoreSnapshot.scorePercent,
+        xpAwarded,
+        xpMax:
+          Number(mission?.xpReward || THEORY_XP_MAX_FALLBACK),
       })
     : buildLegacyQuestionEvidence({
         missionQuestions:
@@ -2643,7 +2849,7 @@ async function getResultPackageForTeacher({
       })
       .limit(20)
       .lean();
-  return serializeResultPackage(
+  return serializeResultPackageWithCertification(
     resultPackage,
     sendLogs,
   );
@@ -2677,10 +2883,193 @@ async function getResultPackageForManagement({
       })
       .limit(20)
       .lean();
-  return serializeResultPackage(
+  return serializeResultPackageWithCertification(
     resultPackage,
     sendLogs,
   );
+}
+
+async function scoreTheoryResultPackage({
+  teacherId,
+  resultPackageId,
+  questions,
+}) {
+  const resultPackage = await ResultPackage.findById(resultPackageId);
+  if (!resultPackage) {
+    throw createError(
+      404,
+      "Result package not found.",
+    );
+  }
+
+  await assertTeacherAccess(
+    teacherId,
+    resultPackage.toObject(),
+  );
+
+  if (String(resultPackage.missionType || "").toUpperCase() !== "THEORY") {
+    throw createError(
+      400,
+      "Only theory result packages can be teacher-scored.",
+    );
+  }
+
+  const mission = await Mission.findById(resultPackage.missionId)
+    .select("xpReward latestResultPackageId")
+    .lean();
+  if (!mission) {
+    throw createError(
+      404,
+      "Mission not found for this result package.",
+    );
+  }
+
+  const evidence =
+    resultPackage.evidence &&
+    typeof resultPackage.evidence === "object"
+      ? { ...resultPackage.evidence }
+      : {};
+  const evidenceQuestions = Array.isArray(evidence.questions)
+    ? evidence.questions
+    : [];
+
+  if (evidence.legacyBackfill === true) {
+    throw createError(
+      400,
+      "Legacy theory result packages cannot be teacher-scored because the original written answers are unavailable.",
+    );
+  }
+
+  if (!evidenceQuestions.length) {
+    throw createError(
+      400,
+      "Theory result package does not contain question evidence to score.",
+    );
+  }
+
+  const normalizedScores = normalizeTheoryReviewPayload({
+    questions,
+    expectedCount: evidenceQuestions.length,
+  });
+  const scoredAt = new Date().toISOString();
+  const scoredQuestions = evidenceQuestions.map((question, index) => {
+    const normalizedScore = normalizedScores.get(index);
+    return {
+      ...question,
+      teacherScorePercent: normalizedScore.teacherScorePercent,
+      teacherFeedback: normalizedScore.teacherFeedback,
+      scoredBy: String(teacherId || ""),
+      scoredAt,
+    };
+  });
+  const xpMax = Math.max(
+    0,
+    Number(mission?.xpReward || evidence?.xpMax || THEORY_XP_MAX_FALLBACK),
+  );
+  const scoreOutcome = buildTheoryScoreOutcome({
+    scoredQuestions,
+    xpMax,
+  });
+  const previousXpAwarded = Math.max(
+    0,
+    Number(resultPackage?.meta?.xpAwarded || 0),
+  );
+  const xpDelta = scoreOutcome.earnedXp - previousXpAwarded;
+  const roundedAveragePercent = scoreOutcome.roundedScorePercent;
+  const storedAveragePercent = Number(
+    scoreOutcome.averageTeacherScorePercent.toFixed(1),
+  );
+
+  resultPackage.meta = {
+    ...(resultPackage.meta || {}),
+    score: {
+      correct: roundedAveragePercent,
+      total: 100,
+      percent: roundedAveragePercent,
+    },
+    xpAwarded: scoreOutcome.earnedXp,
+  };
+  resultPackage.evidence = {
+    ...evidence,
+    reviewStatus: THEORY_REVIEW_SCORED,
+    averageTeacherScorePercent: storedAveragePercent,
+    xpAwarded: scoreOutcome.earnedXp,
+    xpMax,
+    questions: scoredQuestions,
+  };
+  resultPackage.markModified("meta");
+  resultPackage.markModified("evidence");
+  await resultPackage.save();
+
+  await Mission.findByIdAndUpdate(
+    resultPackage.missionId,
+    {
+      latestScoreCorrect: roundedAveragePercent,
+      latestScoreTotal: 100,
+      latestScorePercent: roundedAveragePercent,
+      latestXpEarned: scoreOutcome.earnedXp,
+      latestResultPackageId: resultPackage._id,
+    },
+  );
+
+  if (resultPackage.sessionLogId) {
+    await SessionLog.findByIdAndUpdate(
+      resultPackage.sessionLogId,
+      {
+        correctAnswers: roundedAveragePercent,
+        scorePercent: roundedAveragePercent,
+        completedQuestions: evidenceQuestions.length,
+        missionQuestionCount: evidenceQuestions.length,
+        xpAwarded: scoreOutcome.earnedXp,
+        totalXpAwarded: scoreOutcome.earnedXp,
+      },
+    );
+  }
+
+  if (xpDelta !== 0) {
+    const student = await User.findById(resultPackage.studentId);
+    if (student) {
+      // WHY: Theory XP is delayed until teacher review, so rescoring must
+      // adjust the student's cumulative XP by the delta only.
+      student.xp = Math.max(0, Number(student.xp || 0) + xpDelta);
+      await student.save();
+    }
+  }
+
+  await subjectCertificationService.getStudentCertificationSummaries({
+    studentId: String(resultPackage.studentId || ""),
+    subjectId: String(resultPackage.subjectId || ""),
+    applyAwards: true,
+  });
+
+  console.info("[theory] result package scored", {
+    resultPackageId: String(resultPackage._id || ""),
+    missionId: String(resultPackage.missionId || ""),
+    teacherId: String(teacherId || ""),
+    averageTeacherScorePercent: storedAveragePercent,
+    earnedXp: scoreOutcome.earnedXp,
+    xpDelta,
+  });
+
+  const sendLogs = await SendLog.find({
+    resultPackageId: resultPackage._id,
+  })
+    .sort({ createdAt: -1 })
+    .limit(20)
+    .lean();
+
+  return {
+    success: true,
+    resultPackage: await serializeResultPackageWithCertification(
+      resultPackage.toObject(),
+      sendLogs,
+    ),
+    mission: {
+      id: String(resultPackage.missionId || ""),
+      latestScorePercent: roundedAveragePercent,
+      latestXpEarned: scoreOutcome.earnedXp,
+    },
+  };
 }
 
 async function sendResultPackage({
@@ -3124,6 +3513,7 @@ module.exports = {
   ensureResultPackageForMission,
   getResultPackageForManagement,
   getResultPackageForTeacher,
+  scoreTheoryResultPackage,
   sendResultPackage,
   processPendingEmailRetries,
   startResultEmailRetryWorker,

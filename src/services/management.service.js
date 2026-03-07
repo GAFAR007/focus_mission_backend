@@ -12,6 +12,7 @@
 const bcrypt = require("bcryptjs");
 const Mission = require("../models/Mission");
 const User = require("../models/User");
+const subjectCertificationService = require("./subjectCertification.service");
 const { serializeMission } = require("../utils/missionSerializer");
 
 const MANAGEMENT_RESULTS_HISTORY_LIMIT = 60;
@@ -305,8 +306,49 @@ async function createManagedUser({
   );
 }
 
+async function listSubjects() {
+  return subjectCertificationService.listCertificationSubjects();
+}
+
+async function getSubjectCertificationSettings({
+  subjectId,
+}) {
+  return subjectCertificationService.getSubjectCertificationSettings(
+    subjectId,
+  );
+}
+
+async function updateSubjectCertificationSettings({
+  subjectId,
+  payload,
+}) {
+  return subjectCertificationService.updateSubjectCertificationSettings({
+    subjectId,
+    payload,
+  });
+}
+
+async function getStudentCertification({
+  managementId,
+  studentId,
+}) {
+  await assertManagementStudentAccess(
+    managementId,
+    studentId,
+  );
+
+  return subjectCertificationService.getStudentCertificationSummaries({
+    studentId,
+    applyAwards: true,
+  });
+}
+
 module.exports = {
   listStudentResults,
   assertManagementStudentAccess,
   createManagedUser,
+  listSubjects,
+  getSubjectCertificationSettings,
+  updateSubjectCertificationSettings,
+  getStudentCertification,
 };

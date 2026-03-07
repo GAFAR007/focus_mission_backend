@@ -14,6 +14,7 @@
 const mongoose = require("mongoose");
 const SessionLog = require("../models/SessionLog");
 const resultService = require("../services/result.service");
+const subjectCertificationService = require("../services/subjectCertification.service");
 const teacherService = require("../services/teacher.service");
 
 const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -348,6 +349,25 @@ async function getStudentSubjectAnalytics(req, res, next) {
   }
 }
 
+async function getStudentCertification(
+  req,
+  res,
+  next,
+) {
+  try {
+    const certifications =
+      await subjectCertificationService.getStudentCertificationSummaries(
+        {
+          studentId: req.params.id,
+          applyAwards: true,
+        },
+      );
+    res.json({ certifications });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function getStudentBehaviourTrend(req, res, next) {
   try {
     const match = buildAnalyticsMatch(req);
@@ -388,6 +408,19 @@ async function getResultPackage(req, res, next) {
         resultPackageId: req.params.resultPackageId,
       });
     res.json({ resultPackage });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function scoreTheoryResultPackage(req, res, next) {
+  try {
+    const scored = await resultService.scoreTheoryResultPackage({
+      teacherId: req.user.id,
+      resultPackageId: req.params.resultPackageId,
+      questions: req.body.questions,
+    });
+    res.status(200).json(scored);
   } catch (error) {
     next(error);
   }
@@ -449,6 +482,7 @@ async function getResultScreenshot(req, res, next) {
 
 module.exports = {
   getStudents,
+  getStudentCertification,
   createTimetable,
   createSessionLog,
   generateLearningAndBlocksDraft,
@@ -467,6 +501,7 @@ module.exports = {
   getStudentSubjectAnalytics,
   getStudentBehaviourTrend,
   getResultPackage,
+  scoreTheoryResultPackage,
   sendResultPackage,
   uploadResultScreenshot,
   getResultScreenshot,

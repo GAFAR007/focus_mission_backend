@@ -65,6 +65,74 @@ router.post(
 );
 
 router.get(
+  "/subjects",
+  managementController.listSubjects,
+);
+
+router.get(
+  "/subjects/:subjectId/certification",
+  [
+    param("subjectId")
+      .isMongoId()
+      .withMessage(
+        "Valid subjectId is required.",
+      ),
+    validateRequest,
+  ],
+  managementController.getSubjectCertificationSettings,
+);
+
+router.patch(
+  "/subjects/:subjectId/certification",
+  [
+    param("subjectId")
+      .isMongoId()
+      .withMessage(
+        "Valid subjectId is required.",
+      ),
+    body("certificationEnabled")
+      .isBoolean()
+      .withMessage(
+        "certificationEnabled must be true or false.",
+      ),
+    body("requiredCertificationTaskCodes")
+      .optional()
+      .isArray()
+      .withMessage(
+        "requiredCertificationTaskCodes must be an array.",
+      ),
+    body("requiredCertificationTaskCodes.*")
+      .optional()
+      .isString()
+      .matches(/^[PMD]\d+$/i)
+      .withMessage(
+        "Certification task codes must look like P1, P2, M1, or D1.",
+      ),
+    body("certificationLabel")
+      .optional()
+      .isString()
+      .withMessage(
+        "certificationLabel must be text.",
+      ),
+    validateRequest,
+  ],
+  managementController.updateSubjectCertificationSettings,
+);
+
+router.get(
+  "/students/:studentId/certification",
+  [
+    param("studentId")
+      .isMongoId()
+      .withMessage(
+        "Valid studentId is required.",
+      ),
+    validateRequest,
+  ],
+  managementController.getStudentCertification,
+);
+
+router.get(
   "/students/:studentId/results",
   [
     param("studentId")

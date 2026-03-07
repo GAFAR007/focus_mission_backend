@@ -102,6 +102,17 @@ router.get(
 );
 
 router.get(
+  "/students/:id/certification",
+  [
+    param("id")
+      .isMongoId()
+      .withMessage("Valid student id is required."),
+    validateRequest,
+  ],
+  teacherController.getStudentCertification,
+);
+
+router.get(
   "/students/:id/behaviour-trend",
   [
     param("id")
@@ -360,9 +371,9 @@ router.post(
       ),
     body("draftFormat")
       .optional()
-      .isIn(["QUESTIONS", "ESSAY_BUILDER"])
+      .isIn(["QUESTIONS", "THEORY", "ESSAY_BUILDER"])
       .withMessage(
-        "draftFormat must be QUESTIONS or ESSAY_BUILDER.",
+        "draftFormat must be QUESTIONS, THEORY, or ESSAY_BUILDER.",
       ),
     body("essayMode")
       .optional()
@@ -384,13 +395,28 @@ router.post(
       }),
     body("questionCount")
       .optional()
-      .custom((value) =>
-        [5, 8, 10].includes(
-          Number(value),
-        ),
-      )
+      .custom((value, { req }) => {
+        const parsed = Number(value);
+        const format = String(req.body?.draftFormat || "QUESTIONS")
+          .trim()
+          .toUpperCase();
+
+        if (!Number.isInteger(parsed)) {
+          return false;
+        }
+
+        if (format === "ESSAY_BUILDER") {
+          return parsed > 0;
+        }
+
+        if (format === "THEORY") {
+          return parsed >= 2 && parsed <= 5;
+        }
+
+        return [5, 8, 10].includes(parsed);
+      })
       .withMessage(
-        "Question count must be 5, 8, or 10.",
+        "Question count is invalid for the selected draft format.",
       ),
     body("taskCodes")
       .optional()
@@ -477,9 +503,9 @@ router.post(
       ),
     body("draftFormat")
       .optional()
-      .isIn(["QUESTIONS", "ESSAY_BUILDER"])
+      .isIn(["QUESTIONS", "THEORY", "ESSAY_BUILDER"])
       .withMessage(
-        "draftFormat must be QUESTIONS or ESSAY_BUILDER.",
+        "draftFormat must be QUESTIONS, THEORY, or ESSAY_BUILDER.",
       ),
     body("essayMode")
       .optional()
@@ -501,13 +527,28 @@ router.post(
       }),
     body("questionCount")
       .optional()
-      .custom((value) =>
-        [5, 8, 10].includes(
-          Number(value),
-        ),
-      )
+      .custom((value, { req }) => {
+        const parsed = Number(value);
+        const format = String(req.body?.draftFormat || "QUESTIONS")
+          .trim()
+          .toUpperCase();
+
+        if (!Number.isInteger(parsed)) {
+          return false;
+        }
+
+        if (format === "ESSAY_BUILDER") {
+          return parsed > 0;
+        }
+
+        if (format === "THEORY") {
+          return parsed >= 2 && parsed <= 5;
+        }
+
+        return [5, 8, 10].includes(parsed);
+      })
       .withMessage(
-        "Question count must be 5, 8, or 10.",
+        "Question count is invalid for the selected draft format.",
       ),
     body("taskCodes")
       .optional()
@@ -605,9 +646,9 @@ router.patch(
       ),
     body("draftFormat")
       .optional()
-      .isIn(["QUESTIONS", "ESSAY_BUILDER"])
+      .isIn(["QUESTIONS", "THEORY", "ESSAY_BUILDER"])
       .withMessage(
-        "draftFormat must be QUESTIONS or ESSAY_BUILDER.",
+        "draftFormat must be QUESTIONS, THEORY, or ESSAY_BUILDER.",
       ),
     body("essayMode")
       .optional()
@@ -696,6 +737,40 @@ router.get(
     validateRequest,
   ],
   teacherController.getResultPackage,
+);
+
+router.post(
+  "/results/:resultPackageId/score-theory",
+  [
+    param("resultPackageId")
+      .isMongoId()
+      .withMessage(
+        "Valid resultPackageId is required.",
+      ),
+    body("questions")
+      .isArray({ min: 1, max: 5 })
+      .withMessage(
+        "questions must include between 1 and 5 theory score entries.",
+      ),
+    body("questions.*.questionIndex")
+      .isInt({ min: 0, max: 9 })
+      .withMessage(
+        "questionIndex must be between 0 and 9.",
+      ),
+    body("questions.*.teacherScorePercent")
+      .isInt({ min: 0, max: 100 })
+      .withMessage(
+        "teacherScorePercent must be an integer between 0 and 100.",
+      ),
+    body("questions.*.teacherFeedback")
+      .optional()
+      .isString()
+      .withMessage(
+        "teacherFeedback must be a string.",
+      ),
+    validateRequest,
+  ],
+  teacherController.scoreTheoryResultPackage,
 );
 
 router.post(
