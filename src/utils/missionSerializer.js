@@ -9,14 +9,44 @@
  * Normalize mission questions, map subject metadata, and build a fallback bank
  * mission when no saved teacher mission is available.
  */
-function serializeMissionQuestion(question, index = 0) {
+function serializeMissionQuestion(question, index = 0, draftFormat = "QUESTIONS") {
+  const options = Array.isArray(question.options) ? question.options : [];
+  const normalizedDraftFormat = String(draftFormat || "QUESTIONS")
+    .trim()
+    .toUpperCase();
+  const explicitAnswerMode = String(question.answerMode || "")
+    .trim()
+    .toLowerCase();
+  const answerMode = explicitAnswerMode ||
+    (
+      normalizedDraftFormat === "THEORY" ? "short_answer" : "multiple_choice"
+    );
+  const fallbackCorrectIndex = Number(question.correctIndex);
+  const expectedAnswer = String(
+    question.expectedAnswer ||
+      (
+        Number.isInteger(fallbackCorrectIndex) &&
+        fallbackCorrectIndex >= 0 &&
+        fallbackCorrectIndex < options.length ?
+          options[fallbackCorrectIndex]
+        : question.explanation
+      ) ||
+      "",
+  ).trim();
+  const minWordCount = Math.max(
+    0,
+    Number(question.minWordCount || (normalizedDraftFormat === "THEORY" ? 12 : 0)) || 0,
+  );
   return {
     id: String(question._id || question.id || `question-${index + 1}`),
+    answerMode,
     learningText: question.learningText || question.lessonText || question.explanation || "",
     prompt: question.prompt || question.question || "",
-    options: Array.isArray(question.options) ? question.options : [],
-    correctIndex: Number(question.correctIndex || 0),
+    options: answerMode === "short_answer" ? [] : options,
+    correctIndex: answerMode === "short_answer" ? -1 : Number(question.correctIndex || 0),
     explanation: question.explanation || "",
+    expectedAnswer,
+    minWordCount,
   };
 }
 
@@ -87,7 +117,9 @@ function serializeMission(mission) {
         }
       : null,
     questionCount,
-    questions: (mission.questions || []).map(serializeMissionQuestion),
+    questions: (mission.questions || []).map((question, index) =>
+      serializeMissionQuestion(question, index, mission.draftFormat || "QUESTIONS")
+    ),
   };
 }
 
@@ -135,6 +167,7 @@ function buildQuestionBankMission({
       serializeMissionQuestion(
         {
           id: question._id,
+          answerMode: "multiple_choice",
           learningText:
             question.learningText ||
             question.explanation ||
@@ -147,6 +180,8 @@ function buildQuestionBankMission({
           explanation:
             question.explanation ||
             `The correct answer is ${question.options?.[question.correctIndex] || "the saved answer"}.`,
+          expectedAnswer: "",
+          minWordCount: 0,
         },
         index,
       )),

@@ -46,7 +46,7 @@ const resultPackageSchema = new mongoose.Schema(
     },
     missionType: {
       type: String,
-      enum: ["QUESTIONS", "ESSAY_BUILDER"],
+      enum: ["QUESTIONS", "THEORY", "ESSAY_BUILDER"],
       required: true,
       index: true,
     },
@@ -117,8 +117,9 @@ const resultPackageSchema = new mongoose.Schema(
     evidence: {
       type: mongoose.Schema.Types.Mixed,
       default: {},
-      // WHY: Result evidence differs between QUESTIONS and ESSAY_BUILDER, so
-      // this payload must stay flexible while remaining persisted.
+      // WHY: Result evidence differs between QUESTIONS, THEORY, and
+      // ESSAY_BUILDER, so this payload must stay flexible while remaining
+      // persisted.
     },
     latestSendStatus: {
       type: String,

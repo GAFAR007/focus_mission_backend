@@ -124,6 +124,22 @@ router.post(
       .optional()
       .isInt({ min: 0, max: 3 })
       .withMessage("selectedIndex must be between 0 and 3."),
+    body("resultEvidence.theoryResponses")
+      .optional()
+      .isArray({ max: 10 })
+      .withMessage("theoryResponses must include up to 10 entries."),
+    body("resultEvidence.theoryResponses.*.questionIndex")
+      .optional()
+      .isInt({ min: 0, max: 9 })
+      .withMessage("theory questionIndex must be between 0 and 9."),
+    body("resultEvidence.theoryResponses.*.answerText")
+      .optional()
+      .isString()
+      .withMessage("theory answerText must be a string."),
+    body("resultEvidence.theoryResponses.*.wordCount")
+      .optional()
+      .isInt({ min: 0, max: 5000 })
+      .withMessage("theory wordCount must be between 0 and 5000."),
     body("resultEvidence.essayBuilder")
       .optional()
       .isObject()

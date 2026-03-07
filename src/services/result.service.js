@@ -321,6 +321,64 @@ function buildQuestionEvidence({
   };
 }
 
+function buildTheoryEvidence({
+  missionQuestions,
+  theoryResponses,
+}) {
+  const responseByIndex = new Map();
+  for (const response of Array.isArray(theoryResponses) ? theoryResponses : []) {
+    const questionIndex = Number(response?.questionIndex);
+    const answerText = normalizeText(response?.answerText || "");
+    const suppliedWordCount = Number(response?.wordCount || 0);
+    if (!Number.isInteger(questionIndex) || questionIndex < 0) {
+      continue;
+    }
+    responseByIndex.set(questionIndex, {
+      answerText,
+      wordCount: suppliedWordCount > 0 ? suppliedWordCount : countWords(answerText),
+    });
+  }
+
+  const perQuestion = Array.isArray(missionQuestions)
+    ? missionQuestions.map((question, index) => {
+        const response = responseByIndex.get(index);
+        const studentAnswer = normalizeText(response?.answerText || "");
+        const studentWordCount = countWords(studentAnswer);
+        const minimumWordCount = Math.max(
+          1,
+          Number(question?.minWordCount || 0),
+        );
+        const attempted = studentAnswer.length > 0;
+        const meetsMinimumWords = attempted && studentWordCount >= minimumWordCount;
+
+        return {
+          questionText: String(question?.prompt || "").trim(),
+          learnFirst: String(question?.learningText || "").trim(),
+          expectedAnswer: String(
+            question?.expectedAnswer || question?.explanation || "",
+          ).trim(),
+          minimumWordCount,
+          studentAnswer,
+          studentWordCount: response?.wordCount > 0
+            ? Number(response.wordCount)
+            : studentWordCount,
+          meetsMinimumWords,
+          attempted,
+        };
+      })
+    : [];
+
+  return {
+    format: "THEORY",
+    questionsAnsweredCount: perQuestion.filter((question) => question?.attempted).length,
+    completedResponsesCount: perQuestion.filter(
+      (question) => question?.meetsMinimumWords === true,
+    ).length,
+    totalQuestions: perQuestion.length,
+    questions: perQuestion,
+  };
+}
+
 function resolveMissionScoreSnapshot(
   mission,
 ) {
@@ -465,6 +523,37 @@ function buildLegacyQuestionEvidence({
     legacyBackfill: true,
     legacyBackfillReason:
       "This result package was reconstructed from saved mission score totals.",
+  };
+}
+
+function buildLegacyTheoryEvidence({
+  missionQuestions,
+  scoreTotal,
+}) {
+  const questions = Array.isArray(missionQuestions) ? missionQuestions : [];
+  const attemptedCount = Math.min(Number(scoreTotal || 0), questions.length);
+
+  return {
+    format: "THEORY",
+    questionsAnsweredCount: attemptedCount,
+    completedResponsesCount: attemptedCount,
+    totalQuestions: questions.length,
+    questions: questions.map((question, index) => ({
+      questionText: String(question?.prompt || "").trim(),
+      learnFirst: String(question?.learningText || "").trim(),
+      expectedAnswer: String(
+        question?.expectedAnswer || question?.explanation || "",
+      ).trim(),
+      minimumWordCount: Math.max(1, Number(question?.minWordCount || 0)),
+      studentAnswer: "",
+      studentWordCount: 0,
+      meetsMinimumWords: index < attemptedCount,
+      attempted: index < attemptedCount,
+      legacySelectionUnavailable: true,
+    })),
+    legacyBackfill: true,
+    legacyBackfillReason:
+      "This theory result package was reconstructed from saved mission totals; original written responses were not preserved.",
   };
 }
 
@@ -1115,6 +1204,41 @@ function buildFullResultReportText({
     String(
       evidence?.format || "",
     ).toUpperCase() ===
+    "THEORY"
+  ) {
+    lines.push(
+      `Questions Answered: ${Number(evidence.questionsAnsweredCount || 0)}/${Number(evidence.totalQuestions || 0)}`,
+      `Responses Meeting Minimum Words: ${Number(evidence.completedResponsesCount || 0)}/${Number(evidence.totalQuestions || 0)}`,
+      "",
+    );
+
+    const questions = Array.isArray(evidence?.questions) ? evidence.questions : [];
+    questions.forEach((question, index) => {
+      lines.push(
+        `Q${index + 1}: ${String(question?.questionText || "").trim()}`,
+        `Learn First: ${String(question?.learnFirst || "").trim()}`,
+        `Expected Answer: ${String(question?.expectedAnswer || "").trim()}`,
+        `Minimum Words: ${Number(question?.minimumWordCount || 0)}`,
+        `Student Words: ${Number(question?.studentWordCount || 0)}`,
+        `Student Answer: ${String(question?.studentAnswer || "").trim()}`,
+        `Minimum Met: ${question?.meetsMinimumWords ? "Yes" : "No"}`,
+        "",
+      );
+    });
+
+    return lines
+      .filter(
+        (line) =>
+          line !== undefined &&
+          line !== null,
+      )
+      .join("\n");
+  }
+
+  if (
+    String(
+      evidence?.format || "",
+    ).toUpperCase() ===
     "ESSAY_BUILDER"
   ) {
     lines.push(
@@ -1698,6 +1822,64 @@ function buildResultReportPdfBuffer({
         String(
           evidence?.format || "",
         ).toUpperCase() ===
+        "THEORY"
+      ) {
+        keyValue(
+          "Questions Answered",
+          `${Number(evidence.questionsAnsweredCount || 0)}/${Number(evidence.totalQuestions || 0)}`,
+        );
+        keyValue(
+          "Responses Meeting Minimum Words",
+          `${Number(evidence.completedResponsesCount || 0)}/${Number(evidence.totalQuestions || 0)}`,
+        );
+        doc.moveDown(0.4);
+
+        const questions = Array.isArray(evidence?.questions)
+          ? evidence.questions
+          : [];
+        questions.forEach((question, index) => {
+          writeLine({
+            text: `Q${index + 1}: ${String(question?.questionText || "").trim()}`,
+            size: 11,
+            bold: true,
+            color: colors.heading,
+          });
+          writeLine({
+            text: `Learn First: ${String(question?.learnFirst || "").trim()}`,
+            color: colors.text,
+            indent: 10,
+          });
+          writeLine({
+            text: `Expected Answer: ${String(question?.expectedAnswer || "").trim()}`,
+            color: colors.good,
+            bold: true,
+            indent: 10,
+          });
+          writeLine({
+            text: `Minimum Words: ${Number(question?.minimumWordCount || 0)}`,
+            color: colors.muted,
+            indent: 10,
+          });
+          writeLine({
+            text: `Student Words: ${Number(question?.studentWordCount || 0)}`,
+            color: colors.info,
+            indent: 10,
+          });
+          writeLine({
+            text: `Student Answer: ${String(question?.studentAnswer || "").trim()}`,
+            color: colors.text,
+            indent: 10,
+          });
+          writeResultPill(
+            `Minimum Met: ${question?.meetsMinimumWords ? "Yes" : "No"}`,
+            question?.meetsMinimumWords === true,
+          );
+          doc.moveDown(0.5);
+        });
+      } else if (
+        String(
+          evidence?.format || "",
+        ).toUpperCase() ===
         "ESSAY_BUILDER"
       ) {
         keyValue(
@@ -2028,9 +2210,10 @@ async function createResultPackageForCompletion({
   }
 
   const missionType =
-    mission.draftFormat ===
-    "ESSAY_BUILDER" ?
+    mission.draftFormat === "ESSAY_BUILDER" ?
       "ESSAY_BUILDER"
+    : mission.draftFormat === "THEORY" ?
+      "THEORY"
     : "QUESTIONS";
   const parsedStartTime =
     startTime ?
@@ -2073,15 +2256,23 @@ async function createResultPackageForCompletion({
         previousAttemptCount || 0,
       ) + 1,
     );
-  const evidence = missionType ===
-      "ESSAY_BUILDER" ?
-      buildEssayEvidence({
+  const evidence = missionType === "ESSAY_BUILDER"
+    ? buildEssayEvidence({
         draftJson:
           mission.draftJson || {},
         essayBuilderEvidence:
           resultEvidence
             ?.essayBuilder ||
           {},
+      })
+    : missionType === "THEORY"
+    ? buildTheoryEvidence({
+        missionQuestions:
+          mission.questions || [],
+        theoryResponses:
+          resultEvidence
+            ?.theoryResponses ||
+          [],
       })
     : buildQuestionEvidence({
         missionQuestions:
@@ -2302,9 +2493,10 @@ async function ensureResultPackageForMission({
       new Date(mission.createdAt)
     : new Date();
   const missionType =
-    mission.draftFormat ===
-    "ESSAY_BUILDER" ?
+    mission.draftFormat === "ESSAY_BUILDER" ?
       "ESSAY_BUILDER"
+    : mission.draftFormat === "THEORY" ?
+      "THEORY"
     : "QUESTIONS";
   const previousAttemptCount =
     await ResultPackage.countDocuments({
@@ -2318,12 +2510,17 @@ async function ensureResultPackageForMission({
         previousAttemptCount || 0,
       ) + 1,
     );
-  const evidence =
-    missionType ===
-    "ESSAY_BUILDER" ?
-      buildLegacyEssayEvidence({
+  const evidence = missionType === "ESSAY_BUILDER"
+    ? buildLegacyEssayEvidence({
         draftJson:
           mission.draftJson || {},
+      })
+    : missionType === "THEORY"
+    ? buildLegacyTheoryEvidence({
+        missionQuestions:
+          mission.questions || [],
+        scoreTotal:
+          scoreSnapshot.scoreTotal,
       })
     : buildLegacyQuestionEvidence({
         missionQuestions:

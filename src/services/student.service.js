@@ -105,6 +105,25 @@ function countWords(value) {
     .filter(Boolean).length;
 }
 
+function buildTheoryResponseMap(theoryResponses) {
+  const responsesByIndex = new Map();
+  for (const response of Array.isArray(theoryResponses) ? theoryResponses : []) {
+    const questionIndex = Number(response?.questionIndex);
+    const answerText = String(response?.answerText || "").trim();
+    const suppliedWordCount = Number(response?.wordCount);
+    if (!Number.isInteger(questionIndex) || questionIndex < 0) {
+      continue;
+    }
+    responsesByIndex.set(questionIndex, {
+      answerText,
+      wordCount: Number.isInteger(suppliedWordCount)
+        ? suppliedWordCount
+        : countWords(answerText),
+    });
+  }
+  return responsesByIndex;
+}
+
 function calculateRequiredCorrectAnswers(totalCount) {
   const normalizedTotal = Math.max(0, Number(totalCount || 0));
   if (normalizedTotal === 0) {
@@ -716,6 +735,7 @@ async function completeSession(payload) {
   let completedMission = null;
   let missionToPersist = null;
   let isEssayBuilderMission = false;
+  let isTheoryMission = false;
 
   if (missionId) {
     const mission = await Mission.findOne({
@@ -729,7 +749,9 @@ async function completeSession(payload) {
     if (mission) {
       completedMission = mission;
       const isEssayBuilder = mission.draftFormat === "ESSAY_BUILDER";
+      const isTheory = mission.draftFormat === "THEORY";
       isEssayBuilderMission = isEssayBuilder;
+      isTheoryMission = isTheory;
       const totalQuestions = Array.isArray(mission.questions)
         ? mission.questions.length
         : 0;
@@ -744,6 +766,46 @@ async function completeSession(payload) {
         scorePercent = completedQuestions > 0
           ? Math.round((correctAnswers / completedQuestions) * 100)
           : 0;
+        challengeXpForSession = calculateChallengeXp(scorePercent);
+        xpAwarded = challengeXpForSession;
+      } else if (isTheory) {
+        const theoryResponsesByIndex = buildTheoryResponseMap(
+          payload?.resultEvidence?.theoryResponses,
+        );
+
+        missionQuestionCount = totalQuestions;
+        completedQuestions = totalQuestions;
+
+        for (let index = 0; index < totalQuestions; index += 1) {
+          const response = theoryResponsesByIndex.get(index);
+          const answerText = String(response?.answerText || "").trim();
+          const answerWordCount = countWords(answerText);
+          const minimumWords = Math.max(
+            1,
+            Number(mission?.questions?.[index]?.minWordCount || 0),
+          );
+
+          if (!answerText) {
+            throw createError(
+              422,
+              `Theory question ${index + 1} needs a written answer before submission.`,
+            );
+          }
+
+          if (answerWordCount < minimumWords) {
+            // WHY: Theory responses must hit the teacher-set minimum words so
+            // students cannot progress with placeholder fragments.
+            throw createError(
+              422,
+              `Theory question ${index + 1} needs at least ${minimumWords} words before submission.`,
+            );
+          }
+        }
+
+        // WHY: Theory is a teacher-reviewed short-answer mission. Completion is
+        // based on every question receiving a sufficient written response.
+        correctAnswers = totalQuestions;
+        scorePercent = totalQuestions > 0 ? 100 : 0;
         challengeXpForSession = calculateChallengeXp(scorePercent);
         xpAwarded = challengeXpForSession;
       } else {
@@ -779,20 +841,22 @@ async function completeSession(payload) {
     }
   }
 
-  const requiredCorrectAnswers = calculateRequiredCorrectAnswers(
-    missionQuestionCount,
-  );
-  if (
-    requiredCorrectAnswers > 0 &&
-    correctAnswers < requiredCorrectAnswers
-  ) {
-    // WHY: Submission must meet a minimum mastery bar so mission completion
-    // reflects understanding for configured mission sizes; below-threshold
-    // attempts stay in retry flow.
-    throw createError(
-      422,
-      `You need at least ${requiredCorrectAnswers} correct answers out of ${missionQuestionCount} to submit. Please retry this mission.`,
+  if (!isTheoryMission) {
+    const requiredCorrectAnswers = calculateRequiredCorrectAnswers(
+      missionQuestionCount,
     );
+    if (
+      requiredCorrectAnswers > 0 &&
+      correctAnswers < requiredCorrectAnswers
+    ) {
+      // WHY: Submission must meet a minimum mastery bar so mission completion
+      // reflects understanding for configured mission sizes; below-threshold
+      // attempts stay in retry flow.
+      throw createError(
+        422,
+        `You need at least ${requiredCorrectAnswers} correct answers out of ${missionQuestionCount} to submit. Please retry this mission.`,
+      );
+    }
   }
 
   if (isEssayBuilderMission) {

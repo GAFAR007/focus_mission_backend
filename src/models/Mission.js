@@ -13,6 +13,14 @@ const mongoose = require("mongoose");
 
 const missionQuestionSchema = new mongoose.Schema(
   {
+    answerMode: {
+      type: String,
+      enum: ["multiple_choice", "short_answer"],
+      default: "multiple_choice",
+      trim: true,
+      // WHY: Theory missions use teacher-reviewed short answers while the
+      // standard mission flow still uses multiple-choice questions.
+    },
     learningText: {
       type: String,
       default: "",
@@ -27,24 +35,53 @@ const missionQuestionSchema = new mongoose.Schema(
     },
     options: {
       type: [String],
-      required: true,
+      default: [],
       validate: {
         validator(value) {
+          if (this.answerMode === "short_answer") {
+            // WHY: Theory questions are written responses, so they do not store
+            // A/B/C/D options in persistence.
+            return Array.isArray(value) && value.length === 0;
+          }
           return Array.isArray(value) && value.length === 4;
         },
-        message: "Mission questions must include exactly four answer options.",
+        message:
+          "Mission questions must include exactly four answer options unless they are short-answer theory questions.",
       },
     },
     correctIndex: {
       type: Number,
-      required: true,
-      min: 0,
-      max: 3,
+      default: -1,
+      validate: {
+        validator(value) {
+          if (this.answerMode === "short_answer") {
+            return Number(value) === -1;
+          }
+          return Number.isInteger(value) && value >= 0 && value <= 3;
+        },
+        message:
+          "Mission questions must use a correctIndex between 0 and 3 unless they are short-answer theory questions.",
+      },
     },
     explanation: {
       type: String,
       default: "",
       trim: true,
+    },
+    expectedAnswer: {
+      type: String,
+      default: "",
+      trim: true,
+      // WHY: Theory answers need teacher-authored success criteria so result
+      // review stays auditable without forcing brittle auto-marking.
+    },
+    minWordCount: {
+      type: Number,
+      min: 0,
+      max: 500,
+      default: 0,
+      // WHY: Teachers set a short-answer word expectation per theory question
+      // so students know the minimum depth required before progression.
     },
   },
   { _id: false },
@@ -103,10 +140,11 @@ const missionSchema = new mongoose.Schema(
     },
     draftFormat: {
       type: String,
-      enum: ["QUESTIONS", "ESSAY_BUILDER"],
+      enum: ["QUESTIONS", "THEORY", "ESSAY_BUILDER"],
       default: "QUESTIONS",
-      // WHY: Daily missions can be standard questions or essay-builder drafts,
-      // and the frontend must know which rendering path to use.
+      // WHY: Daily missions can be standard questions, fast-focus theory
+      // checks, or essay-builder drafts, and the frontend must know which
+      // rendering path to use.
     },
     essayMode: {
       type: String,
@@ -227,9 +265,15 @@ const missionSchema = new mongoose.Schema(
           if (this.draftFormat === "ESSAY_BUILDER") {
             return Array.isArray(value);
           }
+          if (this.draftFormat === "THEORY") {
+            // WHY: Theory is intentionally a short fast-focus format, so saved
+            // drafts must remain between 2 and 5 short-answer questions.
+            return Array.isArray(value) && value.length >= 2 && value.length <= 5;
+          }
           return Array.isArray(value) && value.length > 0 && value.length <= 10;
         },
-        message: "Mission must include between 1 and 10 questions.",
+        message:
+          "Mission must include 2 to 5 theory questions or 1 to 10 standard questions.",
       },
       // WHY: Missions stay intentionally bounded so the flow remains suitable
       // for attention support and does not overwhelm the learner.

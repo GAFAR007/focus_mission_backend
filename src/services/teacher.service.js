@@ -45,6 +45,8 @@ const {
 
 const DRAFT_MISSIONS_LIMIT = 5;
 const RECENT_MISSIONS_HISTORY_LIMIT = 50;
+const THEORY_QUESTION_COUNT_MIN = 2;
+const THEORY_QUESTION_COUNT_MAX = 5;
 
 function createError(statusCode, message) {
   const error = new Error(message);
@@ -115,10 +117,34 @@ function countWords(value) {
     .filter(Boolean).length;
 }
 
-function normalizeQuestionCount(value) {
+function normalizeQuestionCount(value, { draftFormat = "QUESTIONS" } = {}) {
   const parsed = Number(value);
+  const normalizedDraftFormat = String(draftFormat || "QUESTIONS")
+    .trim()
+    .toUpperCase();
 
-  if (!Number.isInteger(parsed) || ![5, 8, 10].includes(parsed)) {
+  if (!Number.isInteger(parsed)) {
+    throw createError(400, "Question count must be a whole number.");
+  }
+
+  if (normalizedDraftFormat === "ESSAY_BUILDER") {
+    // WHY: Essay builder does not use the question count contract, so the
+    // request should not fail just because the teacher switched formats.
+    return parsed > 0 ? parsed : 5;
+  }
+
+  if (normalizedDraftFormat === "THEORY") {
+    if (
+      parsed < THEORY_QUESTION_COUNT_MIN ||
+      parsed > THEORY_QUESTION_COUNT_MAX
+    ) {
+      throw createError(400, "Theory question count must be between 2 and 5.");
+    }
+
+    return parsed;
+  }
+
+  if (![5, 8, 10].includes(parsed)) {
     throw createError(400, "Question count must be 5, 8, or 10.");
   }
 
@@ -168,11 +194,22 @@ function normalizeDraftFormat(value) {
 
   // WHY: Draft format must be explicit so the backend can safely switch
   // generation paths without guessing the teacher's intent.
-  if (!["QUESTIONS", "ESSAY_BUILDER"].includes(normalized)) {
-    throw createError(400, "Draft format must be QUESTIONS or ESSAY_BUILDER.");
+  if (!["QUESTIONS", "THEORY", "ESSAY_BUILDER"].includes(normalized)) {
+    throw createError(
+      400,
+      "Draft format must be QUESTIONS, THEORY, or ESSAY_BUILDER.",
+    );
   }
 
   return normalized;
+}
+
+function usesFixedReward(draftFormat, questionCount) {
+  return (
+    draftFormat === "ESSAY_BUILDER" ||
+    draftFormat === "THEORY" ||
+    isAssessmentQuestionCount(questionCount)
+  );
 }
 
 const ESSAY_MODE_OPTIONS = ["NORMAL", "STRETCH_15", "STRETCH_20"];
@@ -201,9 +238,102 @@ function normalizeEssayMode(value, { required = false } = {}) {
   return normalized;
 }
 
-function normalizeQuestions(questions) {
+function buildTheoryQuestionsFromGenerated(questions) {
+  return normalizeQuestions(
+    (Array.isArray(questions) ? questions : []).map((question) => {
+      const options = Array.isArray(question?.options)
+        ? question.options.map((option) => String(option || "").trim())
+        : [];
+      const correctIndex = Number(question?.correctIndex);
+      const correctAnswer = Number.isInteger(correctIndex) &&
+          correctIndex >= 0 &&
+          correctIndex < options.length
+        ? options[correctIndex]
+        : "";
+
+      return {
+        answerMode: "short_answer",
+        learningText: String(
+          question?.learningText || question?.explanation || "",
+        ).trim(),
+        prompt: String(question?.prompt || "").trim(),
+        expectedAnswer: String(
+          correctAnswer || question?.explanation || "",
+        ).trim(),
+        minWordCount: 12,
+        explanation: String(question?.explanation || "").trim(),
+        options: [],
+        correctIndex: -1,
+      };
+    }),
+    { draftFormat: "THEORY" },
+  );
+}
+
+function normalizeQuestions(
+  questions,
+  { draftFormat = "QUESTIONS" } = {},
+) {
+  const normalizedDraftFormat = normalizeDraftFormat(draftFormat);
+
   if (!Array.isArray(questions) || questions.length < 1 || questions.length > 10) {
     throw createError(400, "Mission drafts must include between 1 and 10 questions.");
+  }
+
+  if (normalizedDraftFormat === "THEORY") {
+    if (
+      questions.length < THEORY_QUESTION_COUNT_MIN ||
+      questions.length > THEORY_QUESTION_COUNT_MAX
+    ) {
+      throw createError(
+        400,
+        "Theory drafts must include between 2 and 5 questions.",
+      );
+    }
+
+    return questions.map((question, index) => {
+      const learningText = String(question?.learningText || "").trim();
+      const prompt = String(question?.prompt || "").trim();
+      const expectedAnswer = String(question?.expectedAnswer || "").trim();
+      const minWordCount = Number(question?.minWordCount);
+      const explanation = String(question?.explanation || "").trim();
+
+      if (!learningText) {
+        throw createError(
+          400,
+          `Theory question ${index + 1} needs Learn First guidance.`,
+        );
+      }
+
+      if (!prompt) {
+        throw createError(400, `Theory question ${index + 1} needs a prompt.`);
+      }
+
+      if (!expectedAnswer) {
+        throw createError(
+          400,
+          `Theory question ${index + 1} needs an expected answer for teacher review.`,
+        );
+      }
+
+      if (!Number.isInteger(minWordCount) || minWordCount < 1 || minWordCount > 500) {
+        throw createError(
+          400,
+          `Theory question ${index + 1} needs a minimum word count between 1 and 500.`,
+        );
+      }
+
+      return {
+        answerMode: "short_answer",
+        learningText,
+        prompt,
+        options: [],
+        correctIndex: -1,
+        explanation,
+        expectedAnswer,
+        minWordCount,
+      };
+    });
   }
 
   return questions.map((question, index) => {
@@ -265,11 +395,14 @@ function normalizeQuestions(questions) {
     }
 
     return {
+      answerMode: "multiple_choice",
       learningText,
       prompt,
       options,
       correctIndex,
       explanation,
+      expectedAnswer: "",
+      minWordCount: 0,
     };
   });
 }
@@ -896,14 +1029,14 @@ async function generateMission(teacherId, payload) {
   const essayMode = draftFormat === "ESSAY_BUILDER"
     ? normalizeEssayMode(payload.essayMode, { required: true })
     : normalizeEssayMode(payload.essayMode);
-  const questionCount = normalizeQuestionCount(payload.questionCount || 5);
-  const xpReward = draftFormat === "ESSAY_BUILDER"
-    // WHY: Daily essay modes are fixed at 50 XP across NORMAL/STRETCH options
-    // so reward consistency is independent from sentence count mode.
+  const questionCount = normalizeQuestionCount(payload.questionCount || 5, {
+    draftFormat,
+  });
+  const xpReward = usesFixedReward(draftFormat, questionCount)
+    // WHY: Essay, theory, and assessment formats use fixed 50 XP so reward
+    // expectations stay predictable across those guided mission types.
     ? 50
-    : isAssessmentQuestionCount(questionCount)
-      ? 50
-      : normalizeXpReward(payload.xpReward || 20);
+    : normalizeXpReward(payload.xpReward || 20);
   const normalizedTaskCodes = normalizeTaskCodes(payload.taskCodes);
   const unitText = payload.unitText.trim();
   const draftBase = {
@@ -926,6 +1059,9 @@ async function generateMission(teacherId, payload) {
   const generated = draftFormat === "ESSAY_BUILDER"
     ? await generateEssayBuilderDraft(draftBase)
     : await generateMissionWithGroq(draftBase);
+  const normalizedQuestions = draftFormat === "THEORY"
+    ? buildTheoryQuestionsFromGenerated(generated.questions || [])
+    : normalizeQuestions(generated.questions || [], { draftFormat });
 
   const mission = await Mission.create({
     studentId: student._id,
@@ -948,7 +1084,7 @@ async function generateMission(teacherId, payload) {
     xpReward,
     sourceFileName: String(payload.sourceFileName || "").trim(),
     sourceFileType: String(payload.sourceFileType || "").trim(),
-    questions: generated.questions || [],
+    questions: normalizedQuestions,
     createdBy: teacher._id,
   });
 
@@ -990,14 +1126,14 @@ async function previewMission(teacherId, payload) {
   const essayMode = draftFormat === "ESSAY_BUILDER"
     ? normalizeEssayMode(payload.essayMode, { required: true })
     : normalizeEssayMode(payload.essayMode);
-  const questionCount = normalizeQuestionCount(payload.questionCount || 5);
-  const xpReward = draftFormat === "ESSAY_BUILDER"
-    // WHY: Essay matrix modes keep a fixed 50 XP reward for predictable daily
-    // scoring regardless of sentence/blank target size.
+  const questionCount = normalizeQuestionCount(payload.questionCount || 5, {
+    draftFormat,
+  });
+  const xpReward = usesFixedReward(draftFormat, questionCount)
+    // WHY: Fixed-reward formats keep a stable 50 XP contract regardless of
+    // how many questions or sentences the teacher selects.
     ? 50
-    : isAssessmentQuestionCount(questionCount)
-      ? 50
-      : normalizeXpReward(payload.xpReward || 20);
+    : normalizeXpReward(payload.xpReward || 20);
   const normalizedTaskCodes = normalizeTaskCodes(payload.taskCodes);
   const unitText = payload.unitText.trim();
   const draftBase = {
@@ -1019,6 +1155,9 @@ async function previewMission(teacherId, payload) {
   const generated = draftFormat === "ESSAY_BUILDER"
     ? await generateEssayBuilderDraft(draftBase)
     : await generateMissionWithGroq(draftBase);
+  const normalizedQuestions = draftFormat === "THEORY"
+    ? buildTheoryQuestionsFromGenerated(generated.questions || [])
+    : normalizeQuestions(generated.questions || [], { draftFormat });
 
   return serializeMission({
     id: "",
@@ -1040,7 +1179,7 @@ async function previewMission(teacherId, payload) {
     xpReward,
     sourceFileName: String(payload.sourceFileName || "").trim(),
     sourceFileType: String(payload.sourceFileType || "").trim(),
-    questions: generated.questions || [],
+    questions: normalizedQuestions,
     subjectId: subject,
     createdAt: new Date(),
     publishedAt: null,
@@ -1207,9 +1346,14 @@ async function updateMission(teacherId, missionId, payload) {
   }
 
   if (payload.xpReward !== undefined) {
-    if (mission.draftFormat === "ESSAY_BUILDER") {
-      // WHY: Essay mode rewards are fixed by policy, so manual XP edits must
-      // not override the daily 50 XP contract.
+    if (
+      usesFixedReward(
+        mission.draftFormat,
+        Array.isArray(mission.questions) ? mission.questions.length : 0,
+      )
+    ) {
+      // WHY: Essay, theory, and assessment rewards are fixed by policy, so
+      // manual XP edits must not override the 50 XP contract.
       mission.xpReward = 50;
     } else {
       mission.xpReward = normalizeXpReward(payload.xpReward);
@@ -1231,7 +1375,7 @@ async function updateMission(teacherId, missionId, payload) {
     mission.essayMode = mission.draftFormat === "ESSAY_BUILDER"
       ? normalizeEssayMode(payload.essayMode)
       : null;
-    if (mission.draftFormat === "ESSAY_BUILDER") {
+    if (usesFixedReward(mission.draftFormat, mission.questions.length)) {
       mission.xpReward = 50;
     }
     if (mission.draftFormat === "ESSAY_BUILDER" && payload.questions === undefined) {
@@ -1263,13 +1407,20 @@ async function updateMission(teacherId, missionId, payload) {
         ? payload.questions
         : [];
     } else {
-      mission.questions = normalizeQuestions(payload.questions);
+      mission.questions = normalizeQuestions(payload.questions, {
+        draftFormat: mission.draftFormat,
+      });
     }
   }
 
-  if (isAssessmentQuestionCount(Array.isArray(mission.questions) ? mission.questions.length : 0)) {
+  if (
+    usesFixedReward(
+      mission.draftFormat,
+      Array.isArray(mission.questions) ? mission.questions.length : 0,
+    )
+  ) {
     // WHY: Assessment-mode rewards are fixed at 50 XP so score-based scaling
-    // remains predictable and aligned with the daily performance model.
+    // remains predictable and aligned with guided mission policies.
     mission.xpReward = 50;
   }
 
