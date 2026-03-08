@@ -65,6 +65,76 @@ function getCurrentDateKey() {
   return getDateKey(getNow());
 }
 
+function parseOverrideDateKey(dateKey) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateKey || "").trim());
+
+  if (!match) {
+    return null;
+  }
+
+  const [, year, month, day] = match;
+  // WHY: Use midday for the temporary test override so local timezone
+  // formatting cannot push the simulated student date backward or forward.
+  const parsed = new Date(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    12,
+    0,
+    0,
+    0,
+  );
+
+  if (
+    parsed.getFullYear() !== Number(year) ||
+    parsed.getMonth() !== Number(month) - 1 ||
+    parsed.getDate() !== Number(day)
+  ) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function resolveStudentOverrideDate(studentId) {
+  const enabled =
+    String(process.env.FOCUS_TEST_DATE_OVERRIDE_ENABLED || "")
+      .trim()
+      .toLowerCase() === "true";
+  const overrideStudentId = String(
+    process.env.FOCUS_TEST_DATE_OVERRIDE_STUDENT_ID || "",
+  ).trim();
+  const overrideDateKey = String(
+    process.env.FOCUS_TEST_DATE_OVERRIDE_DATE || "",
+  ).trim();
+
+  if (!enabled || !overrideStudentId || !overrideDateKey) {
+    return null;
+  }
+
+  if (String(studentId || "").trim() !== overrideStudentId) {
+    return null;
+  }
+
+  return parseOverrideDateKey(overrideDateKey);
+}
+
+function getEffectiveNowForStudent(studentId) {
+  // WHY: A John-only date override lets production test one scheduled mission
+  // end to end without shifting the real classroom date for everyone else.
+  return resolveStudentOverrideDate(studentId) || getNow();
+}
+
+function getCurrentDayForStudent(studentId) {
+  return new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(
+    getEffectiveNowForStudent(studentId),
+  );
+}
+
+function getCurrentDateKeyForStudent(studentId) {
+  return getDateKey(getEffectiveNowForStudent(studentId));
+}
+
 const WEEKDAY_ORDER = [
   "Monday",
   "Tuesday",
@@ -492,7 +562,7 @@ function applySubjectAwardFlags(subjectProgress, student) {
 }
 
 async function getDashboard(studentId) {
-  const dateKey = getCurrentDateKey();
+  const dateKey = getCurrentDateKeyForStudent(studentId);
   await ensureWeeklyFixedTargets(studentId, dateKey);
 
   const student = await User.findOne({ _id: studentId, role: "student" }).lean();
@@ -503,7 +573,7 @@ async function getDashboard(studentId) {
 
   const timetable = await findTimetableForDay({
     studentId,
-    day: getCurrentDay(),
+    day: getCurrentDayForStudent(studentId),
     populate: true,
   });
 
@@ -574,8 +644,8 @@ async function getTimetable(studentId) {
 }
 
 async function startSession({ studentId, subjectId, sessionType, missionId }) {
-  const currentDay = getCurrentDay();
-  const currentDateKey = getCurrentDateKey();
+  const currentDay = getCurrentDayForStudent(studentId);
+  const currentDateKey = getCurrentDateKeyForStudent(studentId);
   const [student, subject, timetable] = await Promise.all([
     User.findOne({ _id: studentId, role: "student" }).lean(),
     Subject.findById(subjectId).lean(),
@@ -661,8 +731,8 @@ async function listAssignedMissions({
     throw createError(403, "You can only view your own assigned missions.");
   }
 
-  const currentDay = getCurrentDay();
-  const currentDateKey = getCurrentDateKey();
+  const currentDay = getCurrentDayForStudent(studentId);
+  const currentDateKey = getCurrentDateKeyForStudent(studentId);
   const [student, subject, timetable] = await Promise.all([
     User.findOne({ _id: studentId, role: "student" }).lean(),
     Subject.findById(subjectId).lean(),
@@ -706,7 +776,7 @@ async function listAssignedMissions({
 }
 
 async function completeSession(payload) {
-  const dateKey = getCurrentDateKey();
+  const dateKey = getCurrentDateKeyForStudent(payload.studentId);
   await ensureWeeklyFixedTargets(payload.studentId, dateKey);
 
   let xpAwarded = 0;
