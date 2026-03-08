@@ -11,6 +11,7 @@
  */
 const Mission = require("../models/Mission");
 const Question = require("../models/Question");
+const ResultPackage = require("../models/ResultPackage");
 const SessionLog = require("../models/SessionLog");
 const Subject = require("../models/Subject");
 const Target = require("../models/Target");
@@ -55,6 +56,131 @@ function createError(statusCode, message) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+function assertStudentSelfAccess({
+  requesterId,
+  studentId,
+}) {
+  // WHY: Student reporting endpoints must stay self-serve only so one learner
+  // cannot browse another learner's certification or mission evidence.
+  if (String(requesterId || "") === String(studentId || "")) {
+    return;
+  }
+
+  throw createError(
+    403,
+    "You can only view your own student progress.",
+  );
+}
+
+function toIsoStringOrNull(value) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function buildDefaultSubjectCertificationSummary(subject) {
+  return {
+    subjectId: String(subject?._id || subject?.id || ""),
+    subjectName: String(subject?.name || ""),
+    subjectIcon: String(subject?.icon || ""),
+    subjectColor: String(subject?.color || ""),
+    certificationEnabled: false,
+    certificationLabel: String(subject?.certificationLabel || "Course Certification"),
+    requiredTaskCodes: [],
+    passedTaskCodes: [],
+    remainingTaskCodes: [],
+    completionPercentage: 0,
+    averagePassedScorePercent: 0,
+    certificateUnlocked: false,
+    awardRecorded: false,
+    evidenceRows: [],
+  };
+}
+
+function buildMissionHistoryStatusLabel({
+  missionType,
+  resultPackage,
+  certificationSummary,
+}) {
+  if (missionType === "THEORY") {
+    const reviewStatus = String(resultPackage?.evidence?.reviewStatus || "")
+      .trim()
+      .toLowerCase();
+    if (reviewStatus !== "scored") {
+      return "Pending review";
+    }
+    return certificationSummary?.certificationPassStatus === "passed" ?
+      "Passed"
+    : "Not passed";
+  }
+
+  return "Passed";
+}
+
+function buildStudentMissionHistoryItem({
+  mission,
+  resultPackage,
+  certificationSummary,
+}) {
+  const missionType = String(
+    resultPackage?.missionType || mission?.draftFormat || "QUESTIONS",
+  )
+    .trim()
+    .toUpperCase();
+  const theoryAverage = Number(
+    resultPackage?.evidence?.averageTeacherScorePercent || 0,
+  );
+  const scorePercent = missionType === "THEORY" ?
+    Math.round(theoryAverage)
+  : Math.max(
+      0,
+      Number(
+        resultPackage?.meta?.score?.percent ||
+          mission?.latestScorePercent ||
+          0,
+      ),
+    );
+
+  return {
+    missionId: String(mission?._id || mission?.id || resultPackage?.missionId || ""),
+    resultPackageId: String(resultPackage?._id || resultPackage?.id || ""),
+    title: String(
+      mission?.title ||
+        resultPackage?.meta?.missionTitle ||
+        "Mission",
+    ).trim(),
+    missionType,
+    taskCodes: Array.isArray(mission?.taskCodes) ? mission.taskCodes : [],
+    assignedDate: String(
+      resultPackage?.meta?.assignedDate ||
+        mission?.availableOnDate ||
+        "",
+    ).trim(),
+    submittedAt: toIsoStringOrNull(
+      resultPackage?.meta?.submitTime ||
+        resultPackage?.createdAt,
+    ),
+    scorePercent,
+    xpAwarded: Math.max(
+      0,
+      Number(resultPackage?.meta?.xpAwarded || 0),
+    ),
+    certificationEligible: certificationSummary?.certificationEligible === true,
+    certificationCounted: certificationSummary?.certificationCounted === true,
+    certificationPassStatus: String(
+      certificationSummary?.certificationPassStatus || "not_eligible",
+    ),
+    statusLabel: buildMissionHistoryStatusLabel({
+      missionType,
+      resultPackage,
+      certificationSummary,
+    }),
+  };
 }
 
 function getCurrentDay() {
@@ -559,6 +685,127 @@ function applySubjectAwardFlags(subjectProgress, student) {
     ...entry,
     badgeUnlocked: awardedSubjectIds.has(String(entry.subjectId)),
   }));
+}
+
+async function getSubjectReport({
+  requesterId,
+  studentId,
+  subjectId,
+}) {
+  assertStudentSelfAccess({
+    requesterId,
+    studentId,
+  });
+
+  const [student, subject] = await Promise.all([
+    User.findOne({ _id: studentId, role: "student" })
+      .select("subjectCompletionAwards")
+      .lean(),
+    Subject.findById(subjectId).lean(),
+  ]);
+
+  if (!student) {
+    throw createError(404, "Student not found.");
+  }
+
+  if (!subject) {
+    throw createError(404, "Subject not found.");
+  }
+
+  const [subjectProgressResult, certificationSummaries, resultPackages] = await Promise.all([
+    getSubjectProgressData(studentId),
+    subjectCertificationService.getStudentCertificationSummaries({
+      studentId,
+      subjectId,
+      applyAwards: false,
+    }),
+    ResultPackage.find({
+      studentId,
+      subjectId,
+    })
+      .sort({ createdAt: -1 })
+      .lean(),
+  ]);
+
+  const subjectProgress = applySubjectAwardFlags(
+    subjectProgressResult.subjectProgress,
+    student,
+  ).find((entry) => String(entry?.subjectId || "") === String(subjectId)) || null;
+  const certification =
+    certificationSummaries[0] || buildDefaultSubjectCertificationSummary(subject);
+
+  const missionIds = resultPackages
+    .map((resultPackage) => String(resultPackage?.missionId || ""))
+    .filter(Boolean);
+  const missions = missionIds.length > 0 ?
+    await Mission.find({
+      _id: { $in: missionIds },
+      studentId,
+      subjectId,
+    }).lean()
+  : [];
+  const missionById = new Map(
+    missions.map((mission) => [String(mission?._id || ""), mission]),
+  );
+
+  const missionHistory = await Promise.all(
+    resultPackages.map(async (resultPackage) => {
+      const mission = missionById.get(String(resultPackage?.missionId || "")) || null;
+      const certificationSummary = mission ?
+        await subjectCertificationService.getMissionCertificationSummary({
+          mission,
+          resultPackage,
+          subject,
+        })
+      : {
+          certificationEligible: false,
+          certificationCounted: false,
+          certificationPassStatus: "not_eligible",
+        };
+
+      return buildStudentMissionHistoryItem({
+        mission,
+        resultPackage,
+        certificationSummary,
+      });
+    }),
+  );
+
+  // WHY: History should only show completed subject evidence, so it is built
+  // from stored result packages rather than draft/published mission records.
+  return {
+    subject: {
+      id: String(subject?._id || ""),
+      name: String(subject?.name || ""),
+      icon: String(subject?.icon || ""),
+      color: String(subject?.color || ""),
+    },
+    assessmentProgress: subjectProgress,
+    certification,
+    missionHistory,
+  };
+}
+
+async function getStudentResultReport({
+  requesterId,
+  resultPackageId,
+}) {
+  const resultPackage = await ResultPackage.findById(resultPackageId)
+    .select("studentId")
+    .lean();
+  if (!resultPackage) {
+    throw createError(404, "Result package not found.");
+  }
+
+  assertStudentSelfAccess({
+    requesterId,
+    studentId: String(resultPackage.studentId || ""),
+  });
+
+  return resultService.getResultPackageForStudent({
+    studentId: String(resultPackage.studentId || ""),
+    resultPackageId,
+  });
 }
 
 async function getDashboard(studentId) {
@@ -1165,6 +1412,8 @@ async function completeSession(payload) {
 
 module.exports = {
   getDashboard,
+  getStudentResultReport,
+  getSubjectReport,
   getTimetable,
   listAssignedMissions,
   startSession,

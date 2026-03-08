@@ -29,6 +29,31 @@ async function getTimetable(req, res, next) {
   }
 }
 
+async function getSubjectReport(req, res, next) {
+  try {
+    const report = await studentService.getSubjectReport({
+      requesterId: req.user.id,
+      studentId: req.params.studentId,
+      subjectId: req.params.subjectId,
+    });
+    res.json(report);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getResultReport(req, res, next) {
+  try {
+    const resultPackage = await studentService.getStudentResultReport({
+      requesterId: req.user.id,
+      resultPackageId: req.params.resultPackageId,
+    });
+    res.json({ resultPackage });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function listAssignedMissions(req, res, next) {
   try {
     const missions = await studentService.listAssignedMissions({
@@ -64,6 +89,8 @@ async function completeSession(req, res, next) {
 
 module.exports = {
   getDashboard,
+  getResultReport,
+  getSubjectReport,
   getTimetable,
   listAssignedMissions,
   startSession,

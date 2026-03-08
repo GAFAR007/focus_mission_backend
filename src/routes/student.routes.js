@@ -44,6 +44,29 @@ router.get(
 );
 
 router.get(
+  "/subjects/:studentId/:subjectId/report",
+  [
+    authorizeRoles("student"),
+    param("studentId").isMongoId().withMessage("Valid studentId is required."),
+    param("subjectId").isMongoId().withMessage("Valid subjectId is required."),
+    validateRequest,
+  ],
+  studentController.getSubjectReport,
+);
+
+router.get(
+  "/results/:resultPackageId",
+  [
+    authorizeRoles("student"),
+    param("resultPackageId")
+      .isMongoId()
+      .withMessage("Valid resultPackageId is required."),
+    validateRequest,
+  ],
+  studentController.getResultReport,
+);
+
+router.get(
   "/missions/assigned/:studentId",
   [
     authorizeRoles("student", "teacher", "mentor"),

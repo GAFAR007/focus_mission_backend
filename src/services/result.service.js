@@ -1182,6 +1182,26 @@ async function assertTeacherAccess(
   );
 }
 
+async function assertStudentAccess(
+  studentId,
+  resultPackage,
+) {
+  // WHY: Student result routes must stay self-service only so learners can
+  // review their own evidence without exposing another student's report.
+  if (
+    String(
+      resultPackage?.studentId || "",
+    ) === String(studentId || "")
+  ) {
+    return;
+  }
+
+  throw createError(
+    403,
+    "You do not have access to this result package.",
+  );
+}
+
 async function assertManagementAccess(
   managementId,
   resultPackage,
@@ -2889,6 +2909,34 @@ async function getResultPackageForManagement({
   );
 }
 
+async function getResultPackageForStudent({
+  studentId,
+  resultPackageId,
+}) {
+  const resultPackage =
+    await ResultPackage.findById(
+      resultPackageId,
+    ).lean();
+  if (!resultPackage) {
+    throw createError(
+      404,
+      "Result package not found.",
+    );
+  }
+
+  await assertStudentAccess(
+    studentId,
+    resultPackage,
+  );
+
+  // WHY: Student result reports are read-only and do not need delivery history,
+  // so we return the shared serialized package shape with an empty send log list.
+  return serializeResultPackageWithCertification(
+    resultPackage,
+    [],
+  );
+}
+
 async function scoreTheoryResultPackage({
   teacherId,
   resultPackageId,
@@ -3511,6 +3559,7 @@ async function getResultScreenshotForTeacher({
 module.exports = {
   createResultPackageForCompletion,
   ensureResultPackageForMission,
+  getResultPackageForStudent,
   getResultPackageForManagement,
   getResultPackageForTeacher,
   scoreTheoryResultPackage,
