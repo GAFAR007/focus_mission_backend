@@ -1,15 +1,20 @@
 /**
  * WHAT:
- * criterion.controller exposes criterion progression endpoints for learning
- * access, learning completion, and learning-check block retrieval.
+ * criterion.controller exposes the legacy criterion progression endpoints for
+ * learning access, learning completion, and learning-check block retrieval.
  * WHY:
- * The progression flow needs a dedicated boundary so learning enforcement is
- * not mixed into unrelated mission or timetable handlers.
+ * Existing criterion records still need a dedicated boundary so old progress
+ * and teacher review flows remain auditable while certification now carries the
+ * active subject progress story.
  * HOW:
  * Delegate progression rules to criterionProgress.service and return stable
  * JSON payloads for students, teachers, and mentors.
  */
 const criterionProgressService = require("../services/criterionProgress.service");
+
+// WHY: New progress features should target certification and mission evidence.
+// Keep this controller for backward compatibility unless explicit approval is
+// given to extend criterion again.
 
 async function listCriteriaForStudent(req, res, next) {
   try {

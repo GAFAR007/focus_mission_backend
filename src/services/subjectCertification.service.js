@@ -3,9 +3,10 @@
  * subjectCertification.service derives subject-level task-focus certification
  * progress from qualifying mission evidence and applies certificate awards.
  * WHY:
- * Certification must stay parallel to the frozen criterion journey while still
- * giving students and staff an auditable view of which task-focus codes have
- * been passed for a subject.
+ * Certification is the active student-facing subject progress layer, but it
+ * must stay parallel to the frozen criterion journey while still giving
+ * students and staff an auditable view of which task-focus codes have been
+ * passed for a subject.
  * HOW:
  * Read subject certification templates, evaluate qualifying mission/result
  * evidence against fixed rules, summarize passed/remaining task codes, and

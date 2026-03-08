@@ -1,10 +1,12 @@
 /**
  * WHAT:
- * criterionProgress.service centralizes student criterion progression rules for
- * learning access, learning completion, and block unlocking.
+ * criterionProgress.service centralizes the legacy student criterion
+ * progression rules for learning access, learning completion, and block
+ * unlocking.
  * WHY:
- * Learning enforcement must stay consistent across student, teacher, and mentor
- * routes so students cannot bypass the required learn-first phase.
+ * Legacy criterion records still need a stable backend boundary for backward
+ * compatibility and audit access, even though certification is now the active
+ * subject progress layer shown to students.
  * HOW:
  * Load criterion context, validate access, create default progress records when
  * needed, and gate block access until learning has been completed.
@@ -19,6 +21,10 @@ const Subject = require("../models/Subject");
 const Timetable = require("../models/Timetable");
 const Unit = require("../models/Unit");
 const User = require("../models/User");
+
+// WHY: Criterion is now treated as a dormant legacy progression layer. Keep
+// this service stable for existing data and staff tools, but do not build new
+// user-facing progress features on it unless explicitly approved.
 
 function createError(statusCode, message) {
   const error = new Error(message);

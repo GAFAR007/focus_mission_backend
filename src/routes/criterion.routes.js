@@ -1,9 +1,10 @@
 /**
  * WHAT:
- * criterion.routes exposes the first criterion progression endpoints.
+ * criterion.routes exposes the legacy criterion progression endpoints.
  * WHY:
- * Phase 2 requires learning enforcement routes so students can read approved
- * learning content before any knowledge-check blocks become available.
+ * Existing criterion data and teacher review links still rely on these routes,
+ * but certification is now the active student progress layer and new feature
+ * work should avoid expanding criterion without explicit approval.
  * HOW:
  * Protect the routes, validate student and criterion ids, and delegate the
  * actual progression logic to criterion.controller.
