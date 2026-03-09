@@ -112,6 +112,35 @@ router.get(
   teacherController.getStudentCertification,
 );
 
+router.patch(
+  "/students/:id/subjects/:subjectId/certification-plan",
+  [
+    param("id")
+      .isMongoId()
+      .withMessage("Valid student id is required."),
+    param("subjectId")
+      .isMongoId()
+      .withMessage("Valid subject id is required."),
+    body("requiredTaskCodes")
+      .isArray({ min: 1 })
+      .withMessage("requiredTaskCodes must be a non-empty array."),
+    body("requiredTaskCodes.*")
+      .matches(/^[PMD]\d+$/i)
+      .withMessage("Task codes must be like P1, P2, M1, or D1."),
+    body("certificationLabel")
+      .optional()
+      .isString()
+      .withMessage("certificationLabel must be text."),
+    body("changeReason")
+      .isString()
+      .trim()
+      .isLength({ min: 3, max: 240 })
+      .withMessage("changeReason must be between 3 and 240 characters."),
+    validateRequest,
+  ],
+  teacherController.updateStudentCertificationPlan,
+);
+
 router.get(
   "/students/:id/behaviour-trend",
   [

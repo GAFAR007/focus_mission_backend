@@ -30,6 +30,7 @@ const {
 const {
   ensureResultPackageForMission,
 } = require("./result.service");
+const subjectCertificationService = require("./subjectCertification.service");
 const {
   extractTextFromUploadedSource,
 } = require("./sourceExtraction.service");
@@ -209,6 +210,18 @@ function usesFixedReward(draftFormat, questionCount) {
     draftFormat === "ESSAY_BUILDER" ||
     draftFormat === "THEORY" ||
     isAssessmentQuestionCount(questionCount)
+  );
+}
+
+async function loadMissionCertificationSnapshot({ studentId, subjectId }) {
+  const settingsContext =
+    await subjectCertificationService.getStudentSubjectCertificationContext({
+      studentId,
+      subjectId,
+    });
+
+  return subjectCertificationService.buildMissionCertificationSnapshot(
+    settingsContext,
   );
 }
 
@@ -1062,6 +1075,10 @@ async function generateMission(teacherId, payload) {
   const normalizedQuestions = draftFormat === "THEORY"
     ? buildTheoryQuestionsFromGenerated(generated.questions || [])
     : normalizeQuestions(generated.questions || [], { draftFormat });
+  const certificationSnapshot = await loadMissionCertificationSnapshot({
+    studentId: String(student._id),
+    subjectId: String(subject._id),
+  });
 
   const mission = await Mission.create({
     studentId: student._id,
@@ -1081,6 +1098,7 @@ async function generateMission(teacherId, payload) {
     availableOnDay: availability.availableOnDay,
     difficulty: payload.difficulty || "medium",
     taskCodes: normalizedTaskCodes,
+    ...certificationSnapshot,
     xpReward,
     sourceFileName: String(payload.sourceFileName || "").trim(),
     sourceFileType: String(payload.sourceFileType || "").trim(),
@@ -1427,6 +1445,25 @@ async function updateMission(teacherId, missionId, payload) {
   if (mission.draftFormat === "ESSAY_BUILDER") {
     mission.essayMode = normalizeEssayMode(mission.essayMode || "NORMAL");
     mission.xpReward = 50;
+  }
+
+  if (!mission.latestResultPackageId) {
+    // WHY: Draft mission edits should keep certification intent aligned to the
+    // current active plan until the mission produces evidence. After evidence
+    // exists, the original snapshot must stay frozen for audit.
+    const certificationSnapshot = await loadMissionCertificationSnapshot({
+      studentId: String(mission.studentId),
+      subjectId: String(mission.subjectId),
+    });
+    mission.certificationPlanId = certificationSnapshot.certificationPlanId;
+    mission.certificationPlanVersion =
+      certificationSnapshot.certificationPlanVersion;
+    mission.certificationPlanSource =
+      certificationSnapshot.certificationPlanSource;
+    mission.certificationLabelSnapshot =
+      certificationSnapshot.certificationLabelSnapshot;
+    mission.certificationRequiredTaskCodesSnapshot =
+      certificationSnapshot.certificationRequiredTaskCodesSnapshot;
   }
 
   if (payload.status !== undefined) {

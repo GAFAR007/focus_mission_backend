@@ -1,20 +1,21 @@
 /**
  * WHAT:
  * subjectCertification.service derives subject-level task-focus certification
- * progress from qualifying mission evidence and applies certificate awards.
+ * progress from teacher-owned student-subject plans or legacy subject templates.
  * WHY:
- * Certification is the active student-facing subject progress layer, but it
- * must stay parallel to the frozen criterion journey while still giving
- * students and staff an auditable view of which task-focus codes have been
- * passed for a subject.
+ * Certification is the active student-facing subject progress layer, and
+ * teachers need auditable control over the live objective set without deleting
+ * the older subject-template fallback during the transition.
  * HOW:
- * Read subject certification templates, evaluate qualifying mission/result
- * evidence against fixed rules, summarize passed/remaining task codes, and
- * write one idempotent certification award when all required codes are passed.
+ * Resolve one active certification context per student and subject, version plan
+ * changes, snapshot mission intent, evaluate qualifying evidence, and apply one
+ * idempotent certificate award per unlocked objective set.
  */
 const Mission = require("../models/Mission");
 const ResultPackage = require("../models/ResultPackage");
+const StudentCertificationPlan = require("../models/StudentCertificationPlan");
 const Subject = require("../models/Subject");
+const Timetable = require("../models/Timetable");
 const User = require("../models/User");
 const {
   calculateCompletionPercentage,
@@ -33,6 +34,11 @@ const QUALIFYING_DRAFT_FORMATS = Object.freeze([
   "THEORY",
   "ESSAY_BUILDER",
 ]);
+const PLAN_SOURCE = Object.freeze({
+  NONE: "none",
+  TEACHER_PLAN: "teacher_plan",
+  SUBJECT_TEMPLATE: "subject_template",
+});
 const CERTIFICATION_STATUS = Object.freeze({
   PASSED: "passed",
   NOT_PASSED: "not_passed",
@@ -63,9 +69,29 @@ function normalizeTaskCodes(taskCodes) {
   return normalized;
 }
 
-function resolveCertificationLabel(subject) {
-  const label = String(subject?.certificationLabel || "").trim();
+function resolveCertificationLabel(value) {
+  const label = String(value || "").trim();
   return label || "Course Certification";
+}
+
+function buildAwardKey(subjectId, requiredTaskCodes) {
+  return `${String(subjectId || "")}:${normalizeTaskCodes(requiredTaskCodes).join("|")}`;
+}
+
+function buildTeacherTimetableMatch({ teacherId, subjectId, studentId }) {
+  return {
+    studentId,
+    $or: [
+      {
+        morningSubject: subjectId,
+        morningTeacherId: teacherId,
+      },
+      {
+        afternoonSubject: subjectId,
+        afternoonTeacherId: teacherId,
+      },
+    ],
+  };
 }
 
 function serializeSubjectCertificationSettings(subject) {
@@ -78,7 +104,48 @@ function serializeSubjectCertificationSettings(subject) {
     requiredCertificationTaskCodes: normalizeTaskCodes(
       subject?.requiredCertificationTaskCodes,
     ),
-    certificationLabel: resolveCertificationLabel(subject),
+    certificationLabel: resolveCertificationLabel(subject?.certificationLabel),
+  };
+}
+
+function serializePlanContext({ subject, plan = null }) {
+  const requiredTaskCodes = plan ?
+    normalizeTaskCodes(plan.requiredTaskCodes)
+  : normalizeTaskCodes(subject?.requiredCertificationTaskCodes);
+  const planSource = plan ? PLAN_SOURCE.TEACHER_PLAN :
+    (subject?.certificationEnabled === true ? PLAN_SOURCE.SUBJECT_TEMPLATE : PLAN_SOURCE.NONE);
+  const certificationEnabled = requiredTaskCodes.length > 0 && planSource !== PLAN_SOURCE.NONE;
+
+  return {
+    subjectId: String(subject?._id || subject?.id || ""),
+    subjectName: String(subject?.name || ""),
+    subjectIcon: String(subject?.icon || ""),
+    subjectColor: String(subject?.color || ""),
+    certificationEnabled,
+    certificationLabel: resolveCertificationLabel(
+      plan?.certificationLabel || subject?.certificationLabel,
+    ),
+    requiredTaskCodes,
+    planSource,
+    planId: plan ? String(plan._id || plan.id || "") : "",
+    planVersion: plan ? Number(plan.version || 0) : 0,
+    planUpdatedAt: plan?.updatedAt ? new Date(plan.updatedAt).toISOString() : null,
+    planChangeReason: String(plan?.changeReason || ""),
+  };
+}
+
+function buildMissionCertificationSnapshot(settingsContext) {
+  const requiredTaskCodes = normalizeTaskCodes(settingsContext?.requiredTaskCodes);
+  const source = settingsContext?.certificationEnabled === true && requiredTaskCodes.length > 0 ?
+    String(settingsContext?.planSource || PLAN_SOURCE.NONE)
+  : PLAN_SOURCE.NONE;
+
+  return {
+    certificationPlanId: source === PLAN_SOURCE.TEACHER_PLAN ? settingsContext.planId : null,
+    certificationPlanVersion: source === PLAN_SOURCE.TEACHER_PLAN ? Number(settingsContext.planVersion || 0) : 0,
+    certificationPlanSource: source,
+    certificationLabelSnapshot: source === PLAN_SOURCE.NONE ? "" : resolveCertificationLabel(settingsContext?.certificationLabel),
+    certificationRequiredTaskCodesSnapshot: source === PLAN_SOURCE.NONE ? [] : requiredTaskCodes,
   };
 }
 
@@ -87,9 +154,7 @@ function validateCertificationTemplateInput(payload) {
   const rawTaskCodes = Array.isArray(payload?.requiredCertificationTaskCodes) ?
     payload.requiredCertificationTaskCodes
   : [];
-  const requiredCertificationTaskCodes = normalizeTaskCodes(
-    rawTaskCodes,
-  );
+  const requiredCertificationTaskCodes = normalizeTaskCodes(rawTaskCodes);
   const certificationLabel = String(payload?.certificationLabel || "")
     .trim()
     .slice(0, 80);
@@ -112,6 +177,40 @@ function validateCertificationTemplateInput(payload) {
     certificationEnabled,
     requiredCertificationTaskCodes,
     certificationLabel: certificationLabel || "Course Certification",
+  };
+}
+
+function validateTeacherPlanInput(payload) {
+  const rawTaskCodes = Array.isArray(payload?.requiredTaskCodes) ? payload.requiredTaskCodes : [];
+  const requiredTaskCodes = normalizeTaskCodes(rawTaskCodes);
+  const certificationLabel = String(payload?.certificationLabel || "")
+    .trim()
+    .slice(0, 80) || "Course Certification";
+  const changeReason = String(payload?.changeReason || "")
+    .trim()
+    .slice(0, 240);
+
+  if (requiredTaskCodes.length === 0) {
+    throw createError(400, "Select at least one certification task focus.");
+  }
+
+  if (requiredTaskCodes.length !== rawTaskCodes.length) {
+    throw createError(
+      400,
+      "requiredTaskCodes must contain unique valid task codes like P1, P2, M1, or D1.",
+    );
+  }
+
+  if (!changeReason) {
+    // WHY: Teacher-owned plans need an audit trail every time objectives are
+    // changed so staff can explain why a learner's certification target moved.
+    throw createError(400, "A short changeReason is required for certification plan updates.");
+  }
+
+  return {
+    certificationLabel,
+    requiredTaskCodes,
+    changeReason,
   };
 }
 
@@ -141,23 +240,82 @@ function resolveMissionCompletionTime(mission, resultPackage) {
     null;
 }
 
+function normalizeMissionTaskCodes(mission) {
+  return normalizeTaskCodes(mission?.taskCodes);
+}
+
+function missionUsesMatchingPlanContext(mission, settingsContext) {
+  if (!settingsContext?.certificationEnabled) {
+    return false;
+  }
+
+  const missionPlanSource = String(mission?.certificationPlanSource || PLAN_SOURCE.NONE);
+
+  if (settingsContext.planSource === PLAN_SOURCE.TEACHER_PLAN) {
+    return (
+      missionPlanSource === PLAN_SOURCE.TEACHER_PLAN &&
+      String(mission?.certificationPlanId || "") === String(settingsContext.planId || "") &&
+      Number(mission?.certificationPlanVersion || 0) === Number(settingsContext.planVersion || 0)
+    );
+  }
+
+  if (settingsContext.planSource === PLAN_SOURCE.SUBJECT_TEMPLATE) {
+    if (missionPlanSource === PLAN_SOURCE.NONE) {
+      return true;
+    }
+
+    return missionPlanSource === PLAN_SOURCE.SUBJECT_TEMPLATE;
+  }
+
+  return false;
+}
+
+function resolveMissionSettingsContext({ mission, subject }) {
+  const snapshotRequiredTaskCodes = normalizeTaskCodes(
+    mission?.certificationRequiredTaskCodesSnapshot,
+  );
+  const snapshotSource = String(mission?.certificationPlanSource || PLAN_SOURCE.NONE);
+
+  if (snapshotSource !== PLAN_SOURCE.NONE && snapshotRequiredTaskCodes.length > 0) {
+    return {
+      subjectId: String(subject?._id || subject?.id || mission?.subjectId || ""),
+      subjectName: String(subject?.name || ""),
+      subjectIcon: String(subject?.icon || ""),
+      subjectColor: String(subject?.color || ""),
+      certificationEnabled: true,
+      certificationLabel: resolveCertificationLabel(mission?.certificationLabelSnapshot),
+      requiredTaskCodes: snapshotRequiredTaskCodes,
+      planSource: snapshotSource,
+      planId: snapshotSource === PLAN_SOURCE.TEACHER_PLAN ? String(mission?.certificationPlanId || "") : "",
+      planVersion: snapshotSource === PLAN_SOURCE.TEACHER_PLAN ? Number(mission?.certificationPlanVersion || 0) : 0,
+      planUpdatedAt: null,
+      planChangeReason: "",
+    };
+  }
+
+  return serializePlanContext({ subject, plan: null });
+}
+
 function evaluateCertificationMission({
   mission,
   resultPackage,
-  subject,
+  settingsContext,
+  enforceCurrentContext = false,
 }) {
-  const subjectSettings = serializeSubjectCertificationSettings(subject);
-  const requiredTaskCodes = subjectSettings.requiredCertificationTaskCodes;
-  const normalizedTaskCodes = normalizeTaskCodes(mission?.taskCodes);
+  const requiredTaskCodes = normalizeTaskCodes(settingsContext?.requiredTaskCodes);
+  const normalizedTaskCodes = normalizeMissionTaskCodes(mission);
   const draftFormat = String(mission?.draftFormat || "QUESTIONS")
     .trim()
     .toUpperCase();
   const questionCount = Array.isArray(mission?.questions) ? mission.questions.length : 0;
   const completedAt = resolveMissionCompletionTime(mission, resultPackage);
   const baseResponse = {
-    certificationEnabled: subjectSettings.certificationEnabled,
-    certificationLabel: subjectSettings.certificationLabel,
+    certificationEnabled: settingsContext?.certificationEnabled === true,
+    certificationLabel: resolveCertificationLabel(settingsContext?.certificationLabel),
     requiredTaskCodes,
+    planSource: String(settingsContext?.planSource || PLAN_SOURCE.NONE),
+    planId: String(settingsContext?.planId || ""),
+    planVersion: Number(settingsContext?.planVersion || 0),
     certificationEligible: false,
     certificationTaskCode: normalizedTaskCodes.length === 1 ? normalizedTaskCodes[0] : "",
     certificationCounted: false,
@@ -170,10 +328,20 @@ function evaluateCertificationMission({
     reason: "",
   };
 
-  if (!subjectSettings.certificationEnabled) {
+  if (settingsContext?.certificationEnabled !== true) {
     return {
       ...baseResponse,
       reason: "This subject does not use task-focus certification.",
+    };
+  }
+
+  if (enforceCurrentContext && !missionUsesMatchingPlanContext(mission, settingsContext)) {
+    return {
+      ...baseResponse,
+      reason:
+        settingsContext?.planSource === PLAN_SOURCE.TEACHER_PLAN ?
+          "This mission belongs to a different certification plan version."
+        : "This mission was not authored against the active certification objective set.",
     };
   }
 
@@ -199,7 +367,7 @@ function evaluateCertificationMission({
     return {
       ...baseResponse,
       certificationTaskCode,
-      reason: "This task focus is not required for the subject certification.",
+      reason: "This task focus is not required for the active certification plan.",
     };
   }
 
@@ -266,9 +434,7 @@ function evaluateCertificationMission({
   const scoreCorrect = Math.max(
     0,
     Number(
-      mission?.latestScoreCorrect ??
-        resultPackage?.meta?.score?.correct ??
-        0,
+      mission?.latestScoreCorrect ?? resultPackage?.meta?.score?.correct ?? 0,
     ),
   );
   const scorePercent = Math.max(
@@ -276,9 +442,7 @@ function evaluateCertificationMission({
     Math.min(
       100,
       Number(
-        mission?.latestScorePercent ??
-          resultPackage?.meta?.score?.percent ??
-          0,
+        mission?.latestScorePercent ?? resultPackage?.meta?.score?.percent ?? 0,
       ),
     ),
   );
@@ -374,12 +538,11 @@ function pickBestEvidenceRow(evaluations, taskCode) {
 }
 
 function buildSubjectCertificationSummary({
-  subject,
+  settingsContext,
   evaluations,
   awardRecorded = false,
 }) {
-  const subjectSettings = serializeSubjectCertificationSettings(subject);
-  const requiredTaskCodes = subjectSettings.requiredCertificationTaskCodes;
+  const requiredTaskCodes = normalizeTaskCodes(settingsContext?.requiredTaskCodes);
   const evidenceRows = requiredTaskCodes.map((taskCode) =>
     pickBestEvidenceRow(evaluations, taskCode),
   );
@@ -400,12 +563,12 @@ function buildSubjectCertificationSummary({
     passedTaskCodes.length === requiredTaskCodes.length;
 
   return {
-    subjectId: String(subject?._id || subject?.id || ""),
-    subjectName: String(subject?.name || ""),
-    subjectIcon: String(subject?.icon || ""),
-    subjectColor: String(subject?.color || ""),
-    certificationEnabled: subjectSettings.certificationEnabled,
-    certificationLabel: subjectSettings.certificationLabel,
+    subjectId: String(settingsContext?.subjectId || ""),
+    subjectName: String(settingsContext?.subjectName || ""),
+    subjectIcon: String(settingsContext?.subjectIcon || ""),
+    subjectColor: String(settingsContext?.subjectColor || ""),
+    certificationEnabled: settingsContext?.certificationEnabled === true,
+    certificationLabel: resolveCertificationLabel(settingsContext?.certificationLabel),
     requiredTaskCodes,
     passedTaskCodes,
     remainingTaskCodes,
@@ -417,6 +580,11 @@ function buildSubjectCertificationSummary({
     certificateUnlocked,
     awardRecorded,
     evidenceRows,
+    planSource: String(settingsContext?.planSource || PLAN_SOURCE.NONE),
+    planId: String(settingsContext?.planId || ""),
+    planVersion: Number(settingsContext?.planVersion || 0),
+    planUpdatedAt: settingsContext?.planUpdatedAt || null,
+    planChangeReason: String(settingsContext?.planChangeReason || ""),
   };
 }
 
@@ -424,25 +592,51 @@ async function loadStudentCertificationContext({
   studentId,
   subjectId = "",
 }) {
-  const subjectMatch = { certificationEnabled: true };
-  if (String(subjectId || "").trim()) {
-    subjectMatch._id = subjectId;
+  const normalizedSubjectId = String(subjectId || "").trim();
+  const planMatch = {
+    studentId,
+    isActive: true,
+  };
+  if (normalizedSubjectId) {
+    planMatch.subjectId = normalizedSubjectId;
   }
 
-  const [student, subjects] = await Promise.all([
+  const [student, activePlans, templateSubjects] = await Promise.all([
     User.findById(studentId)
       .select("subjectCertificationAwards")
       .lean(),
-    Subject.find(subjectMatch)
+    StudentCertificationPlan.find(planMatch)
+      .sort({ subjectId: 1, version: -1 })
+      .lean(),
+    Subject.find(normalizedSubjectId ? { _id: normalizedSubjectId } : { certificationEnabled: true })
       .sort({ name: 1 })
       .lean(),
   ]);
 
-  const subjectIds = subjects.map((subject) => subject._id);
-  const missions = subjectIds.length > 0 ?
+  const subjectIdsToLoad = new Set(
+    [
+      ...activePlans.map((plan) => String(plan.subjectId || "")),
+      ...templateSubjects.map((subject) => String(subject._id || "")),
+      normalizedSubjectId,
+    ].filter(Boolean),
+  );
+  const subjects = subjectIdsToLoad.size > 0 ?
+    await Subject.find({ _id: { $in: [...subjectIdsToLoad] } })
+      .sort({ name: 1 })
+      .lean()
+  : [];
+  const activePlanBySubjectId = new Map(
+    activePlans.map((plan) => [String(plan.subjectId || ""), plan]),
+  );
+  const settingsContexts = subjects.map((subject) => {
+    const plan = activePlanBySubjectId.get(String(subject._id || "")) || null;
+    return serializePlanContext({ subject, plan });
+  });
+  const missionSubjectIds = settingsContexts.map((context) => context.subjectId).filter(Boolean);
+  const missions = missionSubjectIds.length > 0 ?
     await Mission.find({
       studentId,
-      subjectId: { $in: subjectIds },
+      subjectId: { $in: missionSubjectIds },
       latestResultPackageId: { $exists: true, $ne: null },
       $or: [{ status: "published" }, { status: { $exists: false } }],
     }).lean()
@@ -451,16 +645,17 @@ async function loadStudentCertificationContext({
     .map((mission) => String(mission?.latestResultPackageId || ""))
     .filter(Boolean);
   const resultPackages = resultPackageIds.length > 0 ?
-    await ResultPackage.find({
-      _id: { $in: resultPackageIds },
-    })
+    await ResultPackage.find({ _id: { $in: resultPackageIds } })
       .select("missionId missionType meta evidence createdAt")
       .lean()
   : [];
 
   return {
     student,
-    subjects,
+    settingsContexts,
+    subjectsById: new Map(
+      subjects.map((subject) => [String(subject._id || ""), subject]),
+    ),
     missions,
     resultPackageById: new Map(
       resultPackages.map((resultPackage) => [
@@ -475,8 +670,7 @@ async function syncCertificationAwards({
   studentId,
   summaries,
 }) {
-  const learner =
-    await User.findById(studentId).select("subjectCertificationAwards");
+  const learner = await User.findById(studentId).select("subjectCertificationAwards");
 
   if (!learner) {
     return new Set();
@@ -486,14 +680,17 @@ async function syncCertificationAwards({
     learner.subjectCertificationAwards = [];
   }
 
-  const existingSubjectIds = new Set(
-    learner.subjectCertificationAwards.map((award) => String(award.subjectId || "")),
+  const existingAwardKeys = new Set(
+    learner.subjectCertificationAwards.map((award) =>
+      buildAwardKey(award.subjectId, award.requiredTaskCodesSnapshot),
+    ),
   );
   let changed = false;
 
   for (const summary of summaries) {
     const subjectId = String(summary?.subjectId || "");
-    if (!subjectId || summary?.certificateUnlocked !== true || existingSubjectIds.has(subjectId)) {
+    const awardKey = buildAwardKey(subjectId, summary?.requiredTaskCodes);
+    if (!subjectId || summary?.certificateUnlocked !== true || existingAwardKeys.has(awardKey)) {
       continue;
     }
 
@@ -505,7 +702,7 @@ async function syncCertificationAwards({
       : [],
       averagePassedScoreAtUnlock: Number(summary?.averagePassedScorePercent || 0),
     });
-    existingSubjectIds.add(subjectId);
+    existingAwardKeys.add(awardKey);
     changed = true;
 
     console.info("[certification] award unlocked", {
@@ -519,7 +716,7 @@ async function syncCertificationAwards({
     await learner.save();
   }
 
-  return existingSubjectIds;
+  return existingAwardKeys;
 }
 
 async function getStudentCertificationSummaries({
@@ -534,34 +731,39 @@ async function getStudentCertificationSummaries({
   });
 
   const context = await loadStudentCertificationContext({ studentId, subjectId });
-  const existingAwardSubjectIds = new Set(
+  const existingAwardKeys = new Set(
     (context.student?.subjectCertificationAwards || []).map((award) =>
-      String(award.subjectId || ""),
+      buildAwardKey(award.subjectId, award.requiredTaskCodesSnapshot),
     ),
   );
 
-  const summaries = context.subjects.map((subject) => {
-    const subjectIdKey = String(subject._id || "");
+  const summaries = context.settingsContexts.map((settingsContext) => {
+    const subjectIdKey = String(settingsContext.subjectId || "");
     const evaluations = context.missions
       .filter((mission) => String(mission?.subjectId || "") === subjectIdKey)
       .map((mission) =>
         evaluateCertificationMission({
           mission,
-          resultPackage: context.resultPackageById.get(String(mission?.latestResultPackageId || "")) || null,
-          subject,
+          resultPackage:
+            context.resultPackageById.get(String(mission?.latestResultPackageId || "")) ||
+            null,
+          settingsContext,
+          enforceCurrentContext: true,
         }),
       );
 
     return buildSubjectCertificationSummary({
-      subject,
+      settingsContext,
       evaluations,
-      awardRecorded: existingAwardSubjectIds.has(subjectIdKey),
+      awardRecorded: existingAwardKeys.has(
+        buildAwardKey(subjectIdKey, settingsContext.requiredTaskCodes),
+      ),
     });
   });
 
-  let finalAwardSubjectIds = existingAwardSubjectIds;
+  let finalAwardKeys = existingAwardKeys;
   if (applyAwards) {
-    finalAwardSubjectIds = await syncCertificationAwards({
+    finalAwardKeys = await syncCertificationAwards({
       studentId,
       summaries,
     });
@@ -569,7 +771,9 @@ async function getStudentCertificationSummaries({
 
   const finalizedSummaries = summaries.map((summary) => ({
     ...summary,
-    awardRecorded: finalAwardSubjectIds.has(String(summary.subjectId || "")),
+    awardRecorded: finalAwardKeys.has(
+      buildAwardKey(summary.subjectId, summary.requiredTaskCodes),
+    ),
   }));
 
   console.info("[certification] summary complete", {
@@ -578,6 +782,144 @@ async function getStudentCertificationSummaries({
   });
 
   return finalizedSummaries;
+}
+
+async function getStudentSubjectCertificationContext({
+  studentId,
+  subjectId,
+}) {
+  const subject = await Subject.findById(subjectId).lean();
+  if (!subject) {
+    throw createError(404, "Subject not found.");
+  }
+
+  const activePlan = await StudentCertificationPlan.findOne({
+    studentId,
+    subjectId,
+    isActive: true,
+  }).lean();
+
+  return serializePlanContext({ subject, plan: activePlan || null });
+}
+
+async function assertTeacherOwnsStudentSubject({
+  teacherId,
+  studentId,
+  subjectId,
+}) {
+  const [teacher, subject, timetableOwnership] = await Promise.all([
+    User.findOne({ _id: teacherId, role: "teacher" })
+      .select("name subjectSpecialty")
+      .lean(),
+    Subject.findById(subjectId).lean(),
+    Timetable.exists(buildTeacherTimetableMatch({ teacherId, studentId, subjectId })),
+  ]);
+
+  if (!teacher) {
+    throw createError(404, "Teacher not found.");
+  }
+
+  if (!subject) {
+    throw createError(404, "Subject not found.");
+  }
+
+  if (!timetableOwnership) {
+    // WHY: Teacher-owned certification plans must only be editable by the
+    // teacher who is actually scheduled to teach this student in that subject.
+    throw createError(
+      403,
+      "Only the scheduled subject teacher can define certification objectives for this student.",
+    );
+  }
+
+  return { teacher, subject };
+}
+
+async function updateTeacherStudentCertificationPlan({
+  teacherId,
+  studentId,
+  subjectId,
+  payload,
+}) {
+  console.info("[certification] teacher plan update start", {
+    teacherId: String(teacherId || ""),
+    studentId: String(studentId || ""),
+    subjectId: String(subjectId || ""),
+  });
+
+  const normalizedPlan = validateTeacherPlanInput(payload);
+  const { subject } = await assertTeacherOwnsStudentSubject({
+    teacherId,
+    studentId,
+    subjectId,
+  });
+  const currentPlan = await StudentCertificationPlan.findOne({
+    studentId,
+    subjectId,
+    isActive: true,
+  });
+  const nextLabel = resolveCertificationLabel(normalizedPlan.certificationLabel);
+  const nextCodes = normalizeTaskCodes(normalizedPlan.requiredTaskCodes);
+  const currentCodes = normalizeTaskCodes(currentPlan?.requiredTaskCodes);
+  const labelChanged = resolveCertificationLabel(currentPlan?.certificationLabel) !== nextLabel;
+  const codesChanged = JSON.stringify(currentCodes) !== JSON.stringify(nextCodes);
+
+  if (currentPlan && !labelChanged && !codesChanged) {
+    console.info("[certification] teacher plan unchanged", {
+      teacherId: String(teacherId || ""),
+      studentId: String(studentId || ""),
+      subjectId: String(subjectId || ""),
+      version: Number(currentPlan.version || 0),
+    });
+    const [summary] = await getStudentCertificationSummaries({
+      studentId,
+      subjectId,
+      applyAwards: false,
+    });
+    return summary || buildSubjectCertificationSummary({
+      settingsContext: serializePlanContext({ subject, plan: currentPlan.toObject() }),
+      evaluations: [],
+      awardRecorded: false,
+    });
+  }
+
+  if (currentPlan) {
+    currentPlan.isActive = false;
+    await currentPlan.save();
+  }
+
+  const nextVersion = currentPlan ? Number(currentPlan.version || 0) + 1 : 1;
+  await StudentCertificationPlan.create({
+    studentId,
+    subjectId,
+    certificationLabel: nextLabel,
+    requiredTaskCodes: nextCodes,
+    version: nextVersion,
+    isActive: true,
+    createdBy: teacherId,
+    updatedBy: teacherId,
+    changeReason: normalizedPlan.changeReason,
+  });
+
+  console.info("[certification] teacher plan updated", {
+    teacherId: String(teacherId || ""),
+    studentId: String(studentId || ""),
+    subjectId: String(subjectId || ""),
+    version: nextVersion,
+    requiredTaskCodes: nextCodes,
+  });
+
+  const [summary] = await getStudentCertificationSummaries({
+    studentId,
+    subjectId,
+    applyAwards: false,
+  });
+
+  return summary || buildSubjectCertificationSummary({
+    settingsContext: serializePlanContext({ subject, plan: null }),
+    evaluations: [],
+    awardRecorded: false,
+  });
 }
 
 async function getMissionCertificationSummary({
@@ -598,24 +940,36 @@ async function getMissionCertificationSummary({
       certificationCounted: false,
       certificationPassStatus: CERTIFICATION_STATUS.NOT_ELIGIBLE,
       reason: "Subject was not found for this mission.",
+      planSource: PLAN_SOURCE.NONE,
+      planId: "",
+      planVersion: 0,
+      scorePercent: 0,
     };
   }
 
+  const settingsContext = resolveMissionSettingsContext({
+    mission,
+    subject: subjectRecord,
+  });
   const evaluation = evaluateCertificationMission({
     mission,
     resultPackage,
-    subject: subjectRecord,
+    settingsContext,
+    enforceCurrentContext: false,
   });
 
   return {
-    certificationEnabled: subjectRecord.certificationEnabled === true,
-    certificationLabel: resolveCertificationLabel(subjectRecord),
-    requiredTaskCodes: normalizeTaskCodes(subjectRecord.requiredCertificationTaskCodes),
+    certificationEnabled: settingsContext.certificationEnabled === true,
+    certificationLabel: settingsContext.certificationLabel,
+    requiredTaskCodes: settingsContext.requiredTaskCodes,
     certificationEligible: evaluation.certificationEligible,
     certificationTaskCode: evaluation.certificationTaskCode,
     certificationCounted: evaluation.certificationCounted,
     certificationPassStatus: evaluation.certificationPassStatus,
     reason: evaluation.reason,
+    planSource: settingsContext.planSource,
+    planId: settingsContext.planId,
+    planVersion: settingsContext.planVersion,
     scorePercent: Number(evaluation.scorePercent || 0),
   };
 }
@@ -667,15 +1021,15 @@ async function updateSubjectCertificationSettings({
   const normalizedTemplate = validateCertificationTemplateInput(payload);
   const isChangingTemplate =
     subject.certificationEnabled !== normalizedTemplate.certificationEnabled ||
-    resolveCertificationLabel(subject) !== normalizedTemplate.certificationLabel ||
+    resolveCertificationLabel(subject.certificationLabel) !== normalizedTemplate.certificationLabel ||
     JSON.stringify(normalizeTaskCodes(subject.requiredCertificationTaskCodes)) !==
       JSON.stringify(normalizedTemplate.requiredCertificationTaskCodes);
 
   if (isChangingTemplate && subject.certificationEnabled === true) {
     const hasLiveEvidence = await subjectHasLiveCertificationEvidence(subjectId);
     if (hasLiveEvidence) {
-      // WHY: Certification rules cannot change after live evidence exists,
-      // otherwise previously earned passes could become ambiguous and unauditable.
+      // WHY: Legacy subject templates cannot change once they have already
+      // produced evidence, otherwise old certification data becomes ambiguous.
       throw createError(
         409,
         "Certification settings cannot be changed after live certification evidence exists for this subject.",
@@ -699,15 +1053,20 @@ async function updateSubjectCertificationSettings({
 
 module.exports = {
   CERTIFICATION_STATUS,
+  PLAN_SOURCE,
   QUALIFYING_DRAFT_FORMATS,
   THEORY_PASS_PERCENT,
+  buildMissionCertificationSnapshot,
   evaluateCertificationMission,
   getMissionCertificationSummary,
   getStudentCertificationSummaries,
+  getStudentSubjectCertificationContext,
   getSubjectCertificationSettings,
   listCertificationSubjects,
   normalizeTaskCodes,
+  serializePlanContext,
   serializeSubjectCertificationSettings,
   subjectHasLiveCertificationEvidence,
   updateSubjectCertificationSettings,
+  updateTeacherStudentCertificationPlan,
 };

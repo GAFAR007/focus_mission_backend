@@ -368,6 +368,21 @@ async function getStudentCertification(
   }
 }
 
+async function updateStudentCertificationPlan(req, res, next) {
+  try {
+    const certification =
+      await subjectCertificationService.updateTeacherStudentCertificationPlan({
+        teacherId: req.user.id,
+        studentId: req.params.id,
+        subjectId: req.params.subjectId,
+        payload: req.body,
+      });
+    res.json({ certification });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function getStudentBehaviourTrend(req, res, next) {
   try {
     const match = buildAnalyticsMatch(req);
@@ -483,6 +498,7 @@ async function getResultScreenshot(req, res, next) {
 module.exports = {
   getStudents,
   getStudentCertification,
+  updateStudentCertificationPlan,
   createTimetable,
   createSessionLog,
   generateLearningAndBlocksDraft,

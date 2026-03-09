@@ -215,6 +215,49 @@ const missionSchema = new mongoose.Schema(
       // WHY: Teachers need explicit task targeting (for example P1/P2) so the
       // generated mission assesses the selected qualification criteria.
     },
+    certificationPlanId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "StudentCertificationPlan",
+      default: null,
+      // WHY: Certification evidence must point back to the exact active plan
+      // version the teacher used when authoring the mission.
+    },
+    certificationPlanVersion: {
+      type: Number,
+      min: 0,
+      default: 0,
+      // WHY: Version snapshots stop later plan edits from silently changing the
+      // qualification meaning of already-assigned missions.
+    },
+    certificationPlanSource: {
+      type: String,
+      enum: ["none", "teacher_plan", "subject_template"],
+      default: "none",
+      trim: true,
+      // WHY: Older missions may still fall back to subject templates, so the
+      // snapshot must record which certification source was active.
+    },
+    certificationLabelSnapshot: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    certificationRequiredTaskCodesSnapshot: {
+      type: [String],
+      default: [],
+      validate: {
+        validator(value) {
+          return (
+            Array.isArray(value) &&
+            value.every((item) => /^[PMD]\d+$/i.test(String(item || "").trim()))
+          );
+        },
+        message:
+          "certificationRequiredTaskCodesSnapshot must use task codes like P1, P2, M1, or D1.",
+      },
+      // WHY: Mission-level snapshots preserve the exact required objective set
+      // used at author time even if the live student plan changes later.
+    },
     xpReward: {
       type: Number,
       min: 10,
