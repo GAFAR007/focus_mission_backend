@@ -1,21 +1,32 @@
 /**
  * WHAT:
- * management.service provides management-only result access and user-creation
- * actions.
+ * management.service provides management-only result access, user creation,
+ * and timetable setup actions.
  * WHY:
  * Management needs a dedicated, auditable route surface for reviewing student
- * outcomes and creating core users without inheriting teacher authoring flows.
+ * outcomes, creating core users, and configuring student timetables without
+ * inheriting teacher authoring flows.
  * HOW:
  * Verify management ownership boundaries, load recent result-backed missions,
- * and create student or teacher accounts with explicit validation.
+ * create student or teacher accounts with explicit validation, and save
+ * weekday timetable entries with explicit subject and teacher ownership.
  */
 const bcrypt = require("bcryptjs");
 const Mission = require("../models/Mission");
+const Subject = require("../models/Subject");
+const Timetable = require("../models/Timetable");
 const User = require("../models/User");
 const subjectCertificationService = require("./subjectCertification.service");
 const { serializeMission } = require("../utils/missionSerializer");
 
 const MANAGEMENT_RESULTS_HISTORY_LIMIT = 60;
+const WEEKDAY_OPTIONS = [
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+];
 
 function createError(statusCode, message) {
   const error = new Error(message);
@@ -27,6 +38,14 @@ function normalizeEmail(value) {
   return String(value || "")
     .trim()
     .toLowerCase();
+}
+
+function normalizeWeekday(value) {
+  const trimmed = String(value || "").trim().toLowerCase();
+  const match = WEEKDAY_OPTIONS.find(
+    (weekday) => weekday.toLowerCase() === trimmed,
+  );
+  return match || "";
 }
 
 function serializeUser(user) {
@@ -66,6 +85,27 @@ function serializeUser(user) {
           (value) => String(value || ""),
         )
       : [],
+  };
+}
+
+function serializeTeacher(user) {
+  return {
+    id: String(user._id || ""),
+    name: String(user.name || ""),
+    email: String(user.email || ""),
+    avatar: String(user.avatar || ""),
+    subjectSpecialty: String(user.subjectSpecialty || ""),
+  };
+}
+
+function serializeTimetableEntry(entry) {
+  return {
+    day: String(entry.day || ""),
+    room: String(entry.room || ""),
+    morningMission: entry.morningSubject,
+    afternoonMission: entry.afternoonSubject,
+    morningTeacher: entry.morningTeacherId || null,
+    afternoonTeacher: entry.afternoonTeacherId || null,
   };
 }
 
@@ -310,6 +350,17 @@ async function listSubjects() {
   return subjectCertificationService.listCertificationSubjects();
 }
 
+async function listTeachers() {
+  const teachers = await User.find({
+    role: "teacher",
+  })
+    .sort({ name: 1 })
+    .select("name email avatar subjectSpecialty")
+    .lean();
+
+  return teachers.map(serializeTeacher);
+}
+
 async function getSubjectCertificationSettings({
   subjectId,
 }) {
@@ -343,12 +394,133 @@ async function getStudentCertification({
   });
 }
 
+async function saveStudentTimetableEntry({
+  managementId,
+  studentId,
+  payload,
+}) {
+  await assertManagementStudentAccess(
+    managementId,
+    studentId,
+  );
+
+  const day = normalizeWeekday(payload?.day);
+  if (!day) {
+    throw createError(
+      400,
+      "Day must be Monday to Friday.",
+    );
+  }
+
+  const room = String(payload?.room || "").trim();
+  const morningSubjectId = String(payload?.morningSubjectId || "").trim();
+  const afternoonSubjectId = String(payload?.afternoonSubjectId || "").trim();
+  const morningTeacherId = String(payload?.morningTeacherId || "").trim();
+  const afternoonTeacherId = String(payload?.afternoonTeacherId || "").trim();
+
+  if (!room) {
+    throw createError(
+      400,
+      "Room is required.",
+    );
+  }
+
+  const [morningSubject, afternoonSubject] = await Promise.all([
+    Subject.findById(morningSubjectId)
+      .select("name icon color")
+      .lean(),
+    Subject.findById(afternoonSubjectId)
+      .select("name icon color")
+      .lean(),
+  ]);
+
+  // WHY: Timetable subjects drive student access and teacher lesson ownership,
+  // so slot saves must reject unknown subject ids instead of storing broken refs.
+  if (!morningSubject || !afternoonSubject) {
+    throw createError(
+      400,
+      "Morning and afternoon subjects must both exist.",
+    );
+  }
+
+  const teacherIds = [
+    morningTeacherId,
+    afternoonTeacherId,
+  ].filter(Boolean);
+  const teachers = await User.find({
+    _id: { $in: teacherIds },
+    role: "teacher",
+  })
+    .select("name email avatar subjectSpecialty")
+    .lean();
+  const teacherMap = new Map(
+    teachers.map((teacher) => [String(teacher._id || ""), teacher]),
+  );
+
+  // WHY: Slot teachers are optional in the schema for legacy data, but the
+  // management setup flow should save only real teacher ids when provided.
+  if (morningTeacherId && !teacherMap.has(morningTeacherId)) {
+    throw createError(
+      400,
+      "Morning teacher must be a valid teacher account.",
+    );
+  }
+  if (afternoonTeacherId && !teacherMap.has(afternoonTeacherId)) {
+    throw createError(
+      400,
+      "Afternoon teacher must be a valid teacher account.",
+    );
+  }
+
+  const updated = await Timetable.findOneAndUpdate(
+    {
+      studentId,
+      day,
+    },
+    {
+      studentId,
+      day,
+      room,
+      morningSubject: morningSubjectId,
+      afternoonSubject: afternoonSubjectId,
+      morningTeacherId: morningTeacherId || null,
+      afternoonTeacherId: afternoonTeacherId || null,
+      mentorId: null,
+    },
+    {
+      new: true,
+      upsert: true,
+      setDefaultsOnInsert: true,
+    },
+  )
+    .populate("morningSubject")
+    .populate("afternoonSubject")
+    .populate("morningTeacherId", "name email avatar subjectSpecialty")
+    .populate("afternoonTeacherId", "name email avatar subjectSpecialty")
+    .lean();
+
+  console.info(
+    "[management] timetable_saved",
+    {
+      managementId: String(managementId || ""),
+      studentId: String(studentId || ""),
+      day,
+      morningSubjectId,
+      afternoonSubjectId,
+    },
+  );
+
+  return serializeTimetableEntry(updated);
+}
+
 module.exports = {
   listStudentResults,
   assertManagementStudentAccess,
   createManagedUser,
+  listTeachers,
   listSubjects,
   getSubjectCertificationSettings,
   updateSubjectCertificationSettings,
   getStudentCertification,
+  saveStudentTimetableEntry,
 };

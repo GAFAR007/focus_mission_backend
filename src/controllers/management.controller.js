@@ -1,10 +1,11 @@
 /**
  * WHAT:
- * management.controller exposes read-only management handlers for student
- * result history and individual result packages.
+ * management.controller exposes management handlers for student setup,
+ * reporting, and timetable configuration.
  * WHY:
  * Management needs a dedicated controller boundary so reporting access stays
- * separate from teacher authoring and mentor support actions.
+ * separate from teacher authoring and mentor support actions while still
+ * allowing controlled student timetable setup.
  * HOW:
  * Validate params in routes, call the management/result services, and return a
  * stable JSON response payload.
@@ -83,6 +84,20 @@ async function listSubjects(
   }
 }
 
+async function listTeachers(
+  _req,
+  res,
+  next,
+) {
+  try {
+    const teachers =
+      await managementService.listTeachers();
+    res.json({ teachers });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function getSubjectCertificationSettings(
   req,
   res,
@@ -141,12 +156,34 @@ async function getStudentCertification(
   }
 }
 
+async function saveStudentTimetableEntry(
+  req,
+  res,
+  next,
+) {
+  try {
+    const timetable =
+      await managementService.saveStudentTimetableEntry(
+        {
+          managementId: req.user.id,
+          studentId: req.params.studentId,
+          payload: req.body,
+        },
+      );
+    res.json({ timetable });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   createUser,
   getStudentResults,
   getResultPackage,
   getStudentCertification,
   getSubjectCertificationSettings,
+  listTeachers,
   listSubjects,
+  saveStudentTimetableEntry,
   updateSubjectCertificationSettings,
 };

@@ -1,9 +1,9 @@
 /**
  * WHAT:
- * management.routes registers management-only reporting endpoints.
+ * management.routes registers management-only setup and reporting endpoints.
  * WHY:
- * Management needs result visibility for assigned students without inheriting
- * teacher publishing or send-result permissions.
+ * Management needs result visibility, student setup tools, and timetable
+ * editing without inheriting teacher publishing or send-result permissions.
  * HOW:
  * Protect all routes, require the original management role, validate ids, then
  * delegate to management.controller.
@@ -67,6 +67,11 @@ router.post(
 router.get(
   "/subjects",
   managementController.listSubjects,
+);
+
+router.get(
+  "/teachers",
+  managementController.listTeachers,
 );
 
 router.get(
@@ -143,6 +148,61 @@ router.get(
     validateRequest,
   ],
   managementController.getStudentResults,
+);
+
+router.put(
+  "/students/:studentId/timetable",
+  [
+    param("studentId")
+      .isMongoId()
+      .withMessage(
+        "Valid studentId is required.",
+      ),
+    body("day")
+      .isString()
+      .trim()
+      .isIn([
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+      ])
+      .withMessage(
+        "day must be Monday to Friday.",
+      ),
+    body("room")
+      .isString()
+      .trim()
+      .notEmpty()
+      .withMessage(
+        "room is required.",
+      ),
+    body("morningSubjectId")
+      .isMongoId()
+      .withMessage(
+        "Valid morningSubjectId is required.",
+      ),
+    body("afternoonSubjectId")
+      .isMongoId()
+      .withMessage(
+        "Valid afternoonSubjectId is required.",
+      ),
+    body("morningTeacherId")
+      .optional({ nullable: true, checkFalsy: true })
+      .isMongoId()
+      .withMessage(
+        "morningTeacherId must be a valid teacher id.",
+      ),
+    body("afternoonTeacherId")
+      .optional({ nullable: true, checkFalsy: true })
+      .isMongoId()
+      .withMessage(
+        "afternoonTeacherId must be a valid teacher id.",
+      ),
+    validateRequest,
+  ],
+  managementController.saveStudentTimetableEntry,
 );
 
 router.get(
