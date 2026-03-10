@@ -1041,6 +1041,12 @@ async function seed() {
       },
     ),
     User.findByIdAndUpdate(
+      healthScienceBotTeacher._id,
+      {
+        assignedStudents: [student._id, johnStudent._id],
+      },
+    ),
+    User.findByIdAndUpdate(
       reBotTeacher._id,
       {
         assignedStudents: [student._id, johnStudent._id],

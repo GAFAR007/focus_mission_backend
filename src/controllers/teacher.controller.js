@@ -65,9 +65,9 @@ function buildAnalyticsMatch(req) {
   return match;
 }
 
-async function getStudents(_req, res, next) {
+async function getStudents(req, res, next) {
   try {
-    const students = await teacherService.listStudents();
+    const students = await teacherService.listStudents(req.user.id);
     res.json({ students });
   } catch (error) {
     next(error);

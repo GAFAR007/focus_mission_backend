@@ -755,8 +755,35 @@ async function assertTeacherOwnsScheduledLesson({
   };
 }
 
-async function listStudents() {
-  return User.find({ role: "student" })
+async function listStudents(teacherId) {
+  const teacher = await User.findOne({
+    _id: teacherId,
+    role: "teacher",
+  })
+    .select("assignedStudents")
+    .lean();
+
+  if (!teacher) {
+    throw createError(404, "Teacher not found.");
+  }
+
+  const assignedStudentIds = Array.isArray(teacher.assignedStudents)
+    ? teacher.assignedStudents
+        .map((studentId) => String(studentId || "").trim())
+        .filter(Boolean)
+    : [];
+
+  if (assignedStudentIds.length === 0) {
+    // WHY: Teachers should only bootstrap into students they actually own. An
+    // empty list is a valid state and should render the frontend empty-state
+    // instead of leaking other students into the picker.
+    return [];
+  }
+
+  return User.find({
+    _id: { $in: assignedStudentIds },
+    role: "student",
+  })
     .sort({ name: 1 })
     .select(
       "name role avatar avatarSeed xp streak preferredDifficulty firstLoginAt lastLoginAt loginDayCount",
