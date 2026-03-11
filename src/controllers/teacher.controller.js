@@ -74,10 +74,32 @@ async function getStudents(req, res, next) {
   }
 }
 
+async function getSubjects(req, res, next) {
+  try {
+    const subjects = await teacherService.listSubjects(req.user.id);
+    res.json({ subjects });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function createTimetable(req, res, next) {
   try {
     const timetable = await teacherService.createTimetable(req.body);
     res.status(201).json({ timetable });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function updateTimetableSlot(req, res, next) {
+  try {
+    const timetable = await teacherService.updateTimetableSlot({
+      teacherId: req.user.id,
+      studentId: req.params.id,
+      payload: req.body,
+    });
+    res.json({ timetable });
   } catch (error) {
     next(error);
   }
@@ -497,9 +519,11 @@ async function getResultScreenshot(req, res, next) {
 
 module.exports = {
   getStudents,
+  getSubjects,
   getStudentCertification,
   updateStudentCertificationPlan,
   createTimetable,
+  updateTimetableSlot,
   createSessionLog,
   generateLearningAndBlocksDraft,
   approveLearningAndBlocks,

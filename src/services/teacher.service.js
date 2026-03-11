@@ -48,6 +48,7 @@ const DRAFT_MISSIONS_LIMIT = 5;
 const RECENT_MISSIONS_HISTORY_LIMIT = 50;
 const THEORY_QUESTION_COUNT_MIN = 2;
 const THEORY_QUESTION_COUNT_MAX = 5;
+const WEEKDAY_OPTIONS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 
 function createError(statusCode, message) {
   const error = new Error(message);
@@ -791,8 +792,159 @@ async function listStudents(teacherId) {
     .lean();
 }
 
+async function listSubjects(teacherId) {
+  const teacher = await User.findOne({
+    _id: teacherId,
+    role: "teacher",
+  })
+    .select("subjectSpecialty")
+    .lean();
+
+  if (!teacher) {
+    throw createError(404, "Teacher not found.");
+  }
+
+  const specialty = normalizeForMatch(teacher.subjectSpecialty);
+  if (!specialty) {
+    // WHY: Teachers should only edit timetable slots for their own subject.
+    // Returning an empty list is safer than exposing the full subject catalog
+    // when a teacher account has no specialty configured.
+    return [];
+  }
+
+  const subjects = await Subject.find({})
+    .sort({ name: 1 })
+    .select("name icon color")
+    .lean();
+
+  return subjects.filter(
+    (subject) => normalizeForMatch(subject.name) === specialty,
+  );
+}
+
 async function createTimetable(payload) {
   return Timetable.create(payload);
+}
+
+async function assertTeacherOwnsStudent(teacherId, studentId) {
+  const teacher = await User.findOne({
+    _id: teacherId,
+    role: "teacher",
+  })
+    .select("assignedStudents subjectSpecialty")
+    .lean();
+
+  if (!teacher) {
+    throw createError(404, "Teacher not found.");
+  }
+
+  const assignedStudentIds = Array.isArray(teacher.assignedStudents)
+    ? teacher.assignedStudents.map((value) => String(value || "").trim())
+    : [];
+
+  // WHY: Teacher timetable editing must stay scoped to the teacher's own
+  // caseload so clicking around the calendar never mutates another teacher's
+  // student by accident.
+  if (!assignedStudentIds.includes(String(studentId))) {
+    throw createError(403, "Teachers can only edit timetable slots for assigned students.");
+  }
+
+  return teacher;
+}
+
+function serializeTimetableEntry(entry) {
+  return {
+    day: String(entry.day || ""),
+    room: String(entry.room || ""),
+    morningMission: entry.morningSubject,
+    afternoonMission: entry.afternoonSubject,
+    morningTeacher: entry.morningTeacherId || null,
+    afternoonTeacher: entry.afternoonTeacherId || null,
+  };
+}
+
+async function updateTimetableSlot({ teacherId, studentId, payload }) {
+  const day = String(payload.day || "").trim();
+  const sessionType = String(payload.sessionType || "")
+    .trim()
+    .toLowerCase();
+  const subjectId = String(payload.subjectId || "").trim();
+  const room = String(payload.room || "").trim();
+
+  if (!WEEKDAY_OPTIONS.includes(day)) {
+    throw createError(400, "Timetable day must be Monday to Friday.");
+  }
+
+  if (!["morning", "afternoon"].includes(sessionType)) {
+    throw createError(400, "sessionType must be morning or afternoon.");
+  }
+
+  if (!room) {
+    throw createError(400, "Room is required.");
+  }
+
+  const teacher = await assertTeacherOwnsStudent(teacherId, studentId);
+  const subject = await Subject.findById(subjectId)
+    .select("name icon color")
+    .lean();
+
+  if (!subject) {
+    throw createError(404, "Subject not found.");
+  }
+
+  const teacherSpecialty = normalizeForMatch(teacher.subjectSpecialty);
+  const subjectName = normalizeForMatch(subject.name);
+
+  // WHY: Teachers may only place their own specialty into a slot. Management
+  // remains responsible for assigning other teachers or unrelated subjects.
+  if (!teacherSpecialty || subjectName !== teacherSpecialty) {
+    throw createError(
+      403,
+      "Teachers can only add or edit timetable subjects that match their own specialty.",
+    );
+  }
+
+  const timetable = await Timetable.findOne({
+    studentId,
+    day,
+  });
+
+  if (!timetable) {
+    // WHY: The timetable schema requires both weekday slots. Management owns
+    // the initial weekday setup, while teachers safely refine an existing slot.
+    throw createError(
+      409,
+      "Management must create this weekday timetable before teachers edit lesson slots.",
+    );
+  }
+
+  if (sessionType === "morning") {
+    const assignedTeacherId = String(timetable.morningTeacherId || "").trim();
+    if (assignedTeacherId && assignedTeacherId !== String(teacherId)) {
+      throw createError(403, "Morning lesson is already assigned to another teacher.");
+    }
+    timetable.morningSubject = subjectId;
+    timetable.morningTeacherId = teacherId;
+  } else {
+    const assignedTeacherId = String(timetable.afternoonTeacherId || "").trim();
+    if (assignedTeacherId && assignedTeacherId !== String(teacherId)) {
+      throw createError(403, "Afternoon lesson is already assigned to another teacher.");
+    }
+    timetable.afternoonSubject = subjectId;
+    timetable.afternoonTeacherId = teacherId;
+  }
+
+  timetable.room = room;
+  await timetable.save();
+
+  const saved = await Timetable.findById(timetable._id)
+    .populate("morningSubject", "name icon color")
+    .populate("afternoonSubject", "name icon color")
+    .populate("morningTeacherId", "name email avatar subjectSpecialty")
+    .populate("afternoonTeacherId", "name email avatar subjectSpecialty")
+    .lean();
+
+  return serializeTimetableEntry(saved);
 }
 
 async function createSessionLog(payload) {
@@ -1600,7 +1752,9 @@ async function reextractMissionSource(teacherId, missionId) {
 
 module.exports = {
   listStudents,
+  listSubjects,
   createTimetable,
+  updateTimetableSlot,
   createSessionLog,
   generateLearningAndBlocksDraft,
   approveLearningAndBlocks,

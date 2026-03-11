@@ -45,6 +45,11 @@ router.get(
 );
 
 router.get(
+  "/subjects",
+  teacherController.getSubjects,
+);
+
+router.get(
   "/students/:id/daily-trend",
   [
     param("id")
@@ -222,6 +227,31 @@ router.post(
     validateRequest,
   ],
   teacherController.createTimetable,
+);
+
+router.put(
+  "/students/:id/timetable-slot",
+  [
+    param("id")
+      .isMongoId()
+      .withMessage("Valid student id is required."),
+    body("day")
+      .isIn(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
+      .withMessage("day must be Monday to Friday."),
+    body("sessionType")
+      .isIn(["morning", "afternoon"])
+      .withMessage("sessionType must be morning or afternoon."),
+    body("subjectId")
+      .isMongoId()
+      .withMessage("Valid subjectId is required."),
+    body("room")
+      .isString()
+      .trim()
+      .isLength({ min: 1, max: 120 })
+      .withMessage("room must be between 1 and 120 characters."),
+    validateRequest,
+  ],
+  teacherController.updateTimetableSlot,
 );
 
 router.post(
