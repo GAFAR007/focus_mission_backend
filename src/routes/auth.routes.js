@@ -1,6 +1,7 @@
 /**
  * WHAT:
- * auth.routes registers the public login route and protected profile routes.
+ * auth.routes registers the public login, demo-account, and protected profile
+ * routes.
  * WHY:
  * Authentication needs a small dedicated route surface so credentials and
  * profile updates stay separate from subject and progression flows.
@@ -9,7 +10,7 @@
  * request handling to auth.controller.
  */
 const express = require("express");
-const { body } = require("express-validator");
+const { body, query } = require("express-validator");
 
 const authController = require("../controllers/auth.controller");
 const { protect } = require("../middleware/auth.middleware");
@@ -27,6 +28,17 @@ router.post(
     validateRequest,
   ],
   authController.login,
+);
+
+router.get(
+  "/demo-accounts",
+  [
+    query("role")
+      .isIn(["student", "teacher", "mentor", "management"])
+      .withMessage("role must be student, teacher, mentor, or management."),
+    validateRequest,
+  ],
+  authController.getDemoAccounts,
 );
 
 router.get("/me", protect, authController.me);

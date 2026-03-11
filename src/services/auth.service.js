@@ -20,6 +20,8 @@ const {
   serializeJourney,
 } = require("../utils/userJourney");
 
+const PUBLIC_DEMO_ACCOUNT_LIMIT = 24;
+
 function createError(statusCode, message) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -54,6 +56,28 @@ function serializeUser(user) {
     preferredDifficulty: user.preferredDifficulty,
     assignedStudents: (user.assignedStudents || []).map((id) => String(id)),
   };
+}
+
+function serializeDemoAccount(user) {
+  return {
+    name: String(user.name || ""),
+    email: String(user.email || ""),
+    role: String(user.role || ""),
+    subject: String(user.subjectSpecialty || ""),
+    isPlaceholder: Boolean(user.isPlaceholder),
+  };
+}
+
+function normalizeRole(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+
+  if (!["student", "teacher", "mentor", "management"].includes(normalized)) {
+    throw createError(400, "role must be student, teacher, mentor, or management.");
+  }
+
+  return normalized;
 }
 
 function createToken(user) {
@@ -139,6 +163,21 @@ async function login({ email, password }) {
   };
 }
 
+async function listDemoAccounts({ role }) {
+  ensureDatabaseReady();
+
+  const normalizedRole = normalizeRole(role);
+  const users = await User.find({ role: normalizedRole })
+    .sort({ isPlaceholder: 1, name: 1, email: 1 })
+    .limit(PUBLIC_DEMO_ACCOUNT_LIMIT)
+    .select("name email role subjectSpecialty isPlaceholder")
+    .lean();
+
+  // WHY: The public quick-fill list should expose only the safe fields needed
+  // for login chips, never password hashes or assignment relationships.
+  return users.map(serializeDemoAccount);
+}
+
 async function getCurrentUser(userId) {
   ensureDatabaseReady();
 
@@ -172,6 +211,7 @@ async function updateAvatar(userId, { avatar, avatarSeed }) {
 
 module.exports = {
   login,
+  listDemoAccounts,
   getCurrentUser,
   updateAvatar,
 };
