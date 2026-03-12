@@ -333,6 +333,15 @@ async function seed() {
         "medium",
       ],
     },
+    {
+      name: "Life Skill",
+      icon: "self_improvement",
+      color: "#A8E0C1",
+      difficultyDefaults: [
+        "easy",
+        "medium",
+      ],
+    },
   ]);
 
   const englishNarrativeUnit = await Unit.create({
