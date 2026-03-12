@@ -108,6 +108,33 @@ function normalizeForMatch(value) {
     .trim();
 }
 
+function collectSubjectIdsForTeacherTimetables({ timetables, teacherId }) {
+  const subjectIds = new Set();
+  const normalizedTeacherId = String(teacherId || "").trim();
+
+  for (const timetable of Array.isArray(timetables) ? timetables : []) {
+    if (
+      String(timetable?.morningTeacherId || "").trim() === normalizedTeacherId
+    ) {
+      const subjectId = String(timetable?.morningSubject || "").trim();
+      if (subjectId) {
+        subjectIds.add(subjectId);
+      }
+    }
+
+    if (
+      String(timetable?.afternoonTeacherId || "").trim() === normalizedTeacherId
+    ) {
+      const subjectId = String(timetable?.afternoonSubject || "").trim();
+      if (subjectId) {
+        subjectIds.add(subjectId);
+      }
+    }
+  }
+
+  return [...subjectIds];
+}
+
 function isPlaceholderOption(value) {
   return ["a", "b", "c", "d"].includes(normalizeForMatch(value));
 }
@@ -797,11 +824,47 @@ async function listSubjects(teacherId) {
     _id: teacherId,
     role: "teacher",
   })
-    .select("subjectSpecialty")
+    .select("assignedStudents subjectSpecialty")
     .lean();
 
   if (!teacher) {
     throw createError(404, "Teacher not found.");
+  }
+
+  const assignedStudentIds = Array.isArray(teacher.assignedStudents)
+    ? teacher.assignedStudents
+        .map((studentId) => String(studentId || "").trim())
+        .filter(Boolean)
+    : [];
+
+  if (assignedStudentIds.length > 0) {
+    const timetableEntries = await Timetable.find({
+      studentId: { $in: assignedStudentIds },
+      $or: [
+        { morningTeacherId: teacherId },
+        { afternoonTeacherId: teacherId },
+      ],
+    })
+      .select(
+        "morningSubject afternoonSubject morningTeacherId afternoonTeacherId",
+      )
+      .lean();
+    const subjectIds = collectSubjectIdsForTeacherTimetables({
+      timetables: timetableEntries,
+      teacherId,
+    });
+
+    if (subjectIds.length > 0) {
+      // WHY: The timetable is the live ownership source for teacher lesson
+      // slots, so teacher subject access should prefer actual timetable
+      // assignments over free-text specialty labels.
+      return Subject.find({
+        _id: { $in: subjectIds },
+      })
+        .sort({ name: 1 })
+        .select("name icon color")
+        .lean();
+    }
   }
 
   const specialty = normalizeForMatch(teacher.subjectSpecialty);

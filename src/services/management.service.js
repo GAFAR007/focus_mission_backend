@@ -48,6 +48,49 @@ function normalizeWeekday(value) {
   return match || "";
 }
 
+function collectTeacherIdsFromTimetables(entries) {
+  const teacherIds = new Set();
+
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    for (const value of [entry?.morningTeacherId, entry?.afternoonTeacherId]) {
+      const teacherId = String(value || "").trim();
+      if (teacherId) {
+        teacherIds.add(teacherId);
+      }
+    }
+  }
+
+  return teacherIds;
+}
+
+async function syncTeacherAssignmentsForStudent({
+  studentId,
+  affectedTeacherIds,
+}) {
+  if (!Array.isArray(affectedTeacherIds) || affectedTeacherIds.length === 0) {
+    return;
+  }
+
+  const timetableEntries = await Timetable.find({ studentId })
+    .select("morningTeacherId afternoonTeacherId")
+    .lean();
+  const activeTeacherIds = collectTeacherIdsFromTimetables(timetableEntries);
+
+  // WHY: Teacher workspace access depends on assignedStudents, so timetable
+  // edits must add newly scheduled teachers and remove teachers no longer used
+  // for this student across any weekday slot.
+  await User.bulkWrite(
+    affectedTeacherIds.map((teacherId) => ({
+      updateOne: {
+        filter: { _id: teacherId, role: "teacher" },
+        update: activeTeacherIds.has(teacherId)
+          ? { $addToSet: { assignedStudents: studentId } }
+          : { $pull: { assignedStudents: studentId } },
+      },
+    })),
+  );
+}
+
 function serializeUser(user) {
   return {
     id: String(user._id || ""),
@@ -472,6 +515,13 @@ async function saveStudentTimetableEntry({
     );
   }
 
+  const previousEntry = await Timetable.findOne({
+    studentId,
+    day,
+  })
+    .select("morningTeacherId afternoonTeacherId")
+    .lean();
+
   const updated = await Timetable.findOneAndUpdate(
     {
       studentId,
@@ -498,6 +548,15 @@ async function saveStudentTimetableEntry({
     .populate("morningTeacherId", "name email avatar subjectSpecialty")
     .populate("afternoonTeacherId", "name email avatar subjectSpecialty")
     .lean();
+
+  const affectedTeacherIds = [
+    ...collectTeacherIdsFromTimetables([previousEntry]),
+    ...teacherIds,
+  ].filter(Boolean);
+  await syncTeacherAssignmentsForStudent({
+    studentId,
+    affectedTeacherIds: [...new Set(affectedTeacherIds)],
+  });
 
   console.info(
     "[management] timetable_saved",
