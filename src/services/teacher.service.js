@@ -425,16 +425,6 @@ function normalizeQuestions(
       );
     }
 
-    const normalizedLearningText = normalizeForMatch(learningText);
-    const normalizedAnswer = normalizeForMatch(options[correctIndex]);
-
-    if (!normalizedLearningText.includes(normalizedAnswer)) {
-      throw createError(
-        400,
-        `Question ${index + 1} must teach the correct answer inside the Learn First text.`,
-      );
-    }
-
     return {
       answerMode: "multiple_choice",
       learningText,
@@ -446,6 +436,125 @@ function normalizeQuestions(
       minWordCount: 0,
     };
   });
+}
+
+function haveDraftOptionsChanged(previousQuestion, nextQuestion) {
+  const previousOptions = Array.isArray(previousQuestion?.options)
+    ? previousQuestion.options
+    : [];
+  const nextOptions = Array.isArray(nextQuestion?.options)
+    ? nextQuestion.options
+    : [];
+
+  if (previousOptions.length !== nextOptions.length) {
+    return true;
+  }
+
+  return nextOptions.some(
+    (option, index) =>
+      normalizeForMatch(option) !==
+      normalizeForMatch(previousOptions[index]),
+  );
+}
+
+function hasDraftCorrectAnswerChanged(previousQuestion, nextQuestion) {
+  const previousOptions = Array.isArray(previousQuestion?.options)
+    ? previousQuestion.options
+    : [];
+  const nextOptions = Array.isArray(nextQuestion?.options)
+    ? nextQuestion.options
+    : [];
+  const previousCorrectIndex = Number(previousQuestion?.correctIndex);
+  const nextCorrectIndex = Number(nextQuestion?.correctIndex);
+  const previousCorrectAnswer =
+    Number.isInteger(previousCorrectIndex) &&
+    previousCorrectIndex >= 0 &&
+    previousCorrectIndex < previousOptions.length ?
+      previousOptions[previousCorrectIndex]
+    : "";
+  const nextCorrectAnswer =
+    Number.isInteger(nextCorrectIndex) &&
+    nextCorrectIndex >= 0 &&
+    nextCorrectIndex < nextOptions.length ?
+      nextOptions[nextCorrectIndex]
+    : "";
+
+  return (
+    previousCorrectIndex !== nextCorrectIndex ||
+    normalizeForMatch(previousCorrectAnswer) !==
+      normalizeForMatch(nextCorrectAnswer)
+  );
+}
+
+function enforceLearnFirstReviewDependencies(
+  previousQuestions,
+  nextQuestions,
+  { draftFormat = "QUESTIONS" } = {},
+) {
+  const normalizedDraftFormat = normalizeDraftFormat(draftFormat);
+  const compareCount = Math.min(
+    Array.isArray(previousQuestions) ? previousQuestions.length : 0,
+    Array.isArray(nextQuestions) ? nextQuestions.length : 0,
+  );
+
+  for (let index = 0; index < compareCount; index += 1) {
+    const previousQuestion = previousQuestions[index] || {};
+    const nextQuestion = nextQuestions[index] || {};
+    const previousLearningText = normalizeForMatch(
+      previousQuestion.learningText,
+    );
+    const nextLearningText = normalizeForMatch(nextQuestion.learningText);
+
+    if (
+      !previousLearningText ||
+      !nextLearningText ||
+      previousLearningText === nextLearningText
+    ) {
+      continue;
+    }
+
+    // WHY: Once the teaching note changes, the linked question must be revised
+    // too, otherwise the student can see stale prompts and answers that no
+    // longer match the updated instruction.
+    if (
+      normalizeForMatch(previousQuestion.prompt) ===
+      normalizeForMatch(nextQuestion.prompt)
+    ) {
+      throw createError(
+        400,
+        normalizedDraftFormat === "THEORY" ?
+          `Theory question ${index + 1} changed Learn First, so the prompt must be updated too.`
+        : `Question ${index + 1} changed Learn First, so the prompt must be updated too.`,
+      );
+    }
+
+    if (normalizedDraftFormat === "THEORY") {
+      if (
+        normalizeForMatch(previousQuestion.expectedAnswer) ===
+        normalizeForMatch(nextQuestion.expectedAnswer)
+      ) {
+        throw createError(
+          400,
+          `Theory question ${index + 1} changed Learn First, so the expected answer must be updated too.`,
+        );
+      }
+      continue;
+    }
+
+    if (!haveDraftOptionsChanged(previousQuestion, nextQuestion)) {
+      throw createError(
+        400,
+        `Question ${index + 1} changed Learn First, so the answer options must be updated too.`,
+      );
+    }
+
+    if (!hasDraftCorrectAnswerChanged(previousQuestion, nextQuestion)) {
+      throw createError(
+        400,
+        `Question ${index + 1} changed Learn First, so the correct answer must be updated too.`,
+      );
+    }
+  }
 }
 
 function normalizeLearningSections(sections) {
@@ -1540,6 +1649,18 @@ async function updateMission(teacherId, missionId, payload) {
     throw createError(404, "Mission not found.");
   }
 
+  const previousDraftFormat = String(mission.draftFormat || "QUESTIONS").trim()
+    .toUpperCase();
+  const previousQuestions = Array.isArray(mission.questions)
+    ? mission.questions.map((question) => ({
+        learningText: String(question?.learningText || ""),
+        prompt: String(question?.prompt || ""),
+        options: Array.isArray(question?.options) ? [...question.options] : [],
+        correctIndex: Number(question?.correctIndex),
+        expectedAnswer: String(question?.expectedAnswer || ""),
+      }))
+    : [];
+
   if (payload.sessionType !== undefined || payload.targetDate !== undefined) {
     const nextSessionType = String(
       payload.sessionType || mission.sessionType || "",
@@ -1667,9 +1788,20 @@ async function updateMission(teacherId, missionId, payload) {
         ? payload.questions
         : [];
     } else {
-      mission.questions = normalizeQuestions(payload.questions, {
+      const normalizedQuestions = normalizeQuestions(payload.questions, {
         draftFormat: mission.draftFormat,
       });
+      if (previousDraftFormat === mission.draftFormat) {
+        // WHY: Teachers can revise Learn First, but the saved prompt and answer
+        // set must be revised in the same save so student-facing content stays
+        // aligned with the updated teaching note.
+        enforceLearnFirstReviewDependencies(
+          previousQuestions,
+          normalizedQuestions,
+          { draftFormat: mission.draftFormat },
+        );
+      }
+      mission.questions = normalizedQuestions;
     }
   }
 
