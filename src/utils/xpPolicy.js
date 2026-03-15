@@ -11,9 +11,13 @@
  */
 
 const PERFORMANCE_DAILY_CAP = 100;
-const ATTENDANCE_XP = 20;
+const DAILY_LOGIN_XP = 20;
+const ATTENDANCE_XP = DAILY_LOGIN_XP;
 const DAILY_CHALLENGE_MAX_XP = 30;
 const ASSESSMENT_MAX_XP = 50;
+const THEORY_XP_REWARD = ASSESSMENT_MAX_XP;
+const OBJECTIVE_FIXED_XP_REWARD = DAILY_CHALLENGE_MAX_XP;
+const ESSAY_BUILDER_XP_REWARD = 20;
 
 const TARGET_STAR_XP = 5;
 const TARGET_MAX_STARS = 3;
@@ -132,6 +136,71 @@ function isAssessmentQuestionCount(questionCount) {
   return Number(questionCount) >= 10;
 }
 
+function normalizeMissionDraftFormat(draftFormat) {
+  return String(draftFormat || "QUESTIONS")
+    .trim()
+    .toUpperCase();
+}
+
+function resolveMissionRewardPolicy({
+  draftFormat = "QUESTIONS",
+  questionCount = 0,
+} = {}) {
+  const normalizedDraftFormat = normalizeMissionDraftFormat(draftFormat);
+  const normalizedQuestionCount = Math.max(0, Number(questionCount || 0));
+
+  if (normalizedDraftFormat === "THEORY") {
+    return {
+      awardMode: "teacher_review",
+      draftFormat: normalizedDraftFormat,
+      questionCount: normalizedQuestionCount,
+      xpReward: THEORY_XP_REWARD,
+    };
+  }
+
+  if (normalizedDraftFormat === "ESSAY_BUILDER") {
+    return {
+      awardMode: "fixed_completion",
+      draftFormat: normalizedDraftFormat,
+      questionCount: normalizedQuestionCount,
+      xpReward: ESSAY_BUILDER_XP_REWARD,
+    };
+  }
+
+  if (isAssessmentQuestionCount(normalizedQuestionCount)) {
+    return {
+      awardMode: "score_percent",
+      draftFormat: normalizedDraftFormat,
+      questionCount: normalizedQuestionCount,
+      xpReward: ASSESSMENT_MAX_XP,
+    };
+  }
+
+  return {
+    awardMode: "fixed_completion",
+    draftFormat: normalizedDraftFormat,
+    questionCount: normalizedQuestionCount,
+    xpReward: OBJECTIVE_FIXED_XP_REWARD,
+  };
+}
+
+function resolveDailyLoginXp({ student, dateKey }) {
+  const awardDateKey = String(student?.lastDailyLoginXpDateKey || "").trim();
+  const normalizedDateKey = String(dateKey || "").trim();
+  const awardedAt = student?.lastDailyLoginXpAwardedAt
+    ? new Date(student.lastDailyLoginXpAwardedAt)
+    : null;
+  const awardedAtDateKey = awardedAt ? getDateKey(awardedAt) : "";
+
+  // WHY: The first successful login of the day grants one fixed bonus, so the
+  // summary and later mission totals must read from the same persisted award.
+  return awardDateKey &&
+      awardDateKey === normalizedDateKey &&
+      awardedAtDateKey === normalizedDateKey
+    ? DAILY_LOGIN_XP
+    : 0;
+}
+
 function calculateChallengeXp(scorePercentage) {
   const score = clampNumber(scorePercentage, 0, 100);
   return roundNumber(DAILY_CHALLENGE_MAX_XP * (score / 100));
@@ -212,9 +281,13 @@ function calculateCompletionPercentage({
 
 module.exports = {
   PERFORMANCE_DAILY_CAP,
+  DAILY_LOGIN_XP,
   ATTENDANCE_XP,
   DAILY_CHALLENGE_MAX_XP,
   ASSESSMENT_MAX_XP,
+  THEORY_XP_REWARD,
+  OBJECTIVE_FIXED_XP_REWARD,
+  ESSAY_BUILDER_XP_REWARD,
   TARGET_STAR_XP,
   TARGET_MAX_STARS,
   TARGET_DAILY_CAP,
@@ -236,6 +309,9 @@ module.exports = {
   getWeekKey,
   getWeekBounds,
   isAssessmentQuestionCount,
+  normalizeMissionDraftFormat,
+  resolveMissionRewardPolicy,
+  resolveDailyLoginXp,
   calculateChallengeXp,
   calculateAssessmentXp,
   calculateTargetStarXp,

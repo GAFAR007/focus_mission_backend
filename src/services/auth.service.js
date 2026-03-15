@@ -14,11 +14,16 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 
+const SessionLog = require("../models/SessionLog");
 const User = require("../models/User");
 const {
   getCalendarDayDifference,
   serializeJourney,
 } = require("../utils/userJourney");
+const {
+  DAILY_LOGIN_XP,
+  getDateKey,
+} = require("../utils/xpPolicy");
 
 const PUBLIC_DEMO_ACCOUNT_LIMIT = 24;
 
@@ -112,7 +117,10 @@ async function login({ email, password }) {
   }
 
   const now = new Date();
+  const dateKey = getDateKey(now);
   let shouldSave = false;
+  let dailyLoginRewardGranted = false;
+  let dailyLoginXpAwarded = 0;
 
   if (!user.firstLoginAt) {
     // WHY: The first successful login defines the start of the learner journey
@@ -141,6 +149,29 @@ async function login({ email, password }) {
     shouldSave = true;
   }
 
+  if (
+    user.role === "student" &&
+    String(user.lastDailyLoginXpDateKey || "").trim() !== dateKey
+  ) {
+    const legacyAttendanceRewardExists = await SessionLog.exists({
+      studentId: user._id,
+      dateKey,
+      attendanceXpAwarded: { $gt: 0 },
+    });
+
+    // WHY: The first successful student login of the day should immediately
+    // grant the daily bonus so the dashboard reflects today's progress before
+    // any mission is started.
+    if (!legacyAttendanceRewardExists) {
+      user.xp = Math.max(0, Number(user.xp || 0) + DAILY_LOGIN_XP);
+      dailyLoginRewardGranted = true;
+      dailyLoginXpAwarded = DAILY_LOGIN_XP;
+      user.lastDailyLoginXpAwardedAt = now;
+    }
+    user.lastDailyLoginXpDateKey = dateKey;
+    shouldSave = true;
+  }
+
   if (shouldSave) {
     await user.save();
   }
@@ -160,6 +191,11 @@ async function login({ email, password }) {
   return {
     token,
     user: serializeUser(user),
+    loginMeta: {
+      dailyLoginRewardGranted,
+      dailyLoginXpAwarded,
+      dateKey,
+    },
   };
 }
 

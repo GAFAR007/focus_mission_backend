@@ -9,6 +9,8 @@
  * Normalize mission questions, map subject metadata, and build a fallback bank
  * mission when no saved teacher mission is available.
  */
+const { resolveMissionRewardPolicy } = require("./xpPolicy");
+
 function serializeMissionQuestion(question, index = 0, draftFormat = "QUESTIONS") {
   const options = Array.isArray(question.options) ? question.options : [];
   const normalizedDraftFormat = String(draftFormat || "QUESTIONS")
@@ -69,7 +71,10 @@ function serializeMission(mission) {
   const scorePercent = scoreTotal > 0
     ? Math.round((scoreCorrect / scoreTotal) * 100)
     : 0;
-  const xpReward = Number(mission.xpReward || 20);
+  const xpReward = resolveMissionRewardPolicy({
+    draftFormat: mission.draftFormat || "QUESTIONS",
+    questionCount,
+  }).xpReward;
   const xpEarned = Math.max(
     0,
     Math.min(Number(mission.latestXpEarned || 0), xpReward),
@@ -146,7 +151,10 @@ function buildQuestionBankMission({
     sessionType,
     difficulty,
     taskCodes: [],
-    xpReward: 20,
+    xpReward: resolveMissionRewardPolicy({
+      draftFormat: "QUESTIONS",
+      questionCount: questions.length,
+    }).xpReward,
     xpEarned: 0,
     scoreCorrect: 0,
     scoreTotal: questions.length,

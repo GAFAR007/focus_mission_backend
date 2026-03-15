@@ -50,6 +50,8 @@ const {
   getNow,
   getWeekKey,
   isAssessmentQuestionCount,
+  resolveDailyLoginXp,
+  resolveMissionRewardPolicy,
 } = require("../utils/xpPolicy");
 
 function createError(statusCode, message) {
@@ -412,16 +414,31 @@ function serializeStudent(student) {
   };
 }
 
-function summarizeDailyPerformance(sessionLogs) {
-  const attendanceXp = clampNumber(
-    sessionLogs.some((session) => Number(session.attendanceXpAwarded || 0) > 0)
+function summarizeDailyPerformance({
+  student,
+  dateKey,
+  sessionLogs,
+}) {
+  const safeSessionLogs = Array.isArray(sessionLogs) ? sessionLogs : [];
+  const legacyAttendanceXp = clampNumber(
+    safeSessionLogs.some((session) => Number(session.attendanceXpAwarded || 0) > 0)
       ? ATTENDANCE_XP
       : 0,
     0,
     ATTENDANCE_XP,
   );
+  const dailyLoginXp = clampNumber(
+    resolveDailyLoginXp({ student, dateKey }),
+    0,
+    ATTENDANCE_XP,
+  );
+  const attendanceXp = clampNumber(
+    Math.max(dailyLoginXp, legacyAttendanceXp),
+    0,
+    ATTENDANCE_XP,
+  );
   const challengeXp = clampNumber(
-    sessionLogs.reduce(
+    safeSessionLogs.reduce(
       (sum, session) => sum + Number(session.challengeXpAwarded || 0),
       0,
     ),
@@ -429,7 +446,7 @@ function summarizeDailyPerformance(sessionLogs) {
     DAILY_CHALLENGE_MAX_XP,
   );
   const assessmentXp = clampNumber(
-    sessionLogs.reduce(
+    safeSessionLogs.reduce(
       (sum, session) => sum + Number(session.assessmentXpAwarded || 0),
       0,
     ),
@@ -442,36 +459,35 @@ function summarizeDailyPerformance(sessionLogs) {
     assessmentXp,
   });
   const performanceXpFinal = clampNumber(
-    sessionLogs.reduce((maxValue, session) => {
-      const cumulative = Number(
-        session.performanceXpCumulative ||
-          session.performanceXpAwarded ||
-          session.xpAwarded ||
-          0,
-      );
-      return Math.max(maxValue, cumulative);
-    }, 0),
+    Math.max(
+      attendanceXp,
+      safeSessionLogs.reduce((maxValue, session) => {
+        const cumulative = Number(
+          session.performanceXpCumulative ||
+            session.performanceXpAwarded ||
+            session.xpAwarded ||
+            0,
+        );
+        return Math.max(maxValue, cumulative);
+      }, 0),
+    ),
     0,
     PERFORMANCE_DAILY_CAP,
   );
 
   return {
+    dailyLoginXp,
     attendanceXp,
     challengeXp,
     assessmentXp,
     performanceXpBeforeStreak,
     performanceXpFinal,
-    performanceXpAwarded: clampNumber(
-      sessionLogs.reduce(
-        (sum, session) => sum + Number(session.performanceXpAwarded || 0),
-        0,
-      ),
-      0,
-      PERFORMANCE_DAILY_CAP,
-    ),
+    // WHY: Daily login XP now contributes before any lesson is started, so the
+    // awarded-so-far value should mirror the full current performance total.
+    performanceXpAwarded: performanceXpFinal,
     subjectCompletionBonusXp: Math.max(
       0,
-      sessionLogs.reduce(
+      safeSessionLogs.reduce(
         (sum, session) => sum + Number(session.subjectCompletionBonusXp || 0),
         0,
       ),
@@ -838,7 +854,11 @@ async function getDashboard(studentId) {
       applyAwards: true,
     }),
   ]);
-  const dayPerformance = summarizeDailyPerformance(todaySessionLogs);
+  const dayPerformance = summarizeDailyPerformance({
+    student,
+    dateKey,
+    sessionLogs: todaySessionLogs,
+  });
   const totalDailyXp = clampNumber(
     dayPerformance.performanceXpFinal + targetSummary.dailyTargetXp,
     0,
@@ -849,6 +869,7 @@ async function getDashboard(studentId) {
     student: serializeStudent(student),
     dailyXp: {
       dateKey,
+      dailyLoginXp: dayPerformance.dailyLoginXp,
       attendanceXp: dayPerformance.attendanceXp,
       challengeXp: dayPerformance.challengeXp,
       assessmentXp: dayPerformance.assessmentXp,
@@ -1065,6 +1086,10 @@ async function completeSession(payload) {
       const totalQuestions = Array.isArray(mission.questions)
         ? mission.questions.length
         : 0;
+      const rewardPolicy = resolveMissionRewardPolicy({
+        draftFormat: mission.draftFormat,
+        questionCount: totalQuestions,
+      });
       missionSubjectId = String(mission.subjectId || payload.subjectId);
 
       if (isEssayBuilder) {
@@ -1076,7 +1101,7 @@ async function completeSession(payload) {
         scorePercent = completedQuestions > 0
           ? Math.round((correctAnswers / completedQuestions) * 100)
           : 0;
-        challengeXpForSession = calculateChallengeXp(scorePercent);
+        challengeXpForSession = rewardPolicy.xpReward;
         xpAwarded = challengeXpForSession;
         resultPackageScoreCorrect = correctAnswers;
         resultPackageScoreTotal = missionQuestionCount;
@@ -1133,10 +1158,10 @@ async function completeSession(payload) {
           ? Math.round((correctAnswers / totalQuestions) * 100)
           : 0;
 
-        if (isAssessmentQuestionCount(totalQuestions)) {
+        if (rewardPolicy.awardMode === "score_percent") {
           assessmentXpForSession = calculateAssessmentXp(scorePercent);
         } else {
-          challengeXpForSession = calculateChallengeXp(scorePercent);
+          challengeXpForSession = rewardPolicy.xpReward;
         }
         xpAwarded = challengeXpForSession + assessmentXpForSession;
         resultPackageScoreCorrect = correctAnswers;
@@ -1153,11 +1178,16 @@ async function completeSession(payload) {
       ? Math.round((correctAnswers / completedQuestions) * 100)
       : 0;
 
-    if (isAssessmentQuestionCount(completedQuestions)) {
+    const rewardPolicy = resolveMissionRewardPolicy({
+      draftFormat: "QUESTIONS",
+      questionCount: completedQuestions,
+    });
+    if (rewardPolicy.awardMode === "score_percent") {
       assessmentXpForSession = calculateAssessmentXp(scorePercent);
     } else {
-      challengeXpForSession = calculateChallengeXp(scorePercent);
+      challengeXpForSession = rewardPolicy.xpReward;
     }
+    xpAwarded = challengeXpForSession + assessmentXpForSession;
     resultPackageScoreCorrect = correctAnswers;
     resultPackageScoreTotal = missionQuestionCount;
   }
@@ -1244,14 +1274,13 @@ async function completeSession(payload) {
     throw createError(404, "Student not found.");
   }
 
-  const dayPerformance = summarizeDailyPerformance(todaySessionLogs);
-  const attendanceXpForSession =
-    isTheoryMission ? 0 : dayPerformance.attendanceXp > 0 ? 0 : ATTENDANCE_XP;
-  const nextAttendanceXp = clampNumber(
-    dayPerformance.attendanceXp + attendanceXpForSession,
-    0,
-    ATTENDANCE_XP,
-  );
+  const dayPerformance = summarizeDailyPerformance({
+    student,
+    dateKey,
+    sessionLogs: todaySessionLogs,
+  });
+  const attendanceXpForSession = 0;
+  const nextAttendanceXp = clampNumber(dayPerformance.attendanceXp, 0, ATTENDANCE_XP);
   const nextChallengeXp = clampNumber(
     dayPerformance.challengeXp + challengeXpForSession,
     0,
@@ -1377,6 +1406,7 @@ async function completeSession(payload) {
     sessionLog,
     dailyXp: {
       dateKey,
+      dailyLoginXp: dayPerformance.dailyLoginXp,
       attendanceXp: nextAttendanceXp,
       challengeXp: nextChallengeXp,
       assessmentXp: nextAssessmentXp,

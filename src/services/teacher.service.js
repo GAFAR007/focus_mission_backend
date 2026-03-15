@@ -37,11 +37,10 @@ const {
 const { serializeMission } = require("../utils/missionSerializer");
 const { serializeJourney } = require("../utils/userJourney");
 const {
-  ATTENDANCE_XP,
   clampNumber,
   getDateKey,
   getNow,
-  isAssessmentQuestionCount,
+  resolveMissionRewardPolicy,
 } = require("../utils/xpPolicy");
 
 const DRAFT_MISSIONS_LIMIT = 5;
@@ -180,16 +179,6 @@ function normalizeQuestionCount(value, { draftFormat = "QUESTIONS" } = {}) {
   return parsed;
 }
 
-function normalizeXpReward(value) {
-  const parsed = Number(value);
-
-  if (!Number.isInteger(parsed) || parsed < 10 || parsed > 50 || parsed % 5 !== 0) {
-    throw createError(400, "XP reward must be between 10 and 50 in steps of 5.");
-  }
-
-  return parsed;
-}
-
 function normalizeTaskCodes(taskCodes) {
   if (taskCodes === undefined) {
     return [];
@@ -231,14 +220,6 @@ function normalizeDraftFormat(value) {
   }
 
   return normalized;
-}
-
-function usesFixedReward(draftFormat, questionCount) {
-  return (
-    draftFormat === "ESSAY_BUILDER" ||
-    draftFormat === "THEORY" ||
-    isAssessmentQuestionCount(questionCount)
-  );
 }
 
 async function loadMissionCertificationSnapshot({ studentId, subjectId }) {
@@ -1124,17 +1105,8 @@ async function createSessionLog(payload) {
   const manualXpAwarded = Number.isFinite(Number(payload.xpAwarded))
     ? clampNumber(Number(payload.xpAwarded), 0, 50)
     : 0;
-  const markAttendance = payload.markAttendance !== false;
-  const attendanceAlreadyAwarded = await SessionLog.exists({
-    studentId: payload.studentId,
-    dateKey,
-    attendanceXpAwarded: { $gt: 0 },
-  });
-  // WHY: Attendance is a one-time daily reward, so repeated session saves in
-  // the same day should not inflate attendance XP.
-  const attendanceXpAwarded =
-    markAttendance && !attendanceAlreadyAwarded ? ATTENDANCE_XP : 0;
-  const totalXpAwarded = attendanceXpAwarded + manualXpAwarded;
+  const attendanceXpAwarded = 0;
+  const totalXpAwarded = manualXpAwarded;
 
   const sessionLog = await SessionLog.create({
     ...payload,
@@ -1396,11 +1368,10 @@ async function generateMission(teacherId, payload) {
   const questionCount = normalizeQuestionCount(payload.questionCount || 5, {
     draftFormat,
   });
-  const xpReward = usesFixedReward(draftFormat, questionCount)
-    // WHY: Essay, theory, and assessment formats use fixed 50 XP so reward
-    // expectations stay predictable across those guided mission types.
-    ? 50
-    : normalizeXpReward(payload.xpReward || 20);
+  const xpReward = resolveMissionRewardPolicy({
+    draftFormat,
+    questionCount,
+  }).xpReward;
   const normalizedTaskCodes = normalizeTaskCodes(payload.taskCodes);
   const unitText = payload.unitText.trim();
   const draftBase = {
@@ -1498,11 +1469,10 @@ async function previewMission(teacherId, payload) {
   const questionCount = normalizeQuestionCount(payload.questionCount || 5, {
     draftFormat,
   });
-  const xpReward = usesFixedReward(draftFormat, questionCount)
-    // WHY: Fixed-reward formats keep a stable 50 XP contract regardless of
-    // how many questions or sentences the teacher selects.
-    ? 50
-    : normalizeXpReward(payload.xpReward || 20);
+  const xpReward = resolveMissionRewardPolicy({
+    draftFormat,
+    questionCount,
+  }).xpReward;
   const normalizedTaskCodes = normalizeTaskCodes(payload.taskCodes);
   const unitText = payload.unitText.trim();
   const draftBase = {
@@ -1727,18 +1697,12 @@ async function updateMission(teacherId, missionId, payload) {
   }
 
   if (payload.xpReward !== undefined) {
-    if (
-      usesFixedReward(
-        mission.draftFormat,
-        Array.isArray(mission.questions) ? mission.questions.length : 0,
-      )
-    ) {
-      // WHY: Essay, theory, and assessment rewards are fixed by policy, so
-      // manual XP edits must not override the 50 XP contract.
-      mission.xpReward = 50;
-    } else {
-      mission.xpReward = normalizeXpReward(payload.xpReward);
-    }
+    // WHY: Mission rewards now come from one backend-owned policy so stored XP
+    // cannot drift away from the draft format and question count.
+    mission.xpReward = resolveMissionRewardPolicy({
+      draftFormat: mission.draftFormat,
+      questionCount: Array.isArray(mission.questions) ? mission.questions.length : 0,
+    }).xpReward;
   }
 
   if (payload.sourceFileName !== undefined) {
@@ -1756,9 +1720,10 @@ async function updateMission(teacherId, missionId, payload) {
     mission.essayMode = mission.draftFormat === "ESSAY_BUILDER"
       ? normalizeEssayMode(payload.essayMode)
       : null;
-    if (usesFixedReward(mission.draftFormat, mission.questions.length)) {
-      mission.xpReward = 50;
-    }
+    mission.xpReward = resolveMissionRewardPolicy({
+      draftFormat: mission.draftFormat,
+      questionCount: mission.questions.length,
+    }).xpReward;
     if (mission.draftFormat === "ESSAY_BUILDER" && payload.questions === undefined) {
       mission.questions = [];
     }
@@ -1805,20 +1770,17 @@ async function updateMission(teacherId, missionId, payload) {
     }
   }
 
-  if (
-    usesFixedReward(
-      mission.draftFormat,
-      Array.isArray(mission.questions) ? mission.questions.length : 0,
-    )
-  ) {
-    // WHY: Assessment-mode rewards are fixed at 50 XP so score-based scaling
-    // remains predictable and aligned with guided mission policies.
-    mission.xpReward = 50;
-  }
+  mission.xpReward = resolveMissionRewardPolicy({
+    draftFormat: mission.draftFormat,
+    questionCount: Array.isArray(mission.questions) ? mission.questions.length : 0,
+  }).xpReward;
 
   if (mission.draftFormat === "ESSAY_BUILDER") {
     mission.essayMode = normalizeEssayMode(mission.essayMode || "NORMAL");
-    mission.xpReward = 50;
+    mission.xpReward = resolveMissionRewardPolicy({
+      draftFormat: mission.draftFormat,
+      questionCount: Array.isArray(mission.questions) ? mission.questions.length : 0,
+    }).xpReward;
   }
 
   if (!mission.latestResultPackageId) {

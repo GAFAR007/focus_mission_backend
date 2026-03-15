@@ -144,6 +144,19 @@ const userSchema = new mongoose.Schema(
       // WHY: Login-day tracking supports ADHD-friendly continuity without
       // conflating attendance with assessment completion.
     },
+    lastDailyLoginXpDateKey: {
+      type: String,
+      default: "",
+      trim: true,
+      // WHY: Daily login XP is once per calendar day, so the awarded date key
+      // must be persisted to keep bonus grants idempotent across sessions.
+    },
+    lastDailyLoginXpAwardedAt: {
+      type: Date,
+      default: null,
+      // WHY: The bonus timestamp keeps the daily login reward auditable even
+      // though it is no longer attached to a lesson session row.
+    },
     preferredDifficulty: {
       type: String,
       enum: ["easy", "medium", "hard"],

@@ -18,6 +18,7 @@ const SessionLog = require("../models/SessionLog");
 const SendLog = require("../models/SendLog");
 const User = require("../models/User");
 const subjectCertificationService = require("./subjectCertification.service");
+const { resolveMissionRewardPolicy } = require("../utils/xpPolicy");
 
 let retryWorkerHandle = null;
 let retryWorkerRunning = false;
@@ -37,6 +38,15 @@ function countWords(value) {
     .trim()
     .split(/\s+/)
     .filter(Boolean).length;
+}
+
+function resolveMissionXpMax(mission) {
+  return Number(
+    resolveMissionRewardPolicy({
+      draftFormat: mission?.draftFormat,
+      questionCount: Array.isArray(mission?.questions) ? mission.questions.length : 0,
+    }).xpReward || THEORY_XP_MAX_FALLBACK,
+  );
 }
 
 function toOptionLetter(index) {
@@ -2493,7 +2503,7 @@ async function createResultPackageForCompletion({
           resultEvidence
             ?.theoryResponses ||
           [],
-        xpMax: Number(mission?.xpReward || THEORY_XP_MAX_FALLBACK),
+        xpMax: resolveMissionXpMax(mission),
       })
     : buildQuestionEvidence({
         missionQuestions:
@@ -2745,8 +2755,7 @@ async function ensureResultPackageForMission({
         scorePercent:
           scoreSnapshot.scorePercent,
         xpAwarded,
-        xpMax:
-          Number(mission?.xpReward || THEORY_XP_MAX_FALLBACK),
+        xpMax: resolveMissionXpMax(mission),
       })
     : buildLegacyQuestionEvidence({
         missionQuestions:
@@ -3012,7 +3021,7 @@ async function scoreTheoryResultPackage({
   });
   const xpMax = Math.max(
     0,
-    Number(mission?.xpReward || evidence?.xpMax || THEORY_XP_MAX_FALLBACK),
+    Number(resolveMissionXpMax(mission) || evidence?.xpMax || THEORY_XP_MAX_FALLBACK),
   );
   const scoreOutcome = buildTheoryScoreOutcome({
     scoredQuestions,
