@@ -1394,7 +1394,9 @@ async function generateMission(teacherId, payload) {
   const generated = draftFormat === "ESSAY_BUILDER"
     ? await generateEssayBuilderDraft(draftBase)
     : await generateMissionWithGroq(draftBase);
-  const normalizedQuestions = draftFormat === "THEORY"
+  const normalizedQuestions = draftFormat === "ESSAY_BUILDER"
+    ? []
+    : draftFormat === "THEORY"
     ? buildTheoryQuestionsFromGenerated(generated.questions || [])
     : normalizeQuestions(generated.questions || [], { draftFormat });
   const certificationSnapshot = await loadMissionCertificationSnapshot({
@@ -1494,7 +1496,9 @@ async function previewMission(teacherId, payload) {
   const generated = draftFormat === "ESSAY_BUILDER"
     ? await generateEssayBuilderDraft(draftBase)
     : await generateMissionWithGroq(draftBase);
-  const normalizedQuestions = draftFormat === "THEORY"
+  const normalizedQuestions = draftFormat === "ESSAY_BUILDER"
+    ? []
+    : draftFormat === "THEORY"
     ? buildTheoryQuestionsFromGenerated(generated.questions || [])
     : normalizeQuestions(generated.questions || [], { draftFormat });
 
