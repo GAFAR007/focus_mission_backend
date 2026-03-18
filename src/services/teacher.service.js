@@ -11,6 +11,7 @@
  * persist approved learning content and blocks when the teacher explicitly
  * approves the draft.
  */
+const bcrypt = require("bcryptjs");
 const Block = require("../models/Block");
 const Criterion = require("../models/Criterion");
 const LearningContent = require("../models/LearningContent");
@@ -45,6 +46,7 @@ const {
 
 const DRAFT_MISSIONS_LIMIT = 5;
 const RECENT_MISSIONS_HISTORY_LIMIT = 50;
+const TEACHER_RESULTS_HISTORY_LIMIT = 60;
 const THEORY_QUESTION_COUNT_MIN = 2;
 const THEORY_QUESTION_COUNT_MAX = 5;
 const WEEKDAY_OPTIONS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
@@ -53,6 +55,36 @@ function createError(statusCode, message) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+function normalizeEmail(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase();
+}
+
+function serializeUser(user) {
+  return {
+    id: String(user?._id || ""),
+    name: String(user?.name || ""),
+    email: String(user?.email || ""),
+    role: String(user?.role || ""),
+    subjectSpecialty: String(user?.subjectSpecialty || ""),
+    isPlaceholder: Boolean(user?.isPlaceholder),
+    avatar: String(user?.avatar || ""),
+    avatarSeed: String(user?.avatarSeed || ""),
+    xp: Number(user?.xp || 0),
+    streak: Number(user?.streak || 0),
+    streakBadgeUnlocked: Boolean(user?.streakBadgeUnlocked),
+    firstLoginAt: user?.firstLoginAt || null,
+    lastLoginAt: user?.lastLoginAt || null,
+    loginDayCount: Number(user?.loginDayCount || 0),
+    daysSinceFirstLogin: 0,
+    preferredDifficulty: String(user?.preferredDifficulty || ""),
+    assignedStudents: Array.isArray(user?.assignedStudents)
+      ? user.assignedStudents.map((value) => String(value || ""))
+      : [],
+  };
 }
 
 function getCurrentDay() {
@@ -909,6 +941,72 @@ async function listStudents(teacherId) {
     .lean();
 }
 
+async function createStudent({
+  teacherId,
+  payload,
+}) {
+  const teacher = await User.findOne({
+    _id: teacherId,
+    role: "teacher",
+  })
+    .select("assignedStudents")
+    .lean();
+
+  if (!teacher) {
+    throw createError(404, "Teacher not found.");
+  }
+
+  const name = String(payload?.name || "").trim();
+  const email = normalizeEmail(payload?.email);
+  const password = String(payload?.password || "");
+
+  if (!name) {
+    throw createError(400, "Name is required.");
+  }
+
+  if (!email || !email.includes("@")) {
+    throw createError(400, "Valid email is required.");
+  }
+
+  if (password.length < 8) {
+    // WHY: Teacher-created student accounts need the same minimum password
+    // floor as management-created users so classroom onboarding does not
+    // create weak credentials.
+    throw createError(400, "Password must be at least 8 characters.");
+  }
+
+  const existingUser = await User.findOne({ email })
+    .select("_id")
+    .lean();
+  if (existingUser) {
+    throw createError(409, "A user with this email already exists.");
+  }
+
+  const passwordHash = await bcrypt.hash(password, 10);
+  const createdUser = await User.create({
+    name,
+    email,
+    passwordHash,
+    role: "student",
+    subjectSpecialty: "",
+    isPlaceholder: false,
+  });
+
+  // WHY: A teacher-created learner must be assigned immediately so the teacher
+  // can open that student in the same workspace without waiting for management.
+  await User.findByIdAndUpdate(teacherId, {
+    $addToSet: { assignedStudents: createdUser._id },
+  });
+
+  console.info("[teacher] student_created", {
+    teacherId: String(teacherId || ""),
+    studentId: String(createdUser._id || ""),
+  });
+
+  const freshUser = await User.findById(createdUser._id).lean();
+  return serializeUser(freshUser || createdUser);
+}
+
 async function listSubjects(teacherId) {
   const teacher = await User.findOne({
     _id: teacherId,
@@ -973,6 +1071,48 @@ async function listSubjects(teacherId) {
   return subjects.filter(
     (subject) => normalizeForMatch(subject.name) === specialty,
   );
+}
+
+async function resolveTeacherSubjectIdsForStudent({
+  teacher,
+  teacherId,
+  studentId,
+}) {
+  const timetableEntries = await Timetable.find({
+    studentId,
+    $or: [
+      { morningTeacherId: teacherId },
+      { afternoonTeacherId: teacherId },
+    ],
+  })
+    .select(
+      "morningSubject afternoonSubject morningTeacherId afternoonTeacherId",
+    )
+    .lean();
+  const subjectIds = collectSubjectIdsForTeacherTimetables({
+    timetables: timetableEntries,
+    teacherId,
+  });
+
+  if (subjectIds.length > 0) {
+    return subjectIds;
+  }
+
+  const specialty = normalizeForMatch(teacher?.subjectSpecialty);
+  if (!specialty) {
+    return [];
+  }
+
+  const matchingSubjects = await Subject.find({})
+    .select("_id name")
+    .lean();
+
+  return matchingSubjects
+    .filter(
+      (subject) => normalizeForMatch(subject.name) === specialty,
+    )
+    .map((subject) => String(subject._id || "").trim())
+    .filter(Boolean);
 }
 
 async function createTimetable(payload) {
@@ -1098,6 +1238,59 @@ async function updateTimetableSlot({ teacherId, studentId, payload }) {
     .lean();
 
   return serializeTimetableEntry(saved);
+}
+
+async function listStudentResults({
+  teacherId,
+  studentId,
+}) {
+  const teacher = await assertTeacherOwnsStudent(teacherId, studentId);
+  const subjectIds = await resolveTeacherSubjectIdsForStudent({
+    teacher,
+    teacherId,
+    studentId,
+  });
+
+  if (subjectIds.length === 0) {
+    // WHY: Result history should stay limited to subjects the teacher owns for
+    // this learner rather than widening access when no valid subject scope is found.
+    return [];
+  }
+
+  const missions = await Mission.find({
+    studentId,
+    subjectId: { $in: subjectIds },
+    $or: [
+      { status: "published" },
+      { status: { $exists: false } },
+    ],
+    latestResultPackageId: {
+      $exists: true,
+      $ne: null,
+    },
+  })
+    .sort({
+      publishedAt: -1,
+      createdAt: -1,
+    })
+    .limit(TEACHER_RESULTS_HISTORY_LIMIT)
+    .populate("subjectId", "name icon color")
+    .lean();
+
+  console.info("[teacher] list student results", {
+    teacherId: String(teacherId || ""),
+    studentId: String(studentId || ""),
+    subjectCount: subjectIds.length,
+    resultCount: missions.length,
+  });
+
+  return missions
+    .map(serializeMission)
+    .filter(
+      (mission) => String(
+        mission.latestResultPackageId || "",
+      ).trim().length > 0,
+    );
 }
 
 async function createSessionLog(payload) {
@@ -1912,8 +2105,10 @@ async function reextractMissionSource(teacherId, missionId) {
 }
 
 module.exports = {
+  createStudent,
   listStudents,
   listSubjects,
+  listStudentResults,
   createTimetable,
   updateTimetableSlot,
   createSessionLog,

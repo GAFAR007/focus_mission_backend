@@ -74,10 +74,34 @@ async function getStudents(req, res, next) {
   }
 }
 
+async function createStudent(req, res, next) {
+  try {
+    const user = await teacherService.createStudent({
+      teacherId: req.user.id,
+      payload: req.body,
+    });
+    res.status(201).json({ user });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function getSubjects(req, res, next) {
   try {
     const subjects = await teacherService.listSubjects(req.user.id);
     res.json({ subjects });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getStudentResults(req, res, next) {
+  try {
+    const missions = await teacherService.listStudentResults({
+      teacherId: req.user.id,
+      studentId: req.params.id,
+    });
+    res.json({ missions });
   } catch (error) {
     next(error);
   }
@@ -518,8 +542,10 @@ async function getResultScreenshot(req, res, next) {
 }
 
 module.exports = {
+  createStudent,
   getStudents,
   getSubjects,
+  getStudentResults,
   getStudentCertification,
   updateStudentCertificationPlan,
   createTimetable,
