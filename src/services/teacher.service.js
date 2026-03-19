@@ -139,6 +139,20 @@ function normalizeForMatch(value) {
     .trim();
 }
 
+function dedupeTextList(items) {
+  const unique = [];
+
+  for (const item of Array.isArray(items) ? items : []) {
+    const value = String(item || "").trim();
+    if (!value || unique.includes(value)) {
+      continue;
+    }
+    unique.push(value);
+  }
+
+  return unique;
+}
+
 function collectSubjectIdsForTeacherTimetables({ timetables, teacherId }) {
   const subjectIds = new Set();
   const normalizedTeacherId = String(teacherId || "").trim();
@@ -175,6 +189,169 @@ function countWords(value) {
     .trim()
     .split(/\s+/)
     .filter(Boolean).length;
+}
+
+function countSentenceLikeParts(value) {
+  return String(value || "")
+    .split(/[.!?]\s+|\n+/)
+    .map((part) => String(part || "").trim())
+    .filter(Boolean).length;
+}
+
+function countPatternMatches(value, pattern) {
+  const matches = String(value || "").match(pattern);
+  return Array.isArray(matches) ? matches.length : 0;
+}
+
+function parseTaskCodeUploadField(value) {
+  if (Array.isArray(value)) {
+    return normalizeTaskCodes(value);
+  }
+
+  const rawValue = String(value || "").trim();
+  if (!rawValue) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    if (Array.isArray(parsed)) {
+      return normalizeTaskCodes(parsed);
+    }
+  } catch (_error) {
+    // WHY: Multipart form fields arrive as strings, so a non-JSON value should
+    // still fall back to comma-separated parsing instead of failing silently.
+  }
+
+  return normalizeTaskCodes(rawValue.split(","));
+}
+
+function buildMissionSourceReadinessSummary({
+  status,
+  missingRequirements,
+  warningNotes,
+  draftFormat,
+}) {
+  if (status === "ready" && warningNotes.length === 0) {
+    if (draftFormat === "ESSAY_BUILDER") {
+      return "The uploaded file is ready to prefill an essay-builder draft with Learn First guidance.";
+    }
+
+    if (draftFormat === "THEORY") {
+      return "The uploaded file is ready to prefill a theory draft with Learn First guidance and teacher review answers.";
+    }
+
+    return "The uploaded file is ready to prefill a question draft with Learn First guidance.";
+  }
+
+  if (missingRequirements.length > 0) {
+    return "The upload needs a few missing teaching details before it can reliably prefill the full draft.";
+  }
+
+  return "The upload is usable, but review the notes below before you publish the draft.";
+}
+
+function inspectUploadedMissionSource({
+  sourceText,
+  draftFormat,
+  taskCodes,
+}) {
+  const normalizedDraftFormat = normalizeDraftFormat(draftFormat);
+  const normalizedTaskCodes = normalizeTaskCodes(taskCodes);
+  const detectedSignals = [];
+  const missingRequirements = [];
+  const warningNotes = [];
+  const wordCount = countWords(sourceText);
+  const sentenceCount = countSentenceLikeParts(sourceText);
+  const questionSignalCount = countPatternMatches(
+    sourceText,
+    /(?:^|\n)\s*(?:q(?:uestion)?\s*\d+|[0-9]+\.)|[?]/gim,
+  );
+  const instructionSignalCount = countPatternMatches(
+    sourceText,
+    /\b(?:choose|select|explain|describe|state|identify|compare|write|complete|calculate|answer)\b/gi,
+  );
+  const optionSignalCount = countPatternMatches(
+    sourceText,
+    /(?:^|\n)\s*[A-D][\).:-]\s+\S+/gm,
+  );
+
+  if (wordCount >= 80) {
+    detectedSignals.push(
+      `Readable source text extracted (${wordCount} words).`,
+    );
+  }
+
+  if (wordCount >= 120 && sentenceCount >= 3) {
+    detectedSignals.push(
+      "Enough teaching text was found to build Learn First guidance.",
+    );
+  } else {
+    // WHY: Learn First must be grounded in real uploaded lesson content so the
+    // mission does not test facts that were never taught first.
+    missingRequirements.push(
+      "Add more clear unit teaching text so Learn First can be written from the upload.",
+    );
+  }
+
+  if (questionSignalCount > 0 || instructionSignalCount > 0) {
+    detectedSignals.push(
+      "Question or instruction cues were detected in the uploaded file.",
+    );
+  } else {
+    warningNotes.push(
+      "No clear question prompts or instructions were detected. Groq can still draft from the lesson text, but review every prompt carefully.",
+    );
+  }
+
+  if (normalizedDraftFormat === "QUESTIONS" && optionSignalCount > 0) {
+    detectedSignals.push(
+      "Answer-option structure was detected for objective drafting.",
+    );
+  }
+
+  if (normalizedDraftFormat === "QUESTIONS" && optionSignalCount === 0) {
+    warningNotes.push(
+      "No A/B/C/D answer options were detected. The answer choices will be drafted from the uploaded lesson text.",
+    );
+  }
+
+  if (normalizedTaskCodes.length > 0) {
+    const matchedTaskCodes = normalizedTaskCodes.filter((taskCode) =>
+      new RegExp(`\\b${taskCode}\\b`, "i").test(sourceText),
+    );
+
+    if (matchedTaskCodes.length > 0) {
+      detectedSignals.push(
+        `Task-focus text detected for ${matchedTaskCodes.join(", ")}.`,
+      );
+    }
+
+    if (matchedTaskCodes.length !== normalizedTaskCodes.length) {
+      warningNotes.push(
+        "Some selected task codes were not found in the uploaded text. Check the task focus before publishing.",
+      );
+    }
+  }
+
+  const dedupedMissingRequirements =
+    dedupeTextList(missingRequirements);
+  const dedupedWarningNotes = dedupeTextList(warningNotes);
+  const status =
+    dedupedMissingRequirements.length > 0 ? "needs_attention" : "ready";
+
+  return {
+    status,
+    summary: buildMissionSourceReadinessSummary({
+      status,
+      missingRequirements: dedupedMissingRequirements,
+      warningNotes: dedupedWarningNotes,
+      draftFormat: normalizedDraftFormat,
+    }),
+    detectedSignals: dedupeTextList(detectedSignals),
+    missingRequirements: dedupedMissingRequirements,
+    warningNotes: dedupedWarningNotes,
+  };
 }
 
 function normalizeQuestionCount(value, { draftFormat = "QUESTIONS" } = {}) {
@@ -290,6 +467,26 @@ function normalizeEssayMode(value, { required = false } = {}) {
   }
 
   return normalized;
+}
+
+function resolveUploadedDraftQuestionCount({
+  requestedQuestionCount,
+  suggestedQuestionCount,
+  draftFormat,
+}) {
+  if (requestedQuestionCount !== undefined && requestedQuestionCount !== null) {
+    const rawRequested = String(requestedQuestionCount).trim();
+    if (rawRequested) {
+      return Number(rawRequested);
+    }
+  }
+
+  const normalizedDraftFormat = normalizeDraftFormat(draftFormat);
+  if (normalizedDraftFormat === "THEORY") {
+    return THEORY_QUESTION_COUNT_MAX;
+  }
+
+  return Number(suggestedQuestionCount || 5);
 }
 
 function buildTheoryQuestionsFromGenerated(questions) {
@@ -1382,6 +1579,59 @@ async function generateLearningAndBlocksDraft(teacherId, payload) {
   });
 }
 
+async function buildUploadedMissionFromSource({
+  teacherId,
+  subject,
+  extractedSource,
+  unitPlan,
+  payload,
+}) {
+  const studentId = String(payload.studentId || "").trim();
+  const targetDate = String(payload.targetDate || "").trim();
+
+  if (!studentId || !targetDate) {
+    return null;
+  }
+
+  const draftFormat = normalizeDraftFormat(payload.draftFormat);
+  const questionCount = resolveUploadedDraftQuestionCount({
+    requestedQuestionCount: payload.questionCount,
+    suggestedQuestionCount: unitPlan.suggestedQuestionCount,
+    draftFormat,
+  });
+  const essayMode = draftFormat === "ESSAY_BUILDER"
+    ? normalizeEssayMode(payload.essayMode || "NORMAL", { required: true })
+    : normalizeEssayMode(payload.essayMode);
+  const missionPayload = {
+    studentId,
+    subjectId: String(subject._id),
+    sessionType: String(payload.sessionType || "").trim().toLowerCase(),
+    targetDate,
+    title:
+      String(payload.title || "").trim() ||
+      unitPlan.suggestedMissionTitle ||
+      `${subject.name} Mission`,
+    unitText: extractedSource.extractedText,
+    sourceRawText: extractedSource.extractedText,
+    draftFormat,
+    essayMode,
+    difficulty: String(payload.difficulty || "medium").trim() || "medium",
+    questionCount,
+    taskCodes: parseTaskCodeUploadField(payload.taskCodes),
+    sourceFileName: extractedSource.fileName,
+    sourceFileType: extractedSource.mimeType,
+    missionDraftId: String(payload.missionDraftId || "").trim(),
+  };
+
+  if (missionPayload.missionDraftId) {
+    // WHY: Re-uploading onto an existing draft should refresh that draft in
+    // place instead of silently creating another saved draft record.
+    return previewMission(teacherId, missionPayload);
+  }
+
+  return generateMission(teacherId, missionPayload);
+}
+
 async function extractSourcePlan(teacherId, payload) {
   const [teacher, subject] = await Promise.all([
     User.findOne({ _id: teacherId, role: "teacher" })
@@ -1408,12 +1658,84 @@ async function extractSourcePlan(teacherId, payload) {
     );
   }
 
+  console.info("[teacher] source_plan_upload_start", {
+    teacherId: String(teacherId),
+    subjectId: String(subject._id),
+    sessionType: String(payload.sessionType || "").trim().toLowerCase(),
+    hasStudentContext:
+      String(payload.studentId || "").trim().length > 0 &&
+      String(payload.targetDate || "").trim().length > 0,
+  });
+
   const extractedSource = await extractTextFromUploadedSource(payload.file);
   const unitPlan = await planUnitFromSourceWithGroq({
     subjectName: subject.name,
     sessionType: payload.sessionType,
     sourceText: extractedSource.extractedText,
     fileName: extractedSource.fileName,
+  });
+  const draftReadiness = inspectUploadedMissionSource({
+    sourceText: extractedSource.extractedText,
+    draftFormat: payload.draftFormat,
+    taskCodes: parseTaskCodeUploadField(payload.taskCodes),
+  });
+  let prefilledMission = null;
+  let resolvedDraftReadiness = draftReadiness;
+
+  if (draftReadiness.status === "ready") {
+    try {
+      prefilledMission = await buildUploadedMissionFromSource({
+        teacherId,
+        subject,
+        extractedSource,
+        unitPlan,
+        payload,
+      });
+    } catch (error) {
+      const statusCode = Number(error?.statusCode || 0);
+
+      if ([400, 422, 502].includes(statusCode)) {
+        resolvedDraftReadiness = inspectUploadedMissionSource({
+          sourceText: extractedSource.extractedText,
+          draftFormat: payload.draftFormat,
+          taskCodes: parseTaskCodeUploadField(payload.taskCodes),
+        });
+        resolvedDraftReadiness = {
+          ...resolvedDraftReadiness,
+          status: "needs_attention",
+          missingRequirements: dedupeTextList([
+            ...resolvedDraftReadiness.missingRequirements,
+            String(error.message || "").trim() ||
+              "The uploaded file still needs a bit more lesson detail before the draft can be built.",
+          ]),
+        };
+        resolvedDraftReadiness = {
+          ...resolvedDraftReadiness,
+          summary: buildMissionSourceReadinessSummary({
+            status: resolvedDraftReadiness.status,
+            missingRequirements: resolvedDraftReadiness.missingRequirements,
+            warningNotes: resolvedDraftReadiness.warningNotes,
+            draftFormat: payload.draftFormat,
+          }),
+        };
+        console.warn("[teacher] source_plan_prefill_skipped", {
+          teacherId: String(teacherId),
+          subjectId: String(subject._id),
+          reason: String(error.message || ""),
+        });
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  console.info("[teacher] source_plan_upload_complete", {
+    teacherId: String(teacherId),
+    subjectId: String(subject._id),
+    readinessStatus: resolvedDraftReadiness.status,
+    missingRequirementCount:
+      resolvedDraftReadiness.missingRequirements.length,
+    prefilledMission: Boolean(prefilledMission),
   });
 
   return {
@@ -1425,6 +1747,8 @@ async function extractSourcePlan(teacherId, payload) {
       color: subject.color,
     },
     unitPlan,
+    draftReadiness: resolvedDraftReadiness,
+    prefilledMission,
   };
 }
 

@@ -325,6 +325,46 @@ router.post(
       .withMessage(
         "Session type must be morning or afternoon.",
       ),
+    body("studentId")
+      .optional()
+      .isMongoId()
+      .withMessage("Valid studentId is required."),
+    body("targetDate")
+      .optional()
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage("targetDate must use YYYY-MM-DD format."),
+    body("title")
+      .optional()
+      .isString()
+      .withMessage("title must be text."),
+    body("draftFormat")
+      .optional()
+      .isIn(["QUESTIONS", "THEORY", "ESSAY_BUILDER"])
+      .withMessage(
+        "draftFormat must be QUESTIONS, THEORY, or ESSAY_BUILDER.",
+      ),
+    body("essayMode")
+      .optional()
+      .isIn(["NORMAL", "STRETCH_15", "STRETCH_20"])
+      .withMessage(
+        "essayMode must be NORMAL, STRETCH_15, or STRETCH_20.",
+      ),
+    body("difficulty")
+      .optional()
+      .isIn(["easy", "medium", "hard"])
+      .withMessage("difficulty must be easy, medium, or hard."),
+    body("questionCount")
+      .optional()
+      .isInt({ min: 2, max: 10 })
+      .withMessage("questionCount must be between 2 and 10."),
+    body("taskCodes")
+      .optional()
+      .isString()
+      .withMessage("taskCodes must be a JSON string array."),
+    body("missionDraftId")
+      .optional()
+      .isString()
+      .withMessage("missionDraftId must be text."),
     validateRequest,
   ],
   teacherController.extractSourcePlan,
