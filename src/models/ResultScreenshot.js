@@ -1,13 +1,13 @@
 /**
  * WHAT:
- * ResultScreenshot stores teacher-captured result report screenshots uploaded
- * from the Flutter result report view.
+ * ResultScreenshot stores teacher-uploaded result evidence files from the
+ * Flutter result report view.
  * WHY:
- * Teachers can optionally attach screenshot evidence when sending result
- * packages, so the binary asset and ownership metadata must be persisted.
+ * Teachers may need to attach captured report screenshots or uploaded student
+ * work files, so the binary asset and ownership metadata must be persisted.
  * HOW:
- * Save image bytes and metadata keyed by result package and teacher, then serve
- * by id through a protected route.
+ * Save the uploaded bytes and metadata keyed by result package and teacher,
+ * then serve the file by id through a protected route.
  */
 
 const mongoose = require("mongoose");

@@ -474,12 +474,41 @@ async function getResultPackage(req, res, next) {
   }
 }
 
+async function createManualResultPackage(req, res, next) {
+  try {
+    const created =
+      await resultService.createManualResultPackageFromUpload({
+        teacherId: req.user.id,
+        missionId: req.params.missionId,
+        file: req.file,
+      });
+    res.status(201).json(created);
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function scoreTheoryResultPackage(req, res, next) {
   try {
     const scored = await resultService.scoreTheoryResultPackage({
       teacherId: req.user.id,
       resultPackageId: req.params.resultPackageId,
       questions: req.body.questions,
+    });
+    res.status(200).json(scored);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function scoreManualResultPackage(req, res, next) {
+  try {
+    const scored = await resultService.scoreManualResultPackage({
+      teacherId: req.user.id,
+      resultPackageId: req.params.resultPackageId,
+      scoreCorrect: req.body.scoreCorrect,
+      scoreTotal: req.body.scoreTotal,
+      teacherFeedback: req.body.teacherFeedback,
     });
     res.status(200).json(scored);
   } catch (error) {
@@ -567,7 +596,9 @@ module.exports = {
   getStudentSubjectAnalytics,
   getStudentBehaviourTrend,
   getResultPackage,
+  createManualResultPackage,
   scoreTheoryResultPackage,
+  scoreManualResultPackage,
   sendResultPackage,
   uploadResultScreenshot,
   getResultScreenshot,

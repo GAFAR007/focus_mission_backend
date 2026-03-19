@@ -10,6 +10,7 @@
  * attempt in-app/email delivery, and retry pending email sends on an interval.
  */
 
+const path = require("path");
 const Mission = require("../models/Mission");
 const PDFDocument = require("pdfkit");
 const ResultPackage = require("../models/ResultPackage");
@@ -28,6 +29,8 @@ const THEORY_REVIEW_PENDING = "pending_review";
 const THEORY_REVIEW_SCORED = "scored";
 const THEORY_XP_MAX_FALLBACK = 50;
 const THEORY_FEEDBACK_MAX_LENGTH = 1000;
+const MANUAL_REVIEW_FEEDBACK_MAX_LENGTH = 1000;
+const MANUAL_REVIEW_SCORE_TOTALS = [10, 30, 50, 100];
 
 function createError(statusCode, message) {
   const error = new Error(message);
@@ -192,6 +195,227 @@ function normalizeEmail(email) {
   return String(email || "")
     .trim()
     .toLowerCase();
+}
+
+function getFileExtension(fileName) {
+  return path.extname(String(fileName || "").trim()).toLowerCase();
+}
+
+function resolveUploadedResultEvidenceMimeType(file) {
+  const rawMimeType = String(file?.mimetype || "").trim().toLowerCase();
+  const extension = getFileExtension(file?.originalname);
+
+  if (rawMimeType.startsWith("image/")) {
+    return rawMimeType;
+  }
+
+  if (rawMimeType === "application/pdf") {
+    return rawMimeType;
+  }
+
+  if (extension === ".pdf") {
+    return "application/pdf";
+  }
+
+  if (extension === ".png") {
+    return "image/png";
+  }
+
+  if (extension === ".jpg" || extension === ".jpeg") {
+    return "image/jpeg";
+  }
+
+  if (extension === ".webp") {
+    return "image/webp";
+  }
+
+  if (extension === ".bmp") {
+    return "image/bmp";
+  }
+
+  return rawMimeType;
+}
+
+function normalizeManualResultReviewPayload({
+  scoreCorrect,
+  scoreTotal,
+  teacherFeedback,
+}) {
+  const normalizedScoreTotal = Number(scoreTotal);
+  if (!MANUAL_REVIEW_SCORE_TOTALS.includes(normalizedScoreTotal)) {
+    throw createError(
+      400,
+      "scoreTotal must be one of 10, 30, 50, or 100.",
+    );
+  }
+
+  const normalizedScoreCorrect = Number(scoreCorrect);
+  if (
+    !Number.isInteger(normalizedScoreCorrect) ||
+    normalizedScoreCorrect < 0 ||
+    normalizedScoreCorrect > normalizedScoreTotal
+  ) {
+    throw createError(
+      400,
+      "scoreCorrect must be a whole number between 0 and scoreTotal.",
+    );
+  }
+
+  const normalizedTeacherFeedback = String(teacherFeedback || "").trim();
+  if (normalizedTeacherFeedback.length > MANUAL_REVIEW_FEEDBACK_MAX_LENGTH) {
+    throw createError(
+      400,
+      `teacherFeedback must be ${MANUAL_REVIEW_FEEDBACK_MAX_LENGTH} characters or fewer.`,
+    );
+  }
+
+  return {
+    scoreCorrect: normalizedScoreCorrect,
+    scoreTotal: normalizedScoreTotal,
+    teacherFeedback: normalizedTeacherFeedback,
+  };
+}
+
+function resolveMissionType(mission) {
+  if (mission?.draftFormat === "ESSAY_BUILDER") {
+    return "ESSAY_BUILDER";
+  }
+  if (mission?.draftFormat === "THEORY") {
+    return "THEORY";
+  }
+  return "QUESTIONS";
+}
+
+function buildPendingManualResultEvidence({
+  mission,
+  teacherId,
+}) {
+  const missionType = resolveMissionType(mission);
+  const createdAt = new Date().toISOString();
+  let baseEvidence;
+
+  if (missionType === "ESSAY_BUILDER") {
+    baseEvidence = buildLegacyEssayEvidence({
+      draftJson: mission?.draftJson || {},
+    });
+  } else if (missionType === "THEORY") {
+    baseEvidence = buildLegacyTheoryEvidence({
+      missionQuestions: mission?.questions || [],
+      scoreTotal: 0,
+      scorePercent: 0,
+      xpAwarded: 0,
+      xpMax: resolveMissionXpMax(mission),
+    });
+  } else {
+    baseEvidence = buildLegacyQuestionEvidence({
+      missionQuestions: mission?.questions || [],
+      scoreCorrect: 0,
+      scoreTotal: 0,
+    });
+  }
+
+  return {
+    ...baseEvidence,
+    manualTeacherResult: true,
+    manualTeacherResultStatus: "pending_review",
+    manualTeacherResultReason:
+      "Teacher uploaded offline work because no digital result was available for this mission.",
+    manualTeacherResultCreatedAt: createdAt,
+    manualTeacherResultCreatedBy: String(teacherId || ""),
+    teacherReviewStatus: "pending",
+    legacyBackfill: false,
+    legacyBackfillReason: "",
+  };
+}
+
+async function storeTeacherEvidenceUpload({
+  resultPackage,
+  teacherId,
+  file,
+}) {
+  if (
+    !file ||
+    !Buffer.isBuffer(file.buffer)
+  ) {
+    throw createError(
+      400,
+      "Work evidence file is required.",
+    );
+  }
+
+  const mimeType = resolveUploadedResultEvidenceMimeType(file);
+  const isSupportedEvidenceFile =
+    mimeType.startsWith("image/") || mimeType === "application/pdf";
+  if (!isSupportedEvidenceFile) {
+    throw createError(
+      400,
+      "Work evidence must be a PDF or image file.",
+    );
+  }
+
+  const screenshot =
+    await ResultScreenshot.create(
+      {
+        resultPackageId:
+          resultPackage._id,
+        missionId:
+          resultPackage.missionId,
+        studentId:
+          resultPackage.studentId,
+        uploadedBy: teacherId,
+        fileName: String(
+          file.originalname || "",
+        ).trim(),
+        mimeType,
+        byteSize:
+          Number(
+            file.size || 0,
+          ) || file.buffer.length,
+        data: file.buffer,
+      },
+    );
+  const screenshotUrl = `/api/teacher/results/screenshots/${String(screenshot._id)}`;
+  const existingEvidence =
+    resultPackage.evidence &&
+    typeof resultPackage.evidence === "object"
+      ? { ...resultPackage.evidence }
+      : {};
+  const existingTeacherUploads = Array.isArray(existingEvidence.teacherUploads)
+    ? existingEvidence.teacherUploads
+        .map((item) => (item && typeof item === "object" ? { ...item } : null))
+        .filter(Boolean)
+    : [];
+  const uploadedAt = new Date(screenshot.createdAt).toISOString();
+  const nextUpload = {
+    id: String(screenshot._id),
+    fileName: String(screenshot.fileName || "").trim(),
+    mimeType: String(mimeType || "").trim(),
+    byteSize: Number(screenshot.byteSize || 0),
+    uploadedAt,
+    uploadedBy: String(teacherId || ""),
+    url: screenshotUrl,
+  };
+
+  resultPackage.evidence = {
+    ...existingEvidence,
+    teacherUploads: [
+      nextUpload,
+      ...existingTeacherUploads.filter(
+        (item) => String(item?.id || "").trim() !== nextUpload.id,
+      ),
+    ].slice(0, 10),
+    latestTeacherUploadUrl: screenshotUrl,
+    latestTeacherUploadMimeType: nextUpload.mimeType,
+    latestTeacherUploadFileName: nextUpload.fileName,
+    latestTeacherUploadAt: uploadedAt,
+  };
+  resultPackage.markModified("evidence");
+  await resultPackage.save();
+
+  return {
+    screenshot,
+    screenshotUrl,
+  };
 }
 
 function isValidEmail(email) {
@@ -1432,7 +1656,7 @@ function buildFullResultReportText({
 
   if (screenshotUrl) {
     lines.push(
-      `Screenshot URL: ${String(screenshotUrl).trim()}`,
+      `Evidence URL: ${String(screenshotUrl).trim()}`,
     );
   }
 
@@ -2024,7 +2248,7 @@ function buildResultReportPdfBuffer({
       );
       if (screenshotUrl) {
         keyValue(
-          "Screenshot URL",
+          "Evidence URL",
           String(screenshotUrl).trim(),
         );
       }
@@ -2948,6 +3172,202 @@ async function ensureResultPackageForMission({
   };
 }
 
+async function createManualResultPackageFromUpload({
+  teacherId,
+  missionId,
+  file,
+}) {
+  const mission = await Mission.findById(
+    missionId,
+  )
+    .populate("subjectId", "name")
+    .lean();
+  if (!mission) {
+    throw createError(
+      404,
+      "Mission not found.",
+    );
+  }
+  if (
+    String(
+      mission.createdBy || "",
+    ) !== String(teacherId || "")
+  ) {
+    throw createError(
+      403,
+      "You do not have access to this mission.",
+    );
+  }
+
+  const linkedResultPackageId = String(
+    mission.latestResultPackageId || "",
+  ).trim();
+  if (linkedResultPackageId) {
+    const existingLinked =
+      await ResultPackage.findById(
+        linkedResultPackageId,
+      ).lean();
+    if (existingLinked) {
+      const sendLogs = await SendLog.find({
+        resultPackageId: existingLinked._id,
+      })
+        .sort({ createdAt: -1 })
+        .limit(20)
+        .lean();
+
+      return {
+        success: true,
+        created: false,
+        resultPackage: await serializeResultPackageWithCertification(
+          existingLinked,
+          sendLogs,
+        ),
+      };
+    }
+  }
+
+  // WHY: Older missions may already have a saved result package that was never
+  // linked back onto the mission document, so reuse it instead of creating a
+  // second audit record for the same mission submission.
+  const existing =
+    await ResultPackage.findOne({
+      missionId: mission._id,
+      studentId: mission.studentId,
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+  if (existing) {
+    await Mission.findByIdAndUpdate(
+      mission._id,
+      {
+        latestResultPackageId: existing._id,
+      },
+    );
+    const sendLogs = await SendLog.find({
+      resultPackageId: existing._id,
+    })
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .lean();
+
+    return {
+      success: true,
+      created: false,
+      resultPackage: await serializeResultPackageWithCertification(
+        existing,
+        sendLogs,
+      ),
+    };
+  }
+
+  const student = await User.findById(
+    mission.studentId,
+  )
+    .select("name")
+    .lean();
+  if (!student) {
+    throw createError(
+      404,
+      "Student not found for this mission.",
+    );
+  }
+
+  const missionType = resolveMissionType(
+    mission,
+  );
+  const evidence =
+    buildPendingManualResultEvidence({
+      mission,
+      teacherId,
+    });
+  const resultPackage =
+    await ResultPackage.create({
+      studentId: mission.studentId,
+      teacherId:
+        mission.createdBy || teacherId,
+      missionId: mission._id,
+      sessionLogId: null,
+      subjectId:
+        mission.subjectId &&
+        typeof mission.subjectId ===
+          "object" ?
+          mission.subjectId._id
+        : mission.subjectId,
+      missionType,
+      meta: {
+        studentName: String(
+          student?.name || "",
+        ).trim(),
+        studentId: String(
+          mission.studentId || "",
+        ),
+        teacherId: String(
+          mission.createdBy || teacherId || "",
+        ),
+        missionId: String(
+          mission._id || "",
+        ),
+        missionTitle: String(
+          mission.title || "",
+        ).trim(),
+        subject: String(
+          mission?.subjectId?.name || "",
+        ).trim(),
+        taskCodes: Array.isArray(
+          mission.taskCodes,
+        ) ?
+          mission.taskCodes
+        : [],
+        assignedDate: String(
+          mission.availableOnDate || "",
+        ).trim(),
+        startTime: null,
+        submitTime: new Date(),
+        durationSeconds: 0,
+        score: {
+          correct: 0,
+          total: 0,
+          percent: 0,
+        },
+        xpAwarded: 0,
+      },
+      evidence,
+      latestSendStatus:
+        "not_sent",
+    });
+
+  await storeTeacherEvidenceUpload({
+    resultPackage,
+    teacherId,
+    file,
+  });
+
+  await Mission.findByIdAndUpdate(
+    mission._id,
+    {
+      latestResultPackageId:
+        resultPackage._id,
+    },
+  );
+
+  console.info("[result] manual result package created", {
+    missionId: String(mission._id || ""),
+    resultPackageId: String(resultPackage._id || ""),
+    teacherId: String(teacherId || ""),
+    studentId: String(mission.studentId || ""),
+    missionType,
+  });
+
+  return {
+    success: true,
+    created: true,
+    resultPackage: await serializeResultPackageWithCertification(
+      resultPackage.toObject(),
+      [],
+    ),
+  };
+}
+
 async function getResultPackageForTeacher({
   teacherId,
   resultPackageId,
@@ -3146,6 +3566,8 @@ async function scoreTheoryResultPackage({
   };
   resultPackage.evidence = {
     ...evidence,
+    manualTeacherResultStatus:
+      evidence?.manualTeacherResult === true ? "scored" : evidence?.manualTeacherResultStatus,
     reviewStatus: THEORY_REVIEW_SCORED,
     averageTeacherScorePercent: storedAveragePercent,
     xpAwarded: scoreOutcome.earnedXp,
@@ -3223,6 +3645,153 @@ async function scoreTheoryResultPackage({
       id: String(resultPackage.missionId || ""),
       latestScorePercent: roundedAveragePercent,
       latestXpEarned: scoreOutcome.earnedXp,
+    },
+  };
+}
+
+async function scoreManualResultPackage({
+  teacherId,
+  resultPackageId,
+  scoreCorrect,
+  scoreTotal,
+  teacherFeedback,
+}) {
+  const resultPackage = await ResultPackage.findById(resultPackageId);
+  if (!resultPackage) {
+    throw createError(404, "Result package not found.");
+  }
+
+  await assertTeacherAccess(teacherId, resultPackage.toObject());
+
+  if (String(resultPackage.missionType || "").toUpperCase() === "THEORY") {
+    throw createError(
+      400,
+      "Use theory review scoring for theory result packages.",
+    );
+  }
+
+  const mission = await Mission.findById(resultPackage.missionId)
+    .select("draftFormat questions latestResultPackageId")
+    .lean();
+  if (!mission) {
+    throw createError(
+      404,
+      "Mission not found for this result package.",
+    );
+  }
+
+  const normalizedReview = normalizeManualResultReviewPayload({
+    scoreCorrect,
+    scoreTotal,
+    teacherFeedback,
+  });
+  const scorePercent = normalizedReview.scoreTotal > 0
+    ? Math.round(
+        (normalizedReview.scoreCorrect / normalizedReview.scoreTotal) * 100,
+      )
+    : 0;
+  const xpMax = resolveMissionXpMax(mission);
+  const earnedXp = Math.round((scorePercent / 100) * Math.max(0, xpMax));
+  const previousXpAwarded = Math.max(0, Number(resultPackage?.meta?.xpAwarded || 0));
+  const xpDelta = earnedXp - previousXpAwarded;
+  const scoredAt = new Date().toISOString();
+  const existingEvidence =
+    resultPackage.evidence &&
+    typeof resultPackage.evidence === "object"
+      ? { ...resultPackage.evidence }
+      : {};
+
+  resultPackage.meta = {
+    ...(resultPackage.meta || {}),
+    score: {
+      correct: normalizedReview.scoreCorrect,
+      total: normalizedReview.scoreTotal,
+      percent: scorePercent,
+    },
+    xpAwarded: earnedXp,
+  };
+  resultPackage.evidence = {
+    ...existingEvidence,
+    manualTeacherResultStatus:
+      existingEvidence?.manualTeacherResult === true ? "scored" : existingEvidence?.manualTeacherResultStatus,
+    teacherReviewStatus: "scored",
+    teacherReview: {
+      reviewType: "manual_score",
+      scoreCorrect: normalizedReview.scoreCorrect,
+      scoreTotal: normalizedReview.scoreTotal,
+      scorePercent,
+      teacherFeedback: normalizedReview.teacherFeedback,
+      scoredBy: String(teacherId || ""),
+      scoredAt,
+    },
+  };
+  resultPackage.markModified("meta");
+  resultPackage.markModified("evidence");
+  await resultPackage.save();
+
+  await Mission.findByIdAndUpdate(resultPackage.missionId, {
+    latestScoreCorrect: normalizedReview.scoreCorrect,
+    latestScoreTotal: normalizedReview.scoreTotal,
+    latestScorePercent: scorePercent,
+    latestXpEarned: earnedXp,
+    latestResultPackageId: resultPackage._id,
+  });
+
+  if (resultPackage.sessionLogId) {
+    await SessionLog.findByIdAndUpdate(resultPackage.sessionLogId, {
+      // WHY: Manual review scores can use point totals like /30 or /100, so we
+      // only update the percentage/XP summary here and preserve the original
+      // raw answer counts recorded at submission time.
+      scorePercent,
+      xpAwarded: earnedXp,
+      totalXpAwarded: earnedXp,
+    });
+  }
+
+  if (xpDelta !== 0) {
+    const student = await User.findById(resultPackage.studentId);
+    if (student) {
+      // WHY: Teacher manual review must only apply the score delta so the
+      // student's cumulative XP stays consistent across rescoring.
+      student.xp = Math.max(0, Number(student.xp || 0) + xpDelta);
+      await student.save();
+    }
+  }
+
+  await subjectCertificationService.getStudentCertificationSummaries({
+    studentId: String(resultPackage.studentId || ""),
+    subjectId: String(resultPackage.subjectId || ""),
+    applyAwards: true,
+  });
+
+  console.info("[result] manual score saved", {
+    resultPackageId: String(resultPackage._id || ""),
+    missionId: String(resultPackage.missionId || ""),
+    teacherId: String(teacherId || ""),
+    scoreCorrect: normalizedReview.scoreCorrect,
+    scoreTotal: normalizedReview.scoreTotal,
+    scorePercent,
+    earnedXp,
+    xpDelta,
+  });
+
+  const sendLogs = await SendLog.find({
+    resultPackageId: resultPackage._id,
+  })
+    .sort({ createdAt: -1 })
+    .limit(20)
+    .lean();
+
+  return {
+    success: true,
+    resultPackage: await serializeResultPackageWithCertification(
+      resultPackage.toObject(),
+      sendLogs,
+    ),
+    mission: {
+      id: String(resultPackage.missionId || ""),
+      latestScorePercent: scorePercent,
+      latestXpEarned: earnedXp,
     },
   };
 }
@@ -3552,29 +4121,8 @@ async function uploadResultScreenshot({
   resultPackageId,
   file,
 }) {
-  if (
-    !file ||
-    !Buffer.isBuffer(file.buffer)
-  ) {
-    throw createError(
-      400,
-      "Screenshot file is required.",
-    );
-  }
-  const mimeType = String(
-    file.mimetype || "",
-  ).trim();
-  if (!mimeType.startsWith("image/")) {
-    throw createError(
-      400,
-      "Screenshot must be an image file.",
-    );
-  }
-
   const resultPackage =
-    await ResultPackage.findById(
-      resultPackageId,
-    ).lean();
+    await ResultPackage.findById(resultPackageId);
   if (!resultPackage) {
     throw createError(
       404,
@@ -3584,30 +4132,17 @@ async function uploadResultScreenshot({
 
   await assertTeacherAccess(
     teacherId,
-    resultPackage,
+    resultPackage.toObject(),
   );
-  const screenshot =
-    await ResultScreenshot.create(
-      {
-        resultPackageId:
-          resultPackage._id,
-        missionId:
-          resultPackage.missionId,
-        studentId:
-          resultPackage.studentId,
-        uploadedBy: teacherId,
-        fileName: String(
-          file.originalname || "",
-        ).trim(),
-        mimeType,
-        byteSize:
-          Number(
-            file.size || 0,
-          ) || file.buffer.length,
-        data: file.buffer,
-      },
-    );
-  const screenshotUrl = `/api/teacher/results/screenshots/${String(screenshot._id)}`;
+  const uploadedEvidence =
+    await storeTeacherEvidenceUpload({
+      resultPackage,
+      teacherId,
+      file,
+    });
+  const screenshot = uploadedEvidence.screenshot;
+  const screenshotUrl = uploadedEvidence.screenshotUrl;
+
   return {
     screenshot: {
       id: String(
@@ -3627,6 +4162,7 @@ async function uploadResultScreenshot({
         screenshot.byteSize || 0,
       ),
       mimeType: screenshot.mimeType,
+      fileName: String(screenshot.fileName || "").trim(),
     },
   };
 }
@@ -3666,10 +4202,12 @@ async function getResultScreenshotForTeacher({
 module.exports = {
   createResultPackageForCompletion,
   ensureResultPackageForMission,
+  createManualResultPackageFromUpload,
   getResultPackageForStudent,
   getResultPackageForManagement,
   getResultPackageForTeacher,
   scoreTheoryResultPackage,
+  scoreManualResultPackage,
   sendResultPackage,
   processPendingEmailRetries,
   startResultEmailRetryWorker,

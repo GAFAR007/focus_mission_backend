@@ -867,6 +867,20 @@ router.get(
 );
 
 router.post(
+  "/missions/:missionId/manual-result",
+  upload.single("resultFile"),
+  [
+    param("missionId")
+      .isMongoId()
+      .withMessage(
+        "Valid missionId is required.",
+      ),
+    validateRequest,
+  ],
+  teacherController.createManualResultPackage,
+);
+
+router.post(
   "/results/:resultPackageId/score-theory",
   [
     param("resultPackageId")
@@ -898,6 +912,40 @@ router.post(
     validateRequest,
   ],
   teacherController.scoreTheoryResultPackage,
+);
+
+router.post(
+  "/results/:resultPackageId/score-manual",
+  [
+    param("resultPackageId")
+      .isMongoId()
+      .withMessage(
+        "Valid resultPackageId is required.",
+      ),
+    body("scoreCorrect")
+      .isInt({ min: 0, max: 100 })
+      .withMessage(
+        "scoreCorrect must be an integer between 0 and 100.",
+      ),
+    body("scoreTotal")
+      .isIn([10, 30, 50, 100])
+      .withMessage(
+        "scoreTotal must be 10, 30, 50, or 100.",
+      ),
+    body("scoreCorrect")
+      .custom((value, { req }) => Number(value) <= Number(req.body?.scoreTotal || 0))
+      .withMessage(
+        "scoreCorrect cannot be greater than scoreTotal.",
+      ),
+    body("teacherFeedback")
+      .optional()
+      .isString()
+      .withMessage(
+        "teacherFeedback must be a string.",
+      ),
+    validateRequest,
+  ],
+  teacherController.scoreManualResultPackage,
 );
 
 router.post(
