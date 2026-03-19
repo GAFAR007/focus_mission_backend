@@ -933,6 +933,7 @@ async function listStudents(teacherId) {
   return User.find({
     _id: { $in: assignedStudentIds },
     role: "student",
+    isArchived: { $ne: true },
   })
     .sort({ name: 1 })
     .select(

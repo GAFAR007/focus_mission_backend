@@ -162,6 +162,24 @@ const userSchema = new mongoose.Schema(
       enum: ["easy", "medium", "hard"],
       default: "medium",
     },
+    isArchived: {
+      type: Boolean,
+      default: false,
+      index: true,
+      // WHY: Archived students must disappear from active login and staff
+      // pickers without deleting their audit history or result evidence.
+    },
+    archivedAt: {
+      type: Date,
+      default: null,
+    },
+    archivedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      // WHY: Student archiving changes who can access timetable and result
+      // flows, so the staff account that archived the learner must be traceable.
+    },
     assignedStudents: [
       {
         type: mongoose.Schema.Types.ObjectId,

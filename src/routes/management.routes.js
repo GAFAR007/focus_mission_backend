@@ -69,6 +69,19 @@ router.get(
   managementController.getStudents,
 );
 
+router.patch(
+  "/students/:studentId/archive",
+  [
+    param("studentId")
+      .isMongoId()
+      .withMessage(
+        "Valid studentId is required.",
+      ),
+    validateRequest,
+  ],
+  managementController.archiveStudent,
+);
+
 router.get(
   "/subjects",
   managementController.listSubjects,

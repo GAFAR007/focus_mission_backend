@@ -1343,6 +1343,18 @@ async function assertManagementAccess(
   // WHY: Management is the setup/reporting authority in MVP, so result-package
   // review must follow the management role boundary directly rather than a
   // separate assignedStudents cache that can drift behind live onboarding.
+  const activeStudentExists = await User.exists({
+    _id: resultPackage?.studentId,
+    role: "student",
+    isArchived: { $ne: true },
+  });
+
+  if (!activeStudentExists) {
+    throw createError(
+      404,
+      "Student not found.",
+    );
+  }
 }
 
 function resolveLatestSendStatus(

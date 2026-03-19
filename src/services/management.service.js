@@ -178,6 +178,7 @@ async function assertManagementStudentAccess(
   const studentExists = await User.exists({
     _id: studentId,
     role: "student",
+    isArchived: { $ne: true },
   });
 
   if (!studentExists) {
@@ -252,6 +253,7 @@ async function listStudents({ managementId }) {
   // a stale login snapshot or a manually curated subset.
   return User.find({
     role: "student",
+    isArchived: { $ne: true },
   })
     .sort({ name: 1 })
     .select(
@@ -259,6 +261,63 @@ async function listStudents({ managementId }) {
     )
     .lean()
     .then((students) => students.map(serializeUser));
+}
+
+async function archiveStudent({
+  managementId,
+  studentId,
+}) {
+  const managementUser = await User.findById(managementId)
+    .select("role")
+    .lean();
+
+  if (
+    !managementUser ||
+    String(managementUser.role || "") !== "management"
+  ) {
+    throw createError(403, "Management access is required.");
+  }
+
+  const archivedStudent = await User.findOneAndUpdate(
+    {
+      _id: studentId,
+      role: "student",
+      isArchived: { $ne: true },
+    },
+    {
+      isArchived: true,
+      archivedAt: new Date(),
+      archivedBy: managementId,
+    },
+    {
+      new: true,
+    },
+  ).lean();
+
+  if (!archivedStudent) {
+    throw createError(404, "Student not found.");
+  }
+
+  // WHY: Archived students must disappear from teacher, mentor, and
+  // management pickers immediately so no stale caseload entry keeps offering
+  // live timetable or result actions for a learner that has been retired.
+  await User.updateMany(
+    {
+      role: { $in: ["teacher", "mentor", "management"] },
+    },
+    {
+      $pull: {
+        assignedStudents: archivedStudent._id,
+      },
+    },
+  );
+
+  console.info("[management] student_archived", {
+    managementId: String(managementId || ""),
+    studentId: String(archivedStudent._id || ""),
+  });
+
+  return serializeUser(archivedStudent);
 }
 
 async function createManagedUser({
@@ -593,6 +652,7 @@ async function saveStudentTimetableEntry({
 }
 
 module.exports = {
+  archiveStudent,
   listStudents,
   listStudentResults,
   assertManagementStudentAccess,

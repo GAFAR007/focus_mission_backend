@@ -51,6 +51,13 @@ async function protect(req, _res, next) {
       throw createError(401, "User not found for this token.");
     }
 
+    if (user.isArchived === true) {
+      // WHY: Archive state must cut off active access immediately so archived
+      // students cannot keep using a still-valid token after management hides
+      // the account from staff and login flows.
+      throw createError(403, "This account has been archived.");
+    }
+
     req.user = {
       id: String(user._id),
       role: resolveAccessRole(

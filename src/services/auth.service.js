@@ -108,6 +108,13 @@ async function login({ email, password }) {
     throw createError(401, "Invalid email or password.");
   }
 
+  if (user.isArchived === true) {
+    // WHY: Archived learners must not continue into the live app even if they
+    // still know their password, otherwise archived result history would keep
+    // behaving like an active student account.
+    throw createError(403, "This account has been archived. Contact management.");
+  }
+
   const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
 
   if (!isPasswordValid) {
@@ -203,7 +210,10 @@ async function listDemoAccounts({ role }) {
   ensureDatabaseReady();
 
   const normalizedRole = normalizeRole(role);
-  const users = await User.find({ role: normalizedRole })
+  const users = await User.find({
+    role: normalizedRole,
+    isArchived: { $ne: true },
+  })
     .sort({ isPlaceholder: 1, name: 1, email: 1 })
     .limit(PUBLIC_DEMO_ACCOUNT_LIMIT)
     .select("name email role subjectSpecialty isPlaceholder")
