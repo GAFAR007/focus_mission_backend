@@ -16,6 +16,8 @@ const ResultPackage = require("../models/ResultPackage");
 const ResultScreenshot = require("../models/ResultScreenshot");
 const SessionLog = require("../models/SessionLog");
 const SendLog = require("../models/SendLog");
+const Subject = require("../models/Subject");
+const Timetable = require("../models/Timetable");
 const User = require("../models/User");
 const subjectCertificationService = require("./subjectCertification.service");
 const { resolveMissionRewardPolicy } = require("../utils/xpPolicy");
@@ -38,6 +40,44 @@ function countWords(value) {
     .trim()
     .split(/\s+/)
     .filter(Boolean).length;
+}
+
+function normalizeForMatch(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function collectSubjectIdsForTeacherTimetables({
+  timetables,
+  teacherId,
+}) {
+  const subjectIds = new Set();
+  const normalizedTeacherId = String(teacherId || "").trim();
+
+  for (const timetable of Array.isArray(timetables) ? timetables : []) {
+    if (
+      String(timetable?.morningTeacherId || "").trim() === normalizedTeacherId
+    ) {
+      const subjectId = String(timetable?.morningSubject || "").trim();
+      if (subjectId) {
+        subjectIds.add(subjectId);
+      }
+    }
+
+    if (
+      String(timetable?.afternoonTeacherId || "").trim() === normalizedTeacherId
+    ) {
+      const subjectId = String(timetable?.afternoonSubject || "").trim();
+      if (subjectId) {
+        subjectIds.add(subjectId);
+      }
+    }
+  }
+
+  return [...subjectIds];
 }
 
 function resolveMissionXpMax(mission) {
@@ -1186,6 +1226,71 @@ async function assertTeacherAccess(
     return;
   }
 
+  const teacher = await User.findById(
+    teacherId,
+  )
+    .select("role assignedStudents subjectSpecialty")
+    .lean();
+  const assignedStudents = Array.isArray(
+    teacher?.assignedStudents,
+  ) ?
+      teacher.assignedStudents.map(
+        (value) => String(value || "").trim(),
+      )
+    : [];
+
+  if (
+    teacher &&
+    String(teacher.role || "") === "teacher" &&
+    assignedStudents.includes(
+      String(resultPackage?.studentId || "").trim(),
+    )
+  ) {
+    const timetableEntries = await Timetable.find({
+      studentId: resultPackage.studentId,
+      $or: [
+        { morningTeacherId: teacherId },
+        { afternoonTeacherId: teacherId },
+      ],
+    })
+      .select(
+        "morningSubject afternoonSubject morningTeacherId afternoonTeacherId",
+      )
+      .lean();
+    let accessibleSubjectIds = collectSubjectIdsForTeacherTimetables({
+      timetables: timetableEntries,
+      teacherId,
+    });
+
+    if (accessibleSubjectIds.length === 0) {
+      const specialty = normalizeForMatch(
+        teacher.subjectSpecialty,
+      );
+
+      if (specialty) {
+        const matchingSubjects = await Subject.find({})
+          .select("_id name")
+          .lean();
+        accessibleSubjectIds = matchingSubjects
+          .filter(
+            (subject) => normalizeForMatch(subject.name) === specialty,
+          )
+          .map((subject) => String(subject._id || "").trim())
+          .filter(Boolean);
+      }
+    }
+
+    // WHY: Read-only teacher result access must stay inside the teacher's live
+    // subject boundary for that learner, not just the broader assigned-student list.
+    if (
+      accessibleSubjectIds.includes(
+        String(resultPackage?.subjectId || "").trim(),
+      )
+    ) {
+      return;
+    }
+  }
+
   throw createError(
     403,
     "You do not have access to this result package.",
@@ -1220,7 +1325,7 @@ async function assertManagementAccess(
     await User.findById(
       managementId,
     )
-      .select("role assignedStudents")
+      .select("role")
       .lean();
 
   if (
@@ -1235,28 +1340,9 @@ async function assertManagementAccess(
     );
   }
 
-  const assignedStudents = Array.isArray(
-    managementUser.assignedStudents,
-  ) ?
-      managementUser.assignedStudents.map(
-        (value) => String(value || ""),
-      )
-    : [];
-
-  if (
-    !assignedStudents.includes(
-      String(
-        resultPackage?.studentId || "",
-      ),
-    )
-  ) {
-    // WHY: Management may review result evidence only for students explicitly
-    // assigned to them, which preserves the audit boundary for reporting.
-    throw createError(
-      403,
-      "You do not have access to this result package.",
-    );
-  }
+  // WHY: Management is the setup/reporting authority in MVP, so result-package
+  // review must follow the management role boundary directly rather than a
+  // separate assignedStudents cache that can drift behind live onboarding.
 }
 
 function resolveLatestSendStatus(

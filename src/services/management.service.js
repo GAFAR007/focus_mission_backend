@@ -175,24 +175,18 @@ async function assertManagementStudentAccess(
     );
   }
 
-  const assignedStudents = Array.isArray(
-    managementUser.assignedStudents,
-  ) ?
-      managementUser.assignedStudents.map(
-        (value) => String(value || ""),
-      )
-    : [];
+  const studentExists = await User.exists({
+    _id: studentId,
+    role: "student",
+  });
 
-  if (
-    !assignedStudents.includes(
-      String(studentId || ""),
-    )
-  ) {
-    // WHY: Management review stays scoped to explicitly assigned learners so
-    // result access remains traceable and limited to the correct caseload.
+  if (!studentExists) {
+    // WHY: Management owns timetable and reporting setup across the live
+    // product, but the access boundary must still confirm that the requested
+    // learner record actually exists before exposing student data.
     throw createError(
-      403,
-      "You do not have access to this student's results.",
+      404,
+      "Student not found.",
     );
   }
 }
@@ -239,6 +233,32 @@ async function listStudentResults({
           mission.latestResultPackageId || "",
         ).trim().length > 0,
     );
+}
+
+async function listStudents({ managementId }) {
+  const managementUser = await User.findById(managementId)
+    .select("role")
+    .lean();
+
+  if (
+    !managementUser ||
+    String(managementUser.role || "") !== "management"
+  ) {
+    throw createError(403, "Management access is required.");
+  }
+
+  // WHY: Management is responsible for timetable and setup across all learners,
+  // so the student picker must read the current full student roster instead of
+  // a stale login snapshot or a manually curated subset.
+  return User.find({
+    role: "student",
+  })
+    .sort({ name: 1 })
+    .select(
+      "name role avatar avatarSeed xp streak preferredDifficulty firstLoginAt lastLoginAt loginDayCount",
+    )
+    .lean()
+    .then((students) => students.map(serializeUser));
 }
 
 async function createManagedUser({
@@ -573,6 +593,7 @@ async function saveStudentTimetableEntry({
 }
 
 module.exports = {
+  listStudents,
   listStudentResults,
   assertManagementStudentAccess,
   createManagedUser,

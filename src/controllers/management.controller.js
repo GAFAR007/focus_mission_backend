@@ -70,6 +70,22 @@ async function createUser(
   }
 }
 
+async function getStudents(
+  req,
+  res,
+  next,
+) {
+  try {
+    const students =
+      await managementService.listStudents({
+        managementId: req.user.id,
+      });
+    res.json({ students });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function listSubjects(
   _req,
   res,
@@ -178,6 +194,7 @@ async function saveStudentTimetableEntry(
 
 module.exports = {
   createUser,
+  getStudents,
   getStudentResults,
   getResultPackage,
   getStudentCertification,

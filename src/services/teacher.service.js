@@ -998,6 +998,18 @@ async function createStudent({
     $addToSet: { assignedStudents: createdUser._id },
   });
 
+  // WHY: Management owns timetable setup for every learner, so teacher-created
+  // students must also appear in management caseloads without requiring a
+  // manual reassignment step after classroom onboarding.
+  await User.updateMany(
+    { role: "management" },
+    {
+      $addToSet: {
+        assignedStudents: createdUser._id,
+      },
+    },
+  );
+
   console.info("[teacher] student_created", {
     teacherId: String(teacherId || ""),
     studentId: String(createdUser._id || ""),

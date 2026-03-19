@@ -65,6 +65,11 @@ router.post(
 );
 
 router.get(
+  "/students",
+  managementController.getStudents,
+);
+
+router.get(
   "/subjects",
   managementController.listSubjects,
 );
