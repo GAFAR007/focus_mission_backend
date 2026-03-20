@@ -44,6 +44,16 @@ const resultPackageSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
+    resultKind: {
+      type: String,
+      enum: ["mission", "paper_assessment"],
+      default: "mission",
+      index: true,
+      // WHY: Mission submissions and teacher-uploaded paper assessments now
+      // share the same audit package model, but the source type must stay
+      // explicit so history screens never have to pretend paper evidence was a
+      // mission.
+    },
     missionType: {
       type: String,
       enum: ["QUESTIONS", "THEORY", "ESSAY_BUILDER"],

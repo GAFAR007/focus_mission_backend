@@ -7,17 +7,22 @@
  * outcomes, creating core users, and configuring student timetables without
  * inheriting teacher authoring flows.
  * HOW:
- * Verify management ownership boundaries, load recent result-backed missions,
- * create student or teacher accounts with explicit validation, and save
- * weekday timetable entries with explicit subject and teacher ownership.
+ * Verify management ownership boundaries, load recent mission and paper result
+ * history, create student or teacher accounts with explicit validation, and
+ * save weekday timetable entries with explicit subject and teacher ownership.
  */
 const bcrypt = require("bcryptjs");
 const Mission = require("../models/Mission");
+const ResultPackage = require("../models/ResultPackage");
 const Subject = require("../models/Subject");
 const Timetable = require("../models/Timetable");
 const User = require("../models/User");
+const {
+  serializeMissionResultHistoryEntry,
+  serializeStandalonePaperResultHistoryEntry,
+  sortResultHistoryEntries,
+} = require("./result.service");
 const subjectCertificationService = require("./subjectCertification.service");
-const { serializeMission } = require("../utils/missionSerializer");
 
 const MANAGEMENT_RESULTS_HISTORY_LIMIT = 60;
 const WEEKDAY_OPTIONS = [
@@ -201,10 +206,11 @@ async function listStudentResults({
     studentId,
   );
 
-  const missions =
-    await Mission.find({
+  const [missions, standalonePaperResults] = await Promise.all([
+    Mission.find({
       studentId,
       $or: [
+        { manualResultOnly: true },
         { status: "published" },
         { status: { $exists: false } },
       ],
@@ -224,16 +230,26 @@ async function listStudentResults({
         "subjectId",
         "name icon color",
       )
-      .lean();
+      .lean(),
+    ResultPackage.find({
+      studentId,
+      resultKind: "paper_assessment",
+      missionId: null,
+    })
+      .sort({ createdAt: -1 })
+      .limit(MANAGEMENT_RESULTS_HISTORY_LIMIT)
+      .populate("subjectId", "name icon color")
+      .lean(),
+  ]);
 
-  return missions
-    .map(serializeMission)
-    .filter(
-      (mission) =>
-        String(
-          mission.latestResultPackageId || "",
-        ).trim().length > 0,
-    );
+  return sortResultHistoryEntries([
+    ...missions
+      .map(serializeMissionResultHistoryEntry)
+      .filter(Boolean),
+    ...standalonePaperResults
+      .map(serializeStandalonePaperResultHistoryEntry)
+      .filter(Boolean),
+  ]).slice(0, MANAGEMENT_RESULTS_HISTORY_LIMIT);
 }
 
 async function listStudents({ managementId }) {

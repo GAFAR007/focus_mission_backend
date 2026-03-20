@@ -16,6 +16,7 @@ const Block = require("../models/Block");
 const Criterion = require("../models/Criterion");
 const LearningContent = require("../models/LearningContent");
 const Mission = require("../models/Mission");
+const ResultPackage = require("../models/ResultPackage");
 const SessionLog = require("../models/SessionLog");
 const StudentProgress = require("../models/StudentProgress");
 const Subject = require("../models/Subject");
@@ -30,6 +31,9 @@ const {
 } = require("./groq.service");
 const {
   ensureResultPackageForMission,
+  serializeMissionResultHistoryEntry,
+  serializeStandalonePaperResultHistoryEntry,
+  sortResultHistoryEntries,
 } = require("./result.service");
 const subjectCertificationService = require("./subjectCertification.service");
 const {
@@ -1467,37 +1471,55 @@ async function listStudentResults({
     return [];
   }
 
-  const missions = await Mission.find({
-    studentId,
-    subjectId: { $in: subjectIds },
-    $or: [{ manualResultOnly: true }, { status: "published" }, { status: { $exists: false } }],
-    latestResultPackageId: {
-      $exists: true,
-      $ne: null,
-    },
-  })
-    .sort({
-      publishedAt: -1,
-      createdAt: -1,
+  const [missions, standalonePaperResults] = await Promise.all([
+    Mission.find({
+      studentId,
+      subjectId: { $in: subjectIds },
+      $or: [
+        { manualResultOnly: true },
+        { status: "published" },
+        { status: { $exists: false } },
+      ],
+      latestResultPackageId: {
+        $exists: true,
+        $ne: null,
+      },
     })
-    .limit(TEACHER_RESULTS_HISTORY_LIMIT)
-    .populate("subjectId", "name icon color")
-    .lean();
+      .sort({
+        publishedAt: -1,
+        createdAt: -1,
+      })
+      .limit(TEACHER_RESULTS_HISTORY_LIMIT)
+      .populate("subjectId", "name icon color")
+      .lean(),
+    ResultPackage.find({
+      studentId,
+      subjectId: { $in: subjectIds },
+      resultKind: "paper_assessment",
+      missionId: null,
+    })
+      .sort({ createdAt: -1 })
+      .limit(TEACHER_RESULTS_HISTORY_LIMIT)
+      .populate("subjectId", "name icon color")
+      .lean(),
+  ]);
 
   console.info("[teacher] list student results", {
     teacherId: String(teacherId || ""),
     studentId: String(studentId || ""),
     subjectCount: subjectIds.length,
-    resultCount: missions.length,
+    missionResultCount: missions.length,
+    standalonePaperResultCount: standalonePaperResults.length,
   });
 
-  return missions
-    .map(serializeMission)
-    .filter(
-      (mission) => String(
-        mission.latestResultPackageId || "",
-      ).trim().length > 0,
-    );
+  return sortResultHistoryEntries([
+    ...missions
+      .map(serializeMissionResultHistoryEntry)
+      .filter(Boolean),
+    ...standalonePaperResults
+      .map(serializeStandalonePaperResultHistoryEntry)
+      .filter(Boolean),
+  ]).slice(0, TEACHER_RESULTS_HISTORY_LIMIT);
 }
 
 async function createSessionLog(payload) {

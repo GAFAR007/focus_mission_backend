@@ -1,10 +1,12 @@
 /**
  * WHAT:
- * result.service owns mission result package creation, retrieval, theory score
- * finalization, screenshot storage, send actions, and email retry processing.
+ * result.service owns mission/paper result package creation, retrieval, theory
+ * score finalization, screenshot storage, send actions, and email retry
+ * processing.
  * WHY:
- * Mission evidence must remain auditable and reliably deliverable even when an
- * email channel fails transiently.
+ * Mission evidence and teacher-uploaded paper assessments must remain
+ * auditable and reliably deliverable even when an email channel fails
+ * transiently.
  * HOW:
  * Build immutable result packages at completion, store send logs per action,
  * attempt in-app/email delivery, and retry pending email sends on an interval.
@@ -21,6 +23,7 @@ const Subject = require("../models/Subject");
 const Timetable = require("../models/Timetable");
 const User = require("../models/User");
 const subjectCertificationService = require("./subjectCertification.service");
+const { serializeMission } = require("../utils/missionSerializer");
 const { resolveMissionRewardPolicy } = require("../utils/xpPolicy");
 
 let retryWorkerHandle = null;
@@ -31,7 +34,9 @@ const THEORY_XP_MAX_FALLBACK = 50;
 const THEORY_FEEDBACK_MAX_LENGTH = 1000;
 const MANUAL_REVIEW_FEEDBACK_MAX_LENGTH = 1000;
 const MANUAL_REVIEW_SCORE_TOTALS = [10, 30, 50, 100];
-const MANUAL_RESULT_ONLY_QUESTION_COUNT = 5;
+const PAPER_RESULT_XP_MAX = 30;
+const RESULT_KIND_MISSION = "mission";
+const RESULT_KIND_PAPER_ASSESSMENT = "paper_assessment";
 
 function createError(statusCode, message) {
   const error = new Error(message);
@@ -81,7 +86,7 @@ function normalizeLessonResultTargetDate(dateKey) {
     // completed manual result for a future class would break audit trust.
     throw createError(
       400,
-      "Offline result uploads can only be created for today or a past lesson date.",
+      "Paper result uploads can only be created for today or a past lesson date.",
     );
   }
 
@@ -200,44 +205,18 @@ function normalizeText(value) {
     .trim();
 }
 
-function buildManualResultOnlyMissionTitle({
-  subjectName,
-  sessionType,
-}) {
-  const lessonLabel =
-    String(sessionType || "").trim().toLowerCase() === "afternoon"
-      ? "Afternoon"
-      : "Morning";
-  return `${String(subjectName || "Lesson").trim() || "Lesson"} ${lessonLabel} Offline Result`;
+function buildLessonLabel(sessionType) {
+  return String(sessionType || "").trim().toLowerCase() === "afternoon"
+    ? "Afternoon"
+    : "Morning";
 }
 
-function buildManualResultOnlyMissionQuestions({
+function buildStandalonePaperResultTitle({
   subjectName,
   sessionType,
 }) {
-  const normalizedSubjectName = String(subjectName || "lesson").trim() || "lesson";
-  const lessonLabel =
-    String(sessionType || "").trim().toLowerCase() === "afternoon"
-      ? "afternoon"
-      : "morning";
-
-  return Array.from(
-    { length: MANUAL_RESULT_ONLY_QUESTION_COUNT },
-    (_unused, index) => ({
-      learningText:
-        `Teacher-uploaded offline work for this ${lessonLabel} ${normalizedSubjectName.toLowerCase()} lesson is stored here for audit review.`,
-      prompt: `Offline evidence checkpoint ${index + 1}`,
-      options: [
-        "Teacher uploaded offline work evidence.",
-        "Student completed no work.",
-        "Evidence was unavailable.",
-        "Audit review is incomplete.",
-      ],
-      correctIndex: 0,
-      explanation:
-        "This hidden audit-only mission stores offline work for teacher review and reporting.",
-    }),
-  );
+  const lessonLabel = buildLessonLabel(sessionType);
+  return `${String(subjectName || "Lesson").trim() || "Lesson"} ${lessonLabel} Paper Assessment`;
 }
 
 function isWordChar(value) {
@@ -435,6 +414,224 @@ function buildPendingManualResultEvidence({
     legacyBackfill: false,
     legacyBackfillReason: "",
   };
+}
+
+function buildPendingStandalonePaperResultEvidence({
+  teacherId,
+  subjectName,
+  sessionType,
+  assignedDate,
+}) {
+  const createdAt = new Date().toISOString();
+
+  return {
+    format: "QUESTIONS",
+    questionsAnsweredCount: 0,
+    totalPointsEarned: 0,
+    totalPointsPossible: 0,
+    questions: [],
+    manualTeacherResult: true,
+    manualTeacherResultStatus: "pending_review",
+    manualTeacherResultSource: RESULT_KIND_PAPER_ASSESSMENT,
+    manualTeacherResultReason:
+      "Teacher uploaded a paper-based classroom assessment that was completed outside the mission flow.",
+    manualTeacherResultCreatedAt: createdAt,
+    manualTeacherResultCreatedBy: String(teacherId || ""),
+    manualTeacherResultLessonContext: {
+      sessionType: String(sessionType || "").trim(),
+      assignedDate: String(assignedDate || "").trim(),
+      subject: String(subjectName || "").trim(),
+    },
+    teacherReviewStatus: "pending",
+    legacyBackfill: false,
+    legacyBackfillReason: "",
+  };
+}
+
+function resolveStoredResultKind({
+  storedResultKind,
+  mission,
+}) {
+  if (
+    String(storedResultKind || "").trim() === RESULT_KIND_PAPER_ASSESSMENT ||
+    mission?.manualResultOnly === true
+  ) {
+    return RESULT_KIND_PAPER_ASSESSMENT;
+  }
+
+  return RESULT_KIND_MISSION;
+}
+
+function serializeMissionResultHistoryEntry(mission) {
+  const serializedMission = serializeMission(mission);
+  const resultPackageId = String(
+    serializedMission.latestResultPackageId || "",
+  ).trim();
+
+  if (!resultPackageId) {
+    return null;
+  }
+
+  if (mission?.manualResultOnly === true) {
+    return {
+      id: resultPackageId,
+      resultPackageId,
+      resultKind: RESULT_KIND_PAPER_ASSESSMENT,
+      missionId: "",
+      title: String(
+        serializedMission.title || "Paper Assessment",
+      ).trim(),
+      teacherNote: "",
+      sourceUnitText: "",
+      sourceRawText: "",
+      sourceFileName: "",
+      sourceFileType: "",
+      draftFormat: "QUESTIONS",
+      essayMode: "",
+      draftJson: null,
+      source: RESULT_KIND_PAPER_ASSESSMENT,
+      status: RESULT_KIND_PAPER_ASSESSMENT,
+      sessionType: String(serializedMission.sessionType || "").trim(),
+      difficulty: "",
+      taskCodes: Array.isArray(serializedMission.taskCodes)
+        ? serializedMission.taskCodes
+        : [],
+      xpReward: PAPER_RESULT_XP_MAX,
+      xpEarned: Number(serializedMission.xpEarned || 0),
+      questionCount: 0,
+      scoreCorrect: Number(serializedMission.scoreCorrect || 0),
+      scoreTotal: Number(serializedMission.scoreTotal || 0),
+      scorePercent: Number(serializedMission.scorePercent || 0),
+      latestResultPackageId: resultPackageId,
+      aiModel: null,
+      createdAt: serializedMission.createdAt || null,
+      publishedAt: null,
+      availableOnDate: serializedMission.availableOnDate || null,
+      availableOnDay: serializedMission.availableOnDay || null,
+      subject: serializedMission.subject || null,
+      questions: [],
+      hasTeacherCopy: false,
+    };
+  }
+
+  return {
+    ...serializedMission,
+    id: resultPackageId,
+    resultPackageId,
+    resultKind: RESULT_KIND_MISSION,
+    missionId: String(serializedMission.id || "").trim(),
+    latestResultPackageId: resultPackageId,
+    hasTeacherCopy: true,
+  };
+}
+
+function serializeStandalonePaperResultHistoryEntry(resultPackage) {
+  const lessonContext =
+    resultPackage?.evidence &&
+    typeof resultPackage.evidence === "object" &&
+    resultPackage.evidence.manualTeacherResultLessonContext &&
+    typeof resultPackage.evidence.manualTeacherResultLessonContext === "object"
+      ? resultPackage.evidence.manualTeacherResultLessonContext
+      : {};
+  const subject =
+    resultPackage?.subjectId &&
+    typeof resultPackage.subjectId === "object"
+      ? {
+          id: String(
+            resultPackage.subjectId._id || resultPackage.subjectId.id || "",
+          ).trim(),
+          name: String(resultPackage.subjectId.name || "").trim(),
+          icon: String(resultPackage.subjectId.icon || "").trim(),
+          color: String(resultPackage.subjectId.color || "").trim(),
+        }
+      : null;
+  const assignedDate = String(
+    resultPackage?.meta?.assignedDate || lessonContext.assignedDate || "",
+  ).trim();
+  const sessionType = String(lessonContext.sessionType || "").trim();
+  const subjectName = String(
+    resultPackage?.meta?.subject || lessonContext.subject || subject?.name || "",
+  ).trim();
+  const title =
+    String(resultPackage?.meta?.missionTitle || "").trim() ||
+    buildStandalonePaperResultTitle({
+      subjectName,
+      sessionType,
+    });
+  const taskCodes = Array.isArray(resultPackage?.meta?.taskCodes)
+    ? resultPackage.meta.taskCodes
+    : [];
+  const createdAt = resultPackage?.createdAt
+    ? new Date(resultPackage.createdAt).toISOString()
+    : null;
+  const updatedAt = resultPackage?.updatedAt
+    ? new Date(resultPackage.updatedAt).toISOString()
+    : null;
+
+  return {
+    id: String(resultPackage?._id || resultPackage?.id || "").trim(),
+    resultPackageId: String(resultPackage?._id || resultPackage?.id || "").trim(),
+    resultKind: RESULT_KIND_PAPER_ASSESSMENT,
+    missionId: "",
+    title,
+    teacherNote: "",
+    sourceUnitText: "",
+    sourceRawText: "",
+    sourceFileName: "",
+    sourceFileType: "",
+    draftFormat: "QUESTIONS",
+    essayMode: "",
+    draftJson: null,
+    source: RESULT_KIND_PAPER_ASSESSMENT,
+    status: RESULT_KIND_PAPER_ASSESSMENT,
+    sessionType,
+    difficulty: "",
+    taskCodes,
+    xpReward: PAPER_RESULT_XP_MAX,
+    xpEarned: Number(resultPackage?.meta?.xpAwarded || 0),
+    questionCount: 0,
+    scoreCorrect: Number(resultPackage?.meta?.score?.correct || 0),
+    scoreTotal: Number(resultPackage?.meta?.score?.total || 0),
+    scorePercent: Number(resultPackage?.meta?.score?.percent || 0),
+    latestResultPackageId: String(
+      resultPackage?._id || resultPackage?.id || "",
+    ).trim(),
+    aiModel: null,
+    createdAt,
+    publishedAt: null,
+    availableOnDate: assignedDate || null,
+    availableOnDay: "",
+    subject,
+    questions: [],
+    hasTeacherCopy: false,
+    updatedAt,
+  };
+}
+
+function sortResultHistoryEntries(entries) {
+  return [...entries].sort((left, right) => {
+    const leftDate = String(
+      left.availableOnDate || left.createdAt || "",
+    ).trim();
+    const rightDate = String(
+      right.availableOnDate || right.createdAt || "",
+    ).trim();
+    const byDate = rightDate.compareTo(leftDate);
+    if (byDate !== 0) {
+      return byDate;
+    }
+
+    const leftCreated = String(left.createdAt || "").trim();
+    const rightCreated = String(right.createdAt || "").trim();
+    const byCreated = rightCreated.compareTo(leftCreated);
+    if (byCreated !== 0) {
+      return byCreated;
+    }
+
+    return String(left.title || "")
+      .toLowerCase()
+      .compareTo(String(right.title || "").toLowerCase());
+  });
 }
 
 async function storeTeacherEvidenceUpload({
@@ -1438,6 +1635,9 @@ function serializeResultPackage(
     teacherId: String(
       resultPackage.teacherId || "",
     ),
+    resultKind: String(
+      resultPackage.resultKind || RESULT_KIND_MISSION,
+    ),
     missionId: String(
       resultPackage.missionId || "",
     ),
@@ -1494,6 +1694,9 @@ async function serializeResultPackageWithCertification(
   sendLogs = [],
 ) {
   let certification = null;
+  let resolvedResultKind = String(
+    resultPackage?.resultKind || RESULT_KIND_MISSION,
+  ).trim();
   const missionId = String(
     resultPackage?.missionId || "",
   ).trim();
@@ -1509,6 +1712,10 @@ async function serializeResultPackageWithCertification(
       .lean();
 
     if (mission) {
+      resolvedResultKind = resolveStoredResultKind({
+        storedResultKind: resolvedResultKind,
+        mission,
+      });
       certification =
         await subjectCertificationService.getMissionCertificationSummary(
           {
@@ -1527,6 +1734,7 @@ async function serializeResultPackageWithCertification(
   return serializeResultPackage(
     {
       ...resultPackage,
+      resultKind: resolvedResultKind || RESULT_KIND_MISSION,
       certification,
     },
     sendLogs,
@@ -1733,6 +1941,13 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+function buildResultSourceLabel(resultPackage) {
+  return String(resultPackage?.resultKind || "").trim() ===
+    RESULT_KIND_PAPER_ASSESSMENT
+    ? "Assessment"
+    : "Mission";
+}
+
 function buildFullResultReportText({
   resultPackage,
   screenshotUrl = "",
@@ -1743,6 +1958,7 @@ function buildFullResultReportText({
     meta?.score || {};
   const evidence =
     resultPackage?.evidence || {};
+  const sourceLabel = buildResultSourceLabel(resultPackage);
   const lines = [
     "Focus Mission Full Result Report",
     "================================",
@@ -1750,8 +1966,8 @@ function buildFullResultReportText({
     `Student: ${String(meta.studentName || "").trim()}`,
     `Student ID: ${String(meta.studentId || "").trim()}`,
     `Teacher ID: ${String(meta.teacherId || "").trim()}`,
-    `Mission: ${String(meta.missionTitle || "").trim()}`,
-    `Mission ID: ${String(meta.missionId || "").trim()}`,
+    `${sourceLabel}: ${String(meta.missionTitle || "").trim()}`,
+    `${sourceLabel} ID: ${String(meta.missionId || "").trim()}`,
     `Subject: ${String(meta.subject || "").trim()}`,
     `Task Codes: ${Array.isArray(meta.taskCodes) ? meta.taskCodes.join(", ") : ""}`,
     `Assigned Date: ${String(meta.assignedDate || "").trim()}`,
@@ -2024,6 +2240,7 @@ function buildResultReportPdfBuffer({
       const evidence =
         resultPackage?.evidence ||
         {};
+      const sourceLabel = buildResultSourceLabel(resultPackage);
       const colors = {
         brand: "#2563eb",
         heading: "#1d4ed8",
@@ -2285,13 +2502,13 @@ function buildResultReportPdfBuffer({
         ).trim(),
       );
       keyValue(
-        "Mission",
+        sourceLabel,
         String(
           meta.missionTitle || "",
         ).trim(),
       );
       keyValue(
-        "Mission ID",
+        `${sourceLabel} ID`,
         String(
           meta.missionId || "",
         ).trim(),
@@ -2958,6 +3175,7 @@ async function createResultPackageForCompletion({
         studentId: mission.studentId,
         teacherId:
           mission.createdBy || null,
+        resultKind: RESULT_KIND_MISSION,
         missionId: mission._id,
         sessionLogId:
           sessionLog._id,
@@ -3208,6 +3426,7 @@ async function ensureResultPackageForMission({
       studentId: mission.studentId,
       teacherId:
         mission.createdBy || null,
+      resultKind: RESULT_KIND_MISSION,
       missionId: mission._id,
       sessionLogId:
         sessionLog?._id || null,
@@ -3281,7 +3500,7 @@ async function ensureResultPackageForMission({
   };
 }
 
-async function ensureManualResultOnlyMission({
+async function resolveStandalonePaperResultContext({
   teacherId,
   studentId,
   subjectId,
@@ -3346,71 +3565,25 @@ async function ensureManualResultOnlyMission({
   if (!scheduledSubjectId || String(scheduledSubjectId) !== String(subjectId)) {
     throw createError(
       403,
-      "Offline results can only be uploaded for the subject scheduled in that lesson slot.",
+      "Paper results can only be uploaded for the subject scheduled in that lesson slot.",
     );
   }
 
   if (!scheduledTeacherId || String(scheduledTeacherId) !== String(teacherId)) {
     throw createError(
       403,
-      "Only the teacher assigned to that lesson slot can upload this offline result.",
+      "Only the teacher assigned to that lesson slot can upload this paper result.",
     );
   }
 
-  const existingMission = await Mission.findOne({
-    createdBy: teacherId,
-    studentId,
-    subjectId,
-    sessionType: normalizedSessionType,
-    availableOnDate: normalizedDateKey,
-    manualResultOnly: true,
-  }).sort({ createdAt: -1 });
-
-  if (existingMission) {
-    return existingMission;
-  }
-
-  const questions = buildManualResultOnlyMissionQuestions({
-    subjectName: subject.name,
-    sessionType: normalizedSessionType,
-  });
-  const xpReward = resolveMissionRewardPolicy({
-    draftFormat: "QUESTIONS",
-    questionCount: questions.length,
-  }).xpReward;
-
-  // WHY: Offline uploads without a published mission still need a stable
-  // mission id so result evidence, scoring, and later sends remain auditable.
-  return Mission.create({
-    studentId,
-    subjectId,
-    sessionType: normalizedSessionType,
-    title: buildManualResultOnlyMissionTitle({
-      subjectName: subject.name,
-      sessionType: normalizedSessionType,
-    }),
-    teacherNote:
-      "Teacher-uploaded offline work for a lesson slot that did not have a published mission.",
-    sourceUnitText: "",
-    sourceRawText: "",
-    sourceFileName: "",
-    sourceFileType: "",
-    draftFormat: "QUESTIONS",
-    essayMode: null,
-    draftJson: null,
-    source: "bank",
-    status: "draft",
-    aiModel: "",
-    publishedAt: null,
-    availableOnDate: normalizedDateKey,
-    availableOnDay: targetDay,
-    difficulty: "medium",
-    taskCodes: [],
-    xpReward,
-    manualResultOnly: true,
-    questions,
-    createdBy: teacherId,
-  });
+  return {
+    teacher,
+    student,
+    subject,
+    normalizedSessionType,
+    normalizedDateKey,
+    targetDay,
+  };
 }
 
 async function createManualResultPackageFromUpload({
@@ -3526,6 +3699,7 @@ async function createManualResultPackageFromUpload({
       studentId: mission.studentId,
       teacherId:
         mission.createdBy || teacherId,
+      resultKind: RESULT_KIND_MISSION,
       missionId: mission._id,
       sessionLogId: null,
       subjectId:
@@ -3617,19 +3791,76 @@ async function createLessonManualResultPackageFromUpload({
   targetDate,
   file,
 }) {
-  const mission = await ensureManualResultOnlyMission({
+  const context = await resolveStandalonePaperResultContext({
     teacherId,
     studentId,
     subjectId,
     sessionType,
     targetDate,
   });
-
-  return createManualResultPackageFromUpload({
+  const evidence = buildPendingStandalonePaperResultEvidence({
     teacherId,
-    missionId: String(mission?._id || ""),
+    subjectName: context.subject.name,
+    sessionType: context.normalizedSessionType,
+    assignedDate: context.normalizedDateKey,
+  });
+  const resultPackage = await ResultPackage.create({
+    studentId,
+    teacherId,
+    resultKind: RESULT_KIND_PAPER_ASSESSMENT,
+    missionId: null,
+    sessionLogId: null,
+    subjectId,
+    missionType: "QUESTIONS",
+    meta: {
+      studentName: String(context.student?.name || "").trim(),
+      studentId: String(studentId || "").trim(),
+      teacherId: String(teacherId || "").trim(),
+      missionId: "",
+      missionTitle: buildStandalonePaperResultTitle({
+        subjectName: context.subject.name,
+        sessionType: context.normalizedSessionType,
+      }),
+      subject: String(context.subject.name || "").trim(),
+      taskCodes: [],
+      assignedDate: context.normalizedDateKey,
+      startTime: null,
+      submitTime: new Date(),
+      durationSeconds: 0,
+      score: {
+        correct: 0,
+        total: 0,
+        percent: 0,
+      },
+      xpAwarded: 0,
+    },
+    evidence,
+    latestSendStatus: "not_sent",
+  });
+
+  await storeTeacherEvidenceUpload({
+    resultPackage,
+    teacherId,
     file,
   });
+
+  console.info("[result] standalone paper result package created", {
+    resultPackageId: String(resultPackage._id || ""),
+    teacherId: String(teacherId || ""),
+    studentId: String(studentId || ""),
+    subjectId: String(subjectId || ""),
+    sessionType: context.normalizedSessionType,
+    targetDate: context.normalizedDateKey,
+  });
+
+  return {
+    success: true,
+    created: true,
+    resultPackage: await serializeResultPackageWithCertification(
+      resultPackage.toObject(),
+      [],
+    ),
+  };
 }
 
 async function getResultPackageForTeacher({
@@ -3934,10 +4165,18 @@ async function scoreManualResultPackage({
     );
   }
 
-  const mission = await Mission.findById(resultPackage.missionId)
-    .select("draftFormat questions latestResultPackageId")
-    .lean();
-  if (!mission) {
+  const missionId = String(resultPackage.missionId || "").trim();
+  const mission = missionId
+    ? await Mission.findById(missionId)
+        .select("draftFormat questions latestResultPackageId manualResultOnly")
+        .lean()
+    : null;
+  const resultKind = resolveStoredResultKind({
+    storedResultKind: resultPackage.resultKind,
+    mission,
+  });
+  const isPaperAssessment = resultKind === RESULT_KIND_PAPER_ASSESSMENT;
+  if (!isPaperAssessment && !mission) {
     throw createError(
       404,
       "Mission not found for this result package.",
@@ -3954,7 +4193,7 @@ async function scoreManualResultPackage({
         (normalizedReview.scoreCorrect / normalizedReview.scoreTotal) * 100,
       )
     : 0;
-  const xpMax = resolveMissionXpMax(mission);
+  const xpMax = isPaperAssessment ? PAPER_RESULT_XP_MAX : resolveMissionXpMax(mission);
   const earnedXp = Math.round((scorePercent / 100) * Math.max(0, xpMax));
   const previousXpAwarded = Math.max(0, Number(resultPackage?.meta?.xpAwarded || 0));
   const xpDelta = earnedXp - previousXpAwarded;
@@ -3993,13 +4232,15 @@ async function scoreManualResultPackage({
   resultPackage.markModified("evidence");
   await resultPackage.save();
 
-  await Mission.findByIdAndUpdate(resultPackage.missionId, {
-    latestScoreCorrect: normalizedReview.scoreCorrect,
-    latestScoreTotal: normalizedReview.scoreTotal,
-    latestScorePercent: scorePercent,
-    latestXpEarned: earnedXp,
-    latestResultPackageId: resultPackage._id,
-  });
+  if (missionId) {
+    await Mission.findByIdAndUpdate(missionId, {
+      latestScoreCorrect: normalizedReview.scoreCorrect,
+      latestScoreTotal: normalizedReview.scoreTotal,
+      latestScorePercent: scorePercent,
+      latestXpEarned: earnedXp,
+      latestResultPackageId: resultPackage._id,
+    });
+  }
 
   if (resultPackage.sessionLogId) {
     await SessionLog.findByIdAndUpdate(resultPackage.sessionLogId, {
@@ -4030,7 +4271,8 @@ async function scoreManualResultPackage({
 
   console.info("[result] manual score saved", {
     resultPackageId: String(resultPackage._id || ""),
-    missionId: String(resultPackage.missionId || ""),
+    missionId,
+    resultKind,
     teacherId: String(teacherId || ""),
     scoreCorrect: normalizedReview.scoreCorrect,
     scoreTotal: normalizedReview.scoreTotal,
@@ -4053,7 +4295,7 @@ async function scoreManualResultPackage({
       sendLogs,
     ),
     mission: {
-      id: String(resultPackage.missionId || ""),
+      id: missionId,
       latestScorePercent: scorePercent,
       latestXpEarned: earnedXp,
     },
@@ -4468,6 +4710,9 @@ module.exports = {
   ensureResultPackageForMission,
   createManualResultPackageFromUpload,
   createLessonManualResultPackageFromUpload,
+  serializeMissionResultHistoryEntry,
+  serializeStandalonePaperResultHistoryEntry,
+  sortResultHistoryEntries,
   getResultPackageForStudent,
   getResultPackageForManagement,
   getResultPackageForTeacher,

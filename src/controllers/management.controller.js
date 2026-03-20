@@ -19,14 +19,14 @@ async function getStudentResults(
   next,
 ) {
   try {
-    const missions =
+    const results =
       await managementService.listStudentResults(
         {
           managementId: req.user.id,
           studentId: req.params.studentId,
         },
       );
-    res.json({ missions });
+    res.json({ results, missions: results });
   } catch (error) {
     next(error);
   }

@@ -97,11 +97,11 @@ async function getSubjects(req, res, next) {
 
 async function getStudentResults(req, res, next) {
   try {
-    const missions = await teacherService.listStudentResults({
+    const results = await teacherService.listStudentResults({
       teacherId: req.user.id,
       studentId: req.params.id,
     });
-    res.json({ missions });
+    res.json({ results, missions: results });
   } catch (error) {
     next(error);
   }
