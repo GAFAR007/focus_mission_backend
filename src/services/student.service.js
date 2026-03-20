@@ -612,6 +612,7 @@ async function getTargetXpSummary(studentId, dateKey) {
 async function getSubjectProgressData(studentId) {
   const missions = await Mission.find({
     studentId,
+    manualResultOnly: { $ne: true },
     $or: [{ status: "published" }, { status: { $exists: false } }],
   })
     .populate("subjectId", "name icon color")
@@ -951,6 +952,7 @@ async function startSession({ studentId, subjectId, sessionType, missionId }) {
     subjectId,
     sessionType,
     availableOnDate: currentDateKey,
+    manualResultOnly: { $ne: true },
     $or: [{ status: "published" }, { status: { $exists: false } }],
   };
   const requestedMissionId = String(missionId || "").trim();
@@ -1034,6 +1036,7 @@ async function listAssignedMissions({
     subjectId,
     sessionType,
     availableOnDate: currentDateKey,
+    manualResultOnly: { $ne: true },
     $or: [{ status: "published" }, { status: { $exists: false } }],
   })
     .sort({ publishedAt: -1, createdAt: -1 })
@@ -1074,6 +1077,7 @@ async function completeSession(payload) {
       studentId: payload.studentId,
       subjectId: payload.subjectId,
       sessionType: payload.sessionType,
+      manualResultOnly: { $ne: true },
       $or: [{ status: "published" }, { status: { $exists: false } }],
     }).populate("subjectId", "name");
 

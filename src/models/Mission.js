@@ -266,6 +266,13 @@ const missionSchema = new mongoose.Schema(
       // WHY: Teacher-authored missions should carry an explicit reward so the
       // earned XP matches the planned effort instead of always using one fixed value.
     },
+    manualResultOnly: {
+      type: Boolean,
+      default: false,
+      index: true,
+      // WHY: Teacher-uploaded offline results need a lesson-linked mission id
+      // for audit history without surfacing as a playable student mission.
+    },
     latestScoreCorrect: {
       type: Number,
       min: 0,

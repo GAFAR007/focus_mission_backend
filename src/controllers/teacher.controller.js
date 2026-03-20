@@ -488,6 +488,23 @@ async function createManualResultPackage(req, res, next) {
   }
 }
 
+async function createLessonManualResultPackage(req, res, next) {
+  try {
+    const created =
+      await resultService.createLessonManualResultPackageFromUpload({
+        teacherId: req.user.id,
+        studentId: req.body.studentId,
+        subjectId: req.body.subjectId,
+        sessionType: req.body.sessionType,
+        targetDate: req.body.targetDate,
+        file: req.file,
+      });
+    res.status(201).json(created);
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function scoreTheoryResultPackage(req, res, next) {
   try {
     const scored = await resultService.scoreTheoryResultPackage({
@@ -597,6 +614,7 @@ module.exports = {
   getStudentBehaviourTrend,
   getResultPackage,
   createManualResultPackage,
+  createLessonManualResultPackage,
   scoreTheoryResultPackage,
   scoreManualResultPackage,
   sendResultPackage,

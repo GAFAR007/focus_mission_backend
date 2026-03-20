@@ -31,11 +31,61 @@ const THEORY_XP_MAX_FALLBACK = 50;
 const THEORY_FEEDBACK_MAX_LENGTH = 1000;
 const MANUAL_REVIEW_FEEDBACK_MAX_LENGTH = 1000;
 const MANUAL_REVIEW_SCORE_TOTALS = [10, 30, 50, 100];
+const MANUAL_RESULT_ONLY_QUESTION_COUNT = 5;
 
 function createError(statusCode, message) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+function getCurrentDateKey() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function parseDateKey(dateKey) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateKey || "").trim());
+  if (!match) {
+    throw createError(400, "targetDate must use YYYY-MM-DD format.");
+  }
+
+  const [, year, month, day] = match;
+  const parsed = new Date(Number(year), Number(month) - 1, Number(day));
+  if (
+    parsed.getFullYear() !== Number(year) ||
+    parsed.getMonth() !== Number(month) - 1 ||
+    parsed.getDate() !== Number(day)
+  ) {
+    throw createError(400, "targetDate is not a valid calendar date.");
+  }
+
+  return parsed;
+}
+
+function getWeekdayFromDateKey(dateKey) {
+  return new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(
+    parseDateKey(dateKey),
+  );
+}
+
+function normalizeLessonResultTargetDate(dateKey) {
+  const normalizedDateKey = String(dateKey || "").trim();
+  parseDateKey(normalizedDateKey);
+
+  if (normalizedDateKey > getCurrentDateKey()) {
+    // WHY: Teachers can upload offline work after the lesson, but creating a
+    // completed manual result for a future class would break audit trust.
+    throw createError(
+      400,
+      "Offline result uploads can only be created for today or a past lesson date.",
+    );
+  }
+
+  return normalizedDateKey;
 }
 
 function countWords(value) {
@@ -148,6 +198,46 @@ function normalizeText(value) {
   return String(value || "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function buildManualResultOnlyMissionTitle({
+  subjectName,
+  sessionType,
+}) {
+  const lessonLabel =
+    String(sessionType || "").trim().toLowerCase() === "afternoon"
+      ? "Afternoon"
+      : "Morning";
+  return `${String(subjectName || "Lesson").trim() || "Lesson"} ${lessonLabel} Offline Result`;
+}
+
+function buildManualResultOnlyMissionQuestions({
+  subjectName,
+  sessionType,
+}) {
+  const normalizedSubjectName = String(subjectName || "lesson").trim() || "lesson";
+  const lessonLabel =
+    String(sessionType || "").trim().toLowerCase() === "afternoon"
+      ? "afternoon"
+      : "morning";
+
+  return Array.from(
+    { length: MANUAL_RESULT_ONLY_QUESTION_COUNT },
+    (_unused, index) => ({
+      learningText:
+        `Teacher-uploaded offline work for this ${lessonLabel} ${normalizedSubjectName.toLowerCase()} lesson is stored here for audit review.`,
+      prompt: `Offline evidence checkpoint ${index + 1}`,
+      options: [
+        "Teacher uploaded offline work evidence.",
+        "Student completed no work.",
+        "Evidence was unavailable.",
+        "Audit review is incomplete.",
+      ],
+      correctIndex: 0,
+      explanation:
+        "This hidden audit-only mission stores offline work for teacher review and reporting.",
+    }),
+  );
 }
 
 function isWordChar(value) {
@@ -294,7 +384,17 @@ function buildPendingManualResultEvidence({
   const createdAt = new Date().toISOString();
   let baseEvidence;
 
-  if (missionType === "ESSAY_BUILDER") {
+  if (mission?.manualResultOnly === true) {
+    baseEvidence = {
+      format: "QUESTIONS",
+      questionsAnsweredCount: 0,
+      totalPointsEarned: 0,
+      totalPointsPossible: 0,
+      questions: [],
+      legacyBackfill: false,
+      legacyBackfillReason: "",
+    };
+  } else if (missionType === "ESSAY_BUILDER") {
     baseEvidence = buildLegacyEssayEvidence({
       draftJson: mission?.draftJson || {},
     });
@@ -318,10 +418,19 @@ function buildPendingManualResultEvidence({
     ...baseEvidence,
     manualTeacherResult: true,
     manualTeacherResultStatus: "pending_review",
+    manualTeacherResultSource:
+      mission?.manualResultOnly === true ? "lesson_slot_fallback" : "mission_upload",
     manualTeacherResultReason:
-      "Teacher uploaded offline work because no digital result was available for this mission.",
+      mission?.manualResultOnly === true
+        ? "Teacher uploaded offline work because no published mission existed for this lesson slot."
+        : "Teacher uploaded offline work because no digital result was available for this mission.",
     manualTeacherResultCreatedAt: createdAt,
     manualTeacherResultCreatedBy: String(teacherId || ""),
+    manualTeacherResultLessonContext: {
+      sessionType: String(mission?.sessionType || "").trim(),
+      assignedDate: String(mission?.availableOnDate || "").trim(),
+      subject: String(mission?.subjectId?.name || "").trim(),
+    },
     teacherReviewStatus: "pending",
     legacyBackfill: false,
     legacyBackfillReason: "",
@@ -3172,6 +3281,138 @@ async function ensureResultPackageForMission({
   };
 }
 
+async function ensureManualResultOnlyMission({
+  teacherId,
+  studentId,
+  subjectId,
+  sessionType,
+  targetDate,
+}) {
+  const normalizedSessionType = String(sessionType || "").trim().toLowerCase();
+  if (!["morning", "afternoon"].includes(normalizedSessionType)) {
+    throw createError(400, "sessionType must be morning or afternoon.");
+  }
+
+  const normalizedDateKey = normalizeLessonResultTargetDate(targetDate);
+  const targetDay = getWeekdayFromDateKey(normalizedDateKey);
+  const [teacher, student, subject, timetable] = await Promise.all([
+    User.findOne({ _id: teacherId, role: "teacher" })
+      .select("name")
+      .lean(),
+    User.findOne({
+      _id: studentId,
+      role: "student",
+      isArchived: { $ne: true },
+    })
+      .select("name")
+      .lean(),
+    Subject.findById(subjectId)
+      .select("name")
+      .lean(),
+    Timetable.findOne({
+      studentId,
+      day: targetDay,
+    }).lean(),
+  ]);
+
+  if (!teacher) {
+    throw createError(404, "Teacher not found.");
+  }
+
+  if (!student) {
+    throw createError(404, "Student not found.");
+  }
+
+  if (!subject) {
+    throw createError(404, "Subject not found.");
+  }
+
+  if (!timetable) {
+    throw createError(
+      403,
+      "This student does not have a timetable entry for that lesson date.",
+    );
+  }
+
+  const scheduledSubjectId =
+    normalizedSessionType === "morning"
+      ? timetable.morningSubject
+      : timetable.afternoonSubject;
+  const scheduledTeacherId =
+    normalizedSessionType === "morning"
+      ? timetable.morningTeacherId
+      : timetable.afternoonTeacherId;
+
+  if (!scheduledSubjectId || String(scheduledSubjectId) !== String(subjectId)) {
+    throw createError(
+      403,
+      "Offline results can only be uploaded for the subject scheduled in that lesson slot.",
+    );
+  }
+
+  if (!scheduledTeacherId || String(scheduledTeacherId) !== String(teacherId)) {
+    throw createError(
+      403,
+      "Only the teacher assigned to that lesson slot can upload this offline result.",
+    );
+  }
+
+  const existingMission = await Mission.findOne({
+    createdBy: teacherId,
+    studentId,
+    subjectId,
+    sessionType: normalizedSessionType,
+    availableOnDate: normalizedDateKey,
+    manualResultOnly: true,
+  }).sort({ createdAt: -1 });
+
+  if (existingMission) {
+    return existingMission;
+  }
+
+  const questions = buildManualResultOnlyMissionQuestions({
+    subjectName: subject.name,
+    sessionType: normalizedSessionType,
+  });
+  const xpReward = resolveMissionRewardPolicy({
+    draftFormat: "QUESTIONS",
+    questionCount: questions.length,
+  }).xpReward;
+
+  // WHY: Offline uploads without a published mission still need a stable
+  // mission id so result evidence, scoring, and later sends remain auditable.
+  return Mission.create({
+    studentId,
+    subjectId,
+    sessionType: normalizedSessionType,
+    title: buildManualResultOnlyMissionTitle({
+      subjectName: subject.name,
+      sessionType: normalizedSessionType,
+    }),
+    teacherNote:
+      "Teacher-uploaded offline work for a lesson slot that did not have a published mission.",
+    sourceUnitText: "",
+    sourceRawText: "",
+    sourceFileName: "",
+    sourceFileType: "",
+    draftFormat: "QUESTIONS",
+    essayMode: null,
+    draftJson: null,
+    source: "bank",
+    status: "draft",
+    aiModel: "",
+    publishedAt: null,
+    availableOnDate: normalizedDateKey,
+    availableOnDay: targetDay,
+    difficulty: "medium",
+    taskCodes: [],
+    xpReward,
+    manualResultOnly: true,
+    questions,
+    createdBy: teacherId,
+  });
+}
+
 async function createManualResultPackageFromUpload({
   teacherId,
   missionId,
@@ -3366,6 +3607,29 @@ async function createManualResultPackageFromUpload({
       [],
     ),
   };
+}
+
+async function createLessonManualResultPackageFromUpload({
+  teacherId,
+  studentId,
+  subjectId,
+  sessionType,
+  targetDate,
+  file,
+}) {
+  const mission = await ensureManualResultOnlyMission({
+    teacherId,
+    studentId,
+    subjectId,
+    sessionType,
+    targetDate,
+  });
+
+  return createManualResultPackageFromUpload({
+    teacherId,
+    missionId: String(mission?._id || ""),
+    file,
+  });
 }
 
 async function getResultPackageForTeacher({
@@ -4203,6 +4467,7 @@ module.exports = {
   createResultPackageForCompletion,
   ensureResultPackageForMission,
   createManualResultPackageFromUpload,
+  createLessonManualResultPackageFromUpload,
   getResultPackageForStudent,
   getResultPackageForManagement,
   getResultPackageForTeacher,

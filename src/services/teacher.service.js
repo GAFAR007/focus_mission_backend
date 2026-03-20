@@ -1470,10 +1470,7 @@ async function listStudentResults({
   const missions = await Mission.find({
     studentId,
     subjectId: { $in: subjectIds },
-    $or: [
-      { status: "published" },
-      { status: { $exists: false } },
-    ],
+    $or: [{ manualResultOnly: true }, { status: "published" }, { status: { $exists: false } }],
     latestResultPackageId: {
       $exists: true,
       $ne: null,
@@ -2064,6 +2061,7 @@ async function listDraftMissions(teacherId, studentId) {
     createdBy: teacherId,
     studentId,
     status: "draft",
+    manualResultOnly: { $ne: true },
   })
     .sort({ updatedAt: -1, createdAt: -1 })
     .limit(DRAFT_MISSIONS_LIMIT)
@@ -2077,6 +2075,7 @@ async function listRecentMissions(teacherId, studentId) {
   const missions = await Mission.find({
     createdBy: teacherId,
     studentId,
+    manualResultOnly: { $ne: true },
     $or: [{ status: "published" }, { status: { $exists: false } }],
   })
     .sort({ publishedAt: -1, createdAt: -1 })

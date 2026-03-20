@@ -881,6 +881,35 @@ router.post(
 );
 
 router.post(
+  "/results/manual-upload",
+  upload.single("resultFile"),
+  [
+    body("studentId")
+      .isMongoId()
+      .withMessage(
+        "Valid studentId is required.",
+      ),
+    body("subjectId")
+      .isMongoId()
+      .withMessage(
+        "Valid subjectId is required.",
+      ),
+    body("sessionType")
+      .isIn(["morning", "afternoon"])
+      .withMessage(
+        "sessionType must be morning or afternoon.",
+      ),
+    body("targetDate")
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage(
+        "targetDate must use YYYY-MM-DD format.",
+      ),
+    validateRequest,
+  ],
+  teacherController.createLessonManualResultPackage,
+);
+
+router.post(
   "/results/:resultPackageId/score-theory",
   [
     param("resultPackageId")
