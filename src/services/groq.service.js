@@ -33,1084 +33,288 @@ function countWords(value) {
     .filter(Boolean).length;
 }
 
-const ESSAY_BUILDER_RETRY_LIMIT = 3;
-const ESSAY_TARGET_WORD_MIN = 100;
-const ESSAY_TARGET_WORD_MAX = 350;
-const ESSAY_TARGET_BLANK_MIN = 10;
-const ESSAY_TARGET_BLANK_MAX = 19;
-const ESSAY_MODE_OPTIONS = ["NORMAL", "STRETCH_15", "STRETCH_20"];
-const ESSAY_MODE_CONFIG = {
-  NORMAL: {
-    targetWordMin: 100,
-    targetWordMax: 220,
-    targetSentenceCount: 10,
-  },
-  STRETCH_15: {
-    targetWordMin: 180,
-    targetWordMax: 280,
-    targetSentenceCount: 15,
-  },
-  STRETCH_20: {
-    targetWordMin: 220,
-    targetWordMax: 350,
-    // WHY: Targeting 19 keeps sentence-per-blank drafts inside the default
-    // blank cap while still matching the requested "~20 sentence" stretch mode.
-    targetSentenceCount: 19,
-  },
-};
-
-function normalizeEssayMode(mode) {
-  const normalized = String(mode || "")
-    .trim()
-    .toUpperCase();
-  if (ESSAY_MODE_OPTIONS.includes(normalized)) {
-    return normalized;
-  }
-  return "NORMAL";
-}
-
-function ensureEssayModeConfig(mode) {
-  return ESSAY_MODE_CONFIG[
-    normalizeEssayMode(mode)
-  ] || ESSAY_MODE_CONFIG.NORMAL;
-}
-
-function cleanSentenceLearnFirst(
+function normalizeEssayLearnFirst(
   learnFirst,
-  sentenceParts = [],
+  fallbackLearnFirst = {},
+  sentence = null,
 ) {
-  const rawBullets = Array.isArray(
-    learnFirst?.bullets,
-  ) ?
+  const fallbackTitle = String(
+    fallbackLearnFirst?.title || "",
+  ).trim();
+  const title =
+    String(
+      learnFirst?.title || "",
+    ).trim() ||
+    fallbackTitle ||
+    "Learn First";
+
+  const sanitizedBullets =
+    Array.isArray(learnFirst?.bullets) ?
       learnFirst.bullets
-        .map((bullet) => String(bullet || "").trim())
+        .map((bullet) =>
+          String(bullet || "").trim(),
+        )
         .filter(Boolean)
     : [];
 
-  const normalize = (value) =>
-    String(value || "")
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-  const isGenericBullet = (bullet) => {
-    const text = normalize(bullet);
-    if (!text || countWords(text) < 6) {
-      return true;
-    }
-    const genericMarkers = [
-      "choose the best option",
-      "use the sentence clue",
-      "pick the best option",
-      "read and choose",
-      "a b c d",
-    ];
-    return genericMarkers.some((marker) => text.includes(marker));
-  };
-
-  const blankParts = (
-    Array.isArray(sentenceParts) ?
-      sentenceParts
-    : []
-  ).filter((part) => part && part.type === "blank");
-  const firstBlank = blankParts[0] || null;
-  const correctOption = String(firstBlank?.correctOption || "A")
-    .trim()
-    .toUpperCase();
-  const correctOptionText = String(
-    firstBlank?.options?.[correctOption] || "",
-  ).trim();
-  const optionsSummary = ["A", "B", "C", "D"]
-    .map((key) =>
-      String(firstBlank?.options?.[key] || "").trim() ?
-        `${key}: ${String(firstBlank.options[key]).trim()}`
-      : "",
-    )
-    .filter(Boolean)
-    .join(" | ");
-  const sentenceContext = normalizeEssayText(
-    (Array.isArray(sentenceParts) ? sentenceParts : [])
-      .map((part) =>
-        part && part.type === "text" ?
-          String(part.value || "")
-        : "_____",
+  const sentenceFallbackBullets =
+    buildSentenceFallbackBullets(
+      sentence,
+    );
+  const globalFallbackBullets =
+    (
+      Array.isArray(
+        fallbackLearnFirst?.bullets,
       )
-      .join(""),
-  );
+    ) ?
+      fallbackLearnFirst.bullets
+        .map((bullet) =>
+          String(bullet || "").trim(),
+        )
+        .filter(Boolean)
+    : [];
 
-  const fallbackBullets = [
-    sentenceContext ?
-      `Sentence focus: ${sentenceContext}`
-    : "Read the sentence carefully and identify the main idea before choosing.",
-    correctOptionText ?
-      `Best-fit clue: ${correctOptionText} matches the lesson meaning most accurately.`
-    : "Pick the option that keeps the sentence accurate to the lesson content.",
-    optionsSummary ?
-      `Compare options: ${optionsSummary}. Select the strongest match for this sentence.`
-    : "Compare all A/B/C/D options and select the one that best matches the taught point.",
-  ];
+  const mergedBullets = [
+    ...sanitizedBullets,
+    ...sentenceFallbackBullets,
+    ...globalFallbackBullets,
+    "Use the sentence clues and pick the best fit from A/B/C/D.",
+    "Choose options that match the taught idea before moving on.",
+    "Read each sentence frame carefully before selecting an option.",
+  ].filter(Boolean);
 
-  const preferredBullets = rawBullets.filter(
-    (bullet) => !isGenericBullet(bullet),
-  );
   const uniqueBullets = [];
-  for (const bullet of [
-    ...preferredBullets,
-    ...rawBullets,
-    ...fallbackBullets,
-  ]) {
-    const trimmed = String(bullet || "").trim();
-    if (!trimmed || uniqueBullets.includes(trimmed)) {
-      continue;
-    }
-    uniqueBullets.push(trimmed);
-    if (uniqueBullets.length >= 6) {
-      break;
+  for (const bullet of mergedBullets) {
+    if (
+      !uniqueBullets.includes(bullet)
+    ) {
+      uniqueBullets.push(bullet);
     }
   }
 
-  while (uniqueBullets.length < 3) {
-    uniqueBullets.push(
-      fallbackBullets[uniqueBullets.length % fallbackBullets.length],
+  const bullets = uniqueBullets.slice(
+    0,
+    6,
+  );
+
+  while (bullets.length < 3) {
+    bullets.push(
+      "Use the sentence clues and pick the best fit from A/B/C/D.",
     );
   }
 
+  const sentenceExample =
+    buildSentenceIdealText(sentence);
+  const miniExample =
+    String(
+      learnFirst?.miniExample || "",
+    ).trim() ||
+    sentenceExample ||
+    String(
+      fallbackLearnFirst?.miniExample ||
+        "",
+    ).trim() ||
+    "Read the sentence frame, choose the best options, then continue.";
+
   return {
-    title:
-      String(learnFirst?.title || "").trim() ||
-      "LEARN FIRST",
-    bullets: uniqueBullets.slice(0, 6),
+    title,
+    bullets,
+    miniExample,
   };
 }
 
-function cleanEssayPart(
-  part,
-  sentenceIndex,
-  partIndex,
+function buildSentenceFallbackBullets(
+  sentence,
 ) {
-  const type = String(part?.type || "")
-    .trim()
-    .toLowerCase();
-  if (type === "blank") {
-    const options = ["A", "B", "C", "D"].reduce(
-      (result, key) => {
-        const value = String(
-          part?.options?.[key] || "",
-        ).trim();
-        if (value) {
-          result[key] = value;
-        }
-        return result;
-      },
-      {},
+  if (
+    !sentence ||
+    typeof sentence !== "object"
+  ) {
+    return [];
+  }
+
+  const parts =
+    Array.isArray(sentence.parts) ?
+      sentence.parts
+    : [];
+  const blankParts = parts.filter(
+    (part) =>
+      part && part.type === "blank",
+  );
+  const bullets = [];
+
+  const roleLabel = String(
+    sentence.role || "essay",
+  ).trim();
+  if (roleLabel) {
+    bullets.push(
+      `Focus on the ${roleLabel} sentence idea while choosing options.`,
     );
-    const normalizedCorrectOption = String(
-      part?.correctOption || "A",
+  }
+
+  for (
+    let index = 0;
+    index < blankParts.length;
+    index += 1
+  ) {
+    const part = blankParts[index];
+    const hint = String(
+      part.hint || `blank ${index + 1}`,
+    ).trim();
+    const correctKey = String(
+      part.correctKey || "",
     )
       .trim()
       .toUpperCase();
-    const correctOption = ["A", "B", "C", "D"].includes(
-      normalizedCorrectOption,
-    ) ?
-        normalizedCorrectOption
-      : "A";
-    return {
-      type: "blank",
-      blankId:
-        String(part?.blankId || "").trim() ||
-        `s${sentenceIndex + 1}b${partIndex + 1}`,
-      hint: String(
-        part?.hint || "",
-      ).trim(),
-      options,
-      correctOption,
-    };
-  }
-
-  return {
-    type: "text",
-    value: String(
-      part?.value || "",
-    ),
-  };
-}
-
-function enforceSentenceRole(
-  role,
-  index,
-  totalSentences,
-) {
-  if (index === 0) {
-    return "topic";
-  }
-  if (index === totalSentences - 1) {
-    return "conclusion";
-  }
-  // WHY: Only the first and last sentences may be topic/conclusion. Every
-  // middle sentence must be normalized to detail for deterministic validation.
-  return "detail";
-}
-
-function countEssayBuilderBlanks(
-  sentences,
-) {
-  return (
-    Array.isArray(sentences) ?
-      sentences
-    : []
-  ).reduce(
-    (sum, sentence) =>
-      sum +
-      (Array.isArray(
-        sentence?.parts,
-      ) ?
-        sentence.parts
-      : []
-      ).filter(
-        (part) =>
-          part &&
-          part.type ===
-            "blank",
-      ).length,
-    0,
-  );
-}
-
-function extractEssayKeywordsFromSource(
-  unitText,
-) {
-  const source = String(
-    unitText || "",
-  ).toLowerCase();
-  const selected = [];
-
-  const stopWords = new Set([
-    "the",
-    "and",
-    "that",
-    "with",
-    "from",
-    "this",
-    "your",
-    "their",
-    "into",
-    "about",
-    "over",
-    "under",
-    "also",
-    "more",
-    "than",
-    "have",
-    "will",
-    "such",
-    "just",
-    "text",
-    "task",
-    "write",
-    "words",
-    "student",
-    "lesson",
-    "topic",
-    "question",
-    "answer",
-    "option",
-    "choose",
-    "essay",
-    "builder",
-  ]);
-  const tokens = source
-    .split(/[^a-z]+/g)
-    .map((word) => word.trim())
-    .filter(
-      (word) =>
-        word.length >= 4 &&
-        !stopWords.has(word),
-    );
-
-  const counts = new Map();
-  for (const token of tokens) {
-    counts.set(
-      token,
-      Number(
-        counts.get(token) || 0,
-      ) + 1,
-    );
-  }
-
-  const ranked = Array.from(
-    counts.entries(),
-  )
-    .sort((left, right) => {
-      if (right[1] !== left[1]) {
-        return right[1] - left[1];
-      }
-      return left[0].localeCompare(
-        right[0],
-      );
-    })
-    .map((entry) => entry[0]);
-
-  for (const word of ranked) {
-    if (
-      !selected.includes(word)
-    ) {
-      selected.push(word);
+    const optionText = String(
+      part?.options?.[correctKey] || "",
+    ).trim();
+    if (!optionText) {
+      continue;
     }
-    if (selected.length >= 6) {
-      break;
-    }
+    const normalizedHint =
+      hint.charAt(0).toUpperCase() +
+      hint.slice(1);
+    bullets.push(
+      `${normalizedHint} should match: ${optionText}.`,
+    );
   }
 
-  if (!selected.length) {
-    return [
-      "key concept",
-      "main point",
-      "lesson detail",
-      "supporting idea",
-    ];
-  }
-
-  return selected;
+  return bullets;
 }
 
-function buildAutoEssayBlankOptions(
-  keywords,
-  seedIndex,
+function buildSentenceIdealText(
+  sentence,
 ) {
-  const safeKeywords =
-    Array.isArray(keywords) &&
-    keywords.length > 0 ?
-      keywords
-    : [
-        "lifestyle",
-        "health",
-        "wellbeing",
-        "routine",
-      ];
-  const candidatePool = [
-    safeKeywords[
-      seedIndex %
-        safeKeywords.length
-    ],
-    safeKeywords[
-      (seedIndex + 1) %
-        safeKeywords.length
-    ],
-    "daily habits",
-    "support routines",
-    "balanced choices",
-  ]
-    .map((value) =>
-      String(value || "").trim(),
-    )
-    .filter(Boolean);
-
-  const distinct = [];
-  for (const value of candidatePool) {
-    if (
-      !distinct.includes(value)
-    ) {
-      distinct.push(value);
-    }
-  }
-
-  while (distinct.length < 4) {
-    distinct.push(
-      `option ${distinct.length + 1}`,
-    );
-  }
-
-  return {
-    A: distinct[0],
-    B: distinct[1],
-    C: distinct[2],
-    D: distinct[3],
-  };
-}
-
-function buildAutoEssaySentence({
-  sentenceIndex,
-  blankIndex,
-  keywords,
-}) {
-  const options =
-    buildAutoEssayBlankOptions(
-      keywords,
-      blankIndex,
-    );
-  const answerHint =
-    options.A || "main idea";
-  const optionsSummary = ["A", "B", "C", "D"]
-    .map((key) => `${key}: ${options[key]}`)
-    .join(" | ");
-
-  return {
-    id: `s${sentenceIndex + 1}`,
-    role: "detail",
-    learnFirst: {
-      title: "LEARN FIRST",
-      bullets: [
-        "Read the sentence context first so you know what evidence is needed.",
-        `Best-fit clue: ${answerHint} is the strongest match for this sentence meaning.`,
-        `Option comparison: ${optionsSummary}. Pick the choice that stays most accurate.`,
-      ],
-    },
-    parts: [
-      {
-        type: "text",
-        value:
-          "A key idea in this lesson is ",
-      },
-      {
-        type: "blank",
-        blankId:
-          `auto_b${blankIndex + 1}`,
-        hint: "Pick the best factor",
-        options,
-        correctOption: "A",
-      },
-      {
-        type: "text",
-        value:
-          ", which supports the main point of this lesson.",
-      },
-    ],
-  };
-}
-
-function ensureEssayDraftBlankMinimum(
-  sentences,
-  unitText,
-) {
-  const nextSentences = Array.isArray(
-    sentences,
-  ) ?
-      [...sentences]
-    : [];
-  const keywords =
-    extractEssayKeywordsFromSource(
-      unitText,
-    );
-  let blankCount =
-    countEssayBuilderBlanks(
-      nextSentences,
-    );
-
-  // WHY: The draft contract requires at least 10 blanks for the guided
-  // sentence-builder interaction. Auto-padding avoids wasting retries when the
-  // model under-generates by one or two blanks.
-  let guard = 0;
-  while (
-    blankCount <
-      ESSAY_TARGET_BLANK_MIN &&
-    guard < 20
+  if (
+    !sentence ||
+    typeof sentence !== "object"
   ) {
-    nextSentences.push(
-      buildAutoEssaySentence(
-        {
-          sentenceIndex:
-            nextSentences.length,
-          blankIndex:
-            blankCount,
-          keywords,
-        },
-      ),
-    );
-    blankCount =
-      countEssayBuilderBlanks(
-        nextSentences,
-      );
-    guard += 1;
+    return "";
   }
 
-  return nextSentences;
-}
-
-function sanitizeEssayBuilderDraft(
-  draftJson,
-  mode,
-  unitText = "",
-) {
-  const normalizedMode =
-    normalizeEssayMode(
-      draftJson?.mode || mode,
-    );
-  const modeConfig =
-    ensureEssayModeConfig(
-      normalizedMode,
-    );
-  const rawSentences = Array.isArray(
-    draftJson?.sentences,
-  ) ?
-      draftJson.sentences
-    : Array.isArray(
-        draftJson?.builder?.sentences,
-      ) ?
-      draftJson.builder.sentences
+  const parts =
+    Array.isArray(sentence.parts) ?
+      sentence.parts
     : [];
+  const buffer = [];
+  for (const part of parts) {
+    if (
+      !part ||
+      typeof part !== "object"
+    ) {
+      continue;
+    }
 
-  const mappedSentences =
-    rawSentences.map(
-      (sentence, index, items) => {
-        const parts = Array.isArray(
-          sentence?.parts,
-        ) ?
-            sentence.parts
-          : [];
-        return {
-          id:
-            String(
-              sentence?.id ||
-                `s${index + 1}`,
-            ).trim() ||
-            `s${index + 1}`,
-          role:
-            enforceSentenceRole(
-              sentence?.role,
-              index,
-              items.length,
-            ),
-          learnFirst:
-            cleanSentenceLearnFirst(
-              sentence?.learnFirst,
-              parts,
-            ),
-          parts: parts.map(
-            (
-              part,
-              partIndex,
-            ) =>
-              cleanEssayPart(
-                part,
-                index,
-                partIndex,
-              ),
-          ),
-        };
-      },
-    );
-
-  const minimumBlankSentences =
-    ensureEssayDraftBlankMinimum(
-      mappedSentences,
-      unitText,
-    );
-  const sentences =
-    minimumBlankSentences.map(
-      (sentence, index, items) => ({
-        ...sentence,
-        role:
-          enforceSentenceRole(
-            sentence?.role,
-            index,
-            items.length,
-          ),
-      }),
-    );
-  const blankCount =
-    countEssayBuilderBlanks(
-      sentences,
-    );
-  const rawTargets =
-    draftJson?.targets &&
-    typeof draftJson.targets ===
-      "object" ?
-      draftJson.targets
-    : {};
-
-  return {
-    type:
-      String(
-        draftJson?.type ||
-          "ESSAY_BUILDER",
+    if (part.type === "blank") {
+      const correctKey = String(
+        part.correctKey || "",
       )
         .trim()
-        .toUpperCase(),
-    mode: normalizedMode,
-    targets: {
-      targetWordMin: Number(
-        rawTargets.targetWordMin ||
-          modeConfig.targetWordMin,
-      ),
-      targetWordMax: Number(
-        rawTargets.targetWordMax ||
-          modeConfig.targetWordMax,
-      ),
-      targetSentenceCount: Number(
-        sentences.length ||
-          rawTargets.targetSentenceCount ||
-          modeConfig.targetSentenceCount,
-      ),
-      targetBlankCount: Number(
-        blankCount ||
-          rawTargets.targetBlankCount ||
-          ESSAY_TARGET_BLANK_MIN,
-      ),
-    },
-    sentences,
-  };
-}
+        .toUpperCase();
+      const optionText = String(
+        part?.options?.[correctKey] ||
+          "",
+      ).trim();
+      buffer.push(optionText);
+      continue;
+    }
 
-function normalizeEssayText(value) {
-  return String(value || "")
+    buffer.push(
+      String(part.value || ""),
+    );
+  }
+
+  return buffer
+    .join("")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function pickOptionByWordLength(
-  options,
-  strategy,
-) {
-  const values = ["A", "B", "C", "D"]
-    .map((key) =>
-      String(
-        options?.[key] || "",
-      ).trim(),
-    )
-    .filter(Boolean);
-  if (!values.length) {
-    return "";
-  }
-
-  const sorted = values.sort(
-    (left, right) =>
-      countWords(left) -
-      countWords(right),
-  );
-  return strategy === "max" ?
-      sorted[sorted.length - 1]
-    : sorted[0];
-}
-
-function assembleEssayForRange(
-  sentences,
-  strategy,
-) {
-  const rendered = [];
-  for (const sentence of (
-    Array.isArray(sentences)
-  ) ?
-    sentences
-  : []) {
-    const buffer = [];
-    const parts = Array.isArray(
-      sentence?.parts,
-    ) ?
-        sentence.parts
-      : [];
-    for (const part of parts) {
-      if (!part || typeof part !== "object") {
-        continue;
-      }
-      if (part.type === "blank") {
-        buffer.push(
-          pickOptionByWordLength(
-            part.options,
-            strategy,
-          ),
-        );
-        continue;
-      }
-      buffer.push(
-        String(part.value || ""),
-      );
-    }
-    const sentenceText =
-      normalizeEssayText(
-        buffer.join(""),
-      );
-    if (sentenceText) {
-      rendered.push(sentenceText);
-    }
-  }
-  return normalizeEssayText(
-    rendered.join(" "),
-  );
-}
-
-function validateEssayBuilderDraft(
+function sanitizeEssayBuilderDraft(
   draftJson,
-  {
-    allowOverflowBlanks = false,
-  } = {},
 ) {
-  const errors = [];
-  if (!draftJson || typeof draftJson !== "object") {
-    return {
-      isValid: false,
-      errors: [
-        "JSON invalid or empty.",
-      ],
-    };
-  }
-
-  if (draftJson.type !== "ESSAY_BUILDER") {
-    errors.push(
-      "Draft type must be ESSAY_BUILDER.",
-    );
-  }
-
-  if (
-    !ESSAY_MODE_OPTIONS.includes(
-      String(
-        draftJson.mode || "",
-      ).toUpperCase(),
-    )
-  ) {
-    errors.push(
-      "Mode must be NORMAL, STRETCH_15, or STRETCH_20.",
-    );
-  }
-
-  const targets =
-    draftJson.targets &&
-    typeof draftJson.targets ===
-      "object" ?
-      draftJson.targets
-    : null;
-  if (!targets) {
-    errors.push(
-      "targets are required.",
-    );
-  }
-
-  const sentences = Array.isArray(
-    draftJson.sentences,
-  ) ?
-      draftJson.sentences
+  const builder =
+    (
+      draftJson?.builder &&
+      typeof draftJson.builder ===
+        "object"
+    ) ?
+      draftJson.builder
+    : {};
+  const rawSentences =
+    Array.isArray(builder.sentences) ?
+      builder.sentences
     : [];
-  if (!sentences.length) {
-    errors.push(
-      "sentences are required.",
+
+  const normalizedGlobalLearnFirst =
+    normalizeEssayLearnFirst(
+      draftJson?.learnFirst,
     );
-  }
-
-  let blankCount = 0;
-  sentences.forEach(
-    (sentence, index) => {
-      const parts = Array.isArray(
-        sentence?.parts,
-      ) ?
-          sentence.parts
-        : [];
-      const blankParts = parts.filter(
-        (part) =>
-          part &&
-          part.type ===
-            "blank",
-      );
-      blankCount += blankParts.length;
-
-      if (blankParts.length < 1) {
-        errors.push(
-          `Sentence ${index + 1} has zero blanks.`,
-        );
-      }
-
-      if (
-        !sentence?.learnFirst ||
-        !String(
-          sentence.learnFirst.title ||
-            "",
-        ).trim()
-      ) {
-        errors.push(
-          `Sentence ${index + 1} is missing LEARN FIRST title.`,
-        );
-      }
-
-      const learnBullets = Array.isArray(
-        sentence?.learnFirst?.bullets,
-      ) ?
-          sentence.learnFirst.bullets
-            .map((bullet) =>
-              String(
-                bullet || "",
+  const normalizedSentences =
+    rawSentences.map(
+      (sentence, index) => {
+        const normalizedSentence =
+          (
+            sentence &&
+            typeof sentence === "object"
+          ) ?
+            {
+              ...sentence,
+              id:
+                String(
+                  sentence.id ||
+                    `s${index + 1}`,
+                ).trim() ||
+                `s${index + 1}`,
+              role: String(
+                sentence.role ||
+                  "detail",
               ).trim(),
-            )
-            .filter(Boolean)
-        : [];
-      if (!learnBullets.length) {
-        errors.push(
-          `Sentence ${index + 1} is missing LEARN FIRST bullets.`,
-        );
-      }
-      if (learnBullets.length < 3) {
-        errors.push(
-          `Sentence ${index + 1} needs at least three LEARN FIRST bullets.`,
-        );
-      }
-      const learnWordCount = learnBullets.reduce(
-        (sum, bullet) => sum + countWords(bullet),
-        0,
-      );
-      if (learnWordCount < 18) {
-        errors.push(
-          `Sentence ${index + 1} LEARN FIRST guidance is too short.`,
-        );
-      }
+              parts:
+                (
+                  Array.isArray(
+                    sentence.parts,
+                  )
+                ) ?
+                  sentence.parts
+                : [],
+            }
+          : {
+              id: `s${index + 1}`,
+              role: "detail",
+              parts: [],
+            };
 
-      blankParts.forEach(
-        (
-          part,
-          blankIndex,
-        ) => {
-          const options =
-            part?.options &&
-            typeof part.options ===
-              "object" ?
-              part.options
-            : {};
-          const keys = Object.keys(
-            options,
-          ).sort();
-          if (
-            keys.join(",") !==
-            "A,B,C,D"
-          ) {
-            errors.push(
-              `Sentence ${index + 1} blank ${blankIndex + 1} must include exactly A/B/C/D options.`,
-            );
-          }
-
-          const missingOptionText = [
-            "A",
-            "B",
-            "C",
-            "D",
-          ].some(
-            (key) =>
-              !String(
-                options?.[key] || "",
-              ).trim(),
-          );
-          if (missingOptionText) {
-            errors.push(
-              `Sentence ${index + 1} blank ${blankIndex + 1} has an empty option.`,
-            );
-          }
-          const correctOption = String(
-            part?.correctOption || "",
-          )
-            .trim()
-            .toUpperCase();
-          if (
-            !["A", "B", "C", "D"].includes(
-              correctOption,
-            )
-          ) {
-            errors.push(
-              `Sentence ${index + 1} blank ${blankIndex + 1} must include correctOption A/B/C/D.`,
-            );
-          } else if (
-            !String(
-              options?.[correctOption] || "",
-            ).trim()
-          ) {
-            errors.push(
-              `Sentence ${index + 1} blank ${blankIndex + 1} has empty text for correctOption ${correctOption}.`,
-            );
-          }
-        },
-      );
-
-      const expectedRole =
-        index === 0 ?
-          "topic"
-        : index ===
-          sentences.length - 1 ?
-          "conclusion"
-        : "detail";
-      if (
-        String(
-          sentence?.role || "",
-        )
-          .trim()
-          .toLowerCase() !==
-        expectedRole
-      ) {
-        errors.push(
-          `Sentence ${index + 1} role must be ${expectedRole}.`,
-        );
-      }
-    },
-  );
-
-  const sentenceCount =
-    sentences.length;
-  const targetSentenceCount =
-    Number(
-      targets?.targetSentenceCount,
+        return {
+          ...normalizedSentence,
+          learnFirst:
+            normalizeEssayLearnFirst(
+              normalizedSentence.learnFirst,
+              normalizedGlobalLearnFirst,
+              normalizedSentence,
+            ),
+        };
+      },
     );
-  const targetBlankCount = Number(
-    targets?.targetBlankCount,
-  );
-  const targetWordMin = Number(
-    targets?.targetWordMin,
-  );
-  const targetWordMax = Number(
-    targets?.targetWordMax,
-  );
-
-  if (!targets) {
-    errors.push(
-      "targets are missing.",
-    );
-  } else {
-    if (
-      !Number.isInteger(
-        targetSentenceCount,
-      ) ||
-      targetSentenceCount <= 0
-    ) {
-      errors.push(
-        "targets.targetSentenceCount must be a positive integer.",
-      );
-    }
-    if (
-      !Number.isInteger(
-        targetBlankCount,
-      ) ||
-      targetBlankCount <= 0
-    ) {
-      errors.push(
-        "targets.targetBlankCount must be a positive integer.",
-      );
-    }
-    if (
-      !Number.isInteger(
-        targetWordMin,
-      ) ||
-      targetWordMin <
-        ESSAY_TARGET_WORD_MIN
-    ) {
-      errors.push(
-        `targets.targetWordMin must be at least ${ESSAY_TARGET_WORD_MIN}.`,
-      );
-    }
-    if (
-      !Number.isInteger(
-        targetWordMax,
-      ) ||
-      targetWordMax >
-        ESSAY_TARGET_WORD_MAX
-    ) {
-      errors.push(
-        `targets.targetWordMax must be at most ${ESSAY_TARGET_WORD_MAX}.`,
-      );
-    }
-    if (
-      Number.isInteger(
-        targetWordMin,
-      ) &&
-      Number.isInteger(
-        targetWordMax,
-      ) &&
-      targetWordMin >
-        targetWordMax
-    ) {
-      errors.push(
-        "targets.targetWordMin cannot exceed targets.targetWordMax.",
-      );
-    }
-  }
-
-  if (
-    targetSentenceCount &&
-    sentenceCount !==
-      targetSentenceCount
-  ) {
-    errors.push(
-      `targets.targetSentenceCount (${targetSentenceCount}) does not match sentences.length (${sentenceCount}).`,
-    );
-  }
-
-  if (
-    targetBlankCount &&
-    blankCount !== targetBlankCount
-  ) {
-    errors.push(
-      `targets.targetBlankCount (${targetBlankCount}) does not match actual blankCount (${blankCount}).`,
-    );
-  }
-
-  if (
-    blankCount <
-    ESSAY_TARGET_BLANK_MIN
-  ) {
-    errors.push(
-      `blankCount must be at least ${ESSAY_TARGET_BLANK_MIN}.`,
-    );
-  }
-
-  const minEssayText =
-    assembleEssayForRange(
-      sentences,
-      "min",
-    );
-  const maxEssayText =
-    assembleEssayForRange(
-      sentences,
-      "max",
-    );
-  const estimatedMinWords =
-    countWords(minEssayText);
-  const estimatedMaxWords =
-    countWords(maxEssayText);
-
-  if (
-    blankCount >
-    ESSAY_TARGET_BLANK_MAX
-  ) {
-    if (!allowOverflowBlanks) {
-      errors.push(
-        `blankCount cannot exceed ${ESSAY_TARGET_BLANK_MAX} unless overflow is explicitly allowed.`,
-      );
-    } else if (
-      Number.isInteger(
-        targetWordMin,
-      ) &&
-      estimatedMinWords >=
-        targetWordMin
-    ) {
-      errors.push(
-        "blankCount overflow is not allowed when the draft already meets word minimum without overflow.",
-      );
-    }
-  }
-
-  if (
-    Number.isInteger(
-      targetWordMin,
-    ) &&
-    estimatedMinWords <
-      targetWordMin
-  ) {
-    errors.push(
-      `Estimated minimum words (${estimatedMinWords}) is below targetWordMin (${targetWordMin}).`,
-    );
-  }
-
-  if (
-    Number.isInteger(
-      targetWordMax,
-    ) &&
-    estimatedMaxWords >
-      targetWordMax
-  ) {
-    errors.push(
-      `Estimated maximum words (${estimatedMaxWords}) exceeds targetWordMax (${targetWordMax}).`,
-    );
-  }
 
   return {
-    isValid: errors.length === 0,
-    errors,
-    metrics: {
-      sentenceCount,
-      blankCount,
-      estimatedMinWords,
-      estimatedMaxWords,
+    ...draftJson,
+    type: String(
+      draftJson?.type || "",
+    ).trim(),
+    learnFirst:
+      normalizedGlobalLearnFirst,
+    builder: {
+      ...builder,
+      title: String(
+        builder.title || "",
+      ).trim(),
+      targetSentenceCount: Number(
+        builder.targetSentenceCount ||
+          0,
+      ),
+      sentences: normalizedSentences,
     },
   };
 }
@@ -1135,87 +339,6 @@ function trimSourceTextForAi(
   }
 
   return `${trimmed.slice(0, maxCharacters)}\n\n[Source text trimmed for AI draft length.]`;
-}
-
-function lineContainsWordCountInstruction(
-  line,
-) {
-  const normalized = String(
-    line || "",
-  )
-    .trim()
-    .toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-
-  // WHY: Only strip explicit "write X words" style instructions, not normal
-  // curriculum content that happens to include the word "word" in another
-  // context.
-  const hasWordToken =
-    /\bword(s)?\b/.test(
-      normalized,
-    );
-  const hasNumericRange =
-    /\b\d{2,4}\s*[-–to]{1,3}\s*\d{2,4}\b/.test(
-      normalized,
-    );
-  const hasNumericWords =
-    /\b\d{2,4}\s*word(s)?\b/.test(
-      normalized,
-    );
-  const hasInstructionVerb =
-    /\b(write|minimum|max(?:imum)?|at least|no more than|between|approx(?:\.|imately)?|around|target)\b/.test(
-      normalized,
-    );
-
-  return (
-    hasWordToken &&
-    (hasNumericRange || hasNumericWords) &&
-    hasInstructionVerb
-  );
-}
-
-function sanitizeEssayBuilderSourceText(
-  unitText,
-) {
-  const sourceText = String(
-    unitText || "",
-  )
-    .replace(/\r/g, "")
-    .trim();
-  if (!sourceText) {
-    return {
-      text: "",
-      removedCount: 0,
-    };
-  }
-
-  const lines = sourceText.split("\n");
-  const keptLines = [];
-  let removedCount = 0;
-
-  for (const line of lines) {
-    if (
-      lineContainsWordCountInstruction(
-        line,
-      )
-    ) {
-      removedCount += 1;
-      continue;
-    }
-    keptLines.push(line);
-  }
-
-  const sanitizedText = keptLines
-    .join("\n")
-    .trim();
-  return {
-    text:
-      sanitizedText ||
-      sourceText,
-    removedCount,
-  };
 }
 
 function isAnswerExplicitlyTaught(
@@ -2170,218 +1293,220 @@ async function generateEssayBuilderDraft({
   studentName,
   taskCodes = [],
   unitText,
-  mode = "NORMAL",
-  teacherId = "",
-  missionDraftId = "",
-  allowOverflowBlanks = false,
 }) {
-  const normalizedMode = normalizeEssayMode(mode);
-  const modeConfig =
-    ensureEssayModeConfig(
-      normalizedMode,
-    );
-  const sourceSanitization =
-    sanitizeEssayBuilderSourceText(
-      unitText,
-    );
   const aiSourceText =
-    trimSourceTextForAi(
-      sourceSanitization.text,
-    );
-  let lastValidationErrors = [];
-  let lastError = null;
-  let lastModel = "";
+    trimSourceTextForAi(unitText);
+  // WHY: Essay builder drafts must come from Groq so the blanked sentences
+  // reflect the exact unitText and stay teacher-review-only.
+  const { model, parsed } =
+    await requestGroqDraft({
+      systemPrompt:
+        "You generate SEN-friendly DAILY Essay Builder drafts. Student never types. They only choose A/B/C/D options to fill blanks. Output JSON only.",
+      userPrompt: [
+        `Mission title: ${title}`,
+        `Subject: ${subjectName}`,
+        `Session: ${sessionType}`,
+        `Student name: ${studentName}`,
+        taskCodes.length ?
+          `Task focus: ${taskCodes.join(", ")}`
+        : "Task focus: none specified",
+        "Return JSON only with this shape:",
+        '{"type":"ESSAY_BUILDER","learnFirst":{"title":"LEARN FIRST","bullets":["..."],"miniExample":"..."},"builder":{"title":"BUILD YOUR ESSAY (A/B/C/D ONLY)","targetSentenceCount":10,"sentences":[{"id":"s1","role":"topic","learnFirst":{"title":"LEARN FIRST","bullets":["...","...","..."],"miniExample":"..."},"parts":[{"type":"blank","blankId":"b1","hint":"topic","correctKey":"A","options":{"A":"...","B":"...","C":"...","D":"..."}},{"type":"text","value":" is important because "},{"type":"blank","blankId":"b2","hint":"reason","correctKey":"C","options":{"A":"...","B":"...","C":"...","D":"..."}},{"type":"text","value":"."}]}]}}',
+        "Rules:",
+        "- Use ONLY the provided unit text. Do not add outside facts.",
+        "- Calm, SEN-friendly language.",
+        "- learnFirst: 3–6 bullets, total 100–350 words, and a 2–3 sentence miniExample.",
+        "- every sentence must include its own learnFirst object (title, 3-6 bullets, miniExample) focused on that sentence only.",
+        "- builder.targetSentenceCount must be 10.",
+        "- roles must include one topic sentence, detail sentences, and one conclusion sentence.",
+        "- total blanks across all sentences: 10–19.",
+        "- each blank must have exactly 4 options A/B/C/D and a correctKey with one of A/B/C/D.",
+        "- only one option is the best fit; other options are plausible but less correct.",
+        "- student must NOT type anything.",
+        "Unit text:",
+        aiSourceText,
+      ].join("\n"),
+      emptyMessage:
+        "Groq returned an empty essay builder payload.",
+      parseMessage:
+        "Could not parse the Groq essay builder payload.",
+    });
 
   if (
-    sourceSanitization.removedCount > 0
+    !parsed ||
+    typeof parsed !== "object"
   ) {
-    console.warn(
-      "[groq] essay_builder_source_sanitized",
-      {
-        missionDraftId:
-          String(
-            missionDraftId || "",
-          ).trim() || null,
-        teacherId:
-          String(
-            teacherId || "",
-          ).trim() || null,
-        mode: normalizedMode,
-        removedCount:
-          sourceSanitization.removedCount,
-      },
-    );
-  }
-
-  for (
-    let attempt = 1;
-    attempt <= ESSAY_BUILDER_RETRY_LIMIT;
-    attempt += 1
-  ) {
-    const regenerationReason = lastValidationErrors.length ?
-        `Previous draft failed validation: ${lastValidationErrors.join(" | ")}`
-      : "";
-    try {
-      // WHY: Essay builder drafts must come from Groq so the sentence scaffolds
-      // reflect the exact unitText and stay inside teacher-reviewed draft flow.
-      const { model, parsed } = await requestGroqDraft(
-        {
-          systemPrompt:
-            "You generate SEN-friendly DAILY Essay Builder drafts for ADHD learners. Student never types. Student only picks A/B/C/D options. Return JSON only with no markdown.",
-          userPrompt: [
-            `Mission title: ${title}`,
-            `Subject: ${subjectName}`,
-            `Session: ${sessionType}`,
-            `Student name: ${studentName}`,
-            `Essay mode: ${normalizedMode}`,
-            `Mode target sentence count: approximately ${modeConfig.targetSentenceCount}`,
-            `Mode target word range: ${modeConfig.targetWordMin}-${modeConfig.targetWordMax}`,
-            taskCodes.length ?
-              `Task focus: ${taskCodes.join(", ")}`
-            : "Task focus: none specified",
-            regenerationReason ?
-              `Regeneration reason: ${regenerationReason}`
-            : "Regeneration reason: none",
-            "Return JSON only with this shape:",
-            '{"type":"ESSAY_BUILDER","mode":"NORMAL","targets":{"targetWordMin":100,"targetWordMax":350,"targetSentenceCount":10,"targetBlankCount":10},"sentences":[{"id":"s1","role":"topic","learnFirst":{"title":"LEARN FIRST","bullets":["...","...","..."]},"parts":[{"type":"text","value":"..."},{"type":"blank","blankId":"b1","hint":"short hint","options":{"A":"...","B":"...","C":"...","D":"..."},"correctOption":"A"},{"type":"text","value":"..."}]}]}',
-            "Rules:",
-            "- Use ONLY the provided unit text. Do not add outside facts.",
-            "- Calm, SEN-friendly, concrete language.",
-            "- Every sentence must include sentence-level LEARN FIRST with title and at least three detailed bullets.",
-            "- LEARN FIRST bullets must teach sentence meaning clearly with concrete clues/examples from the source.",
-            "- Every sentence must include at least one blank.",
-            "- Every blank must have exactly four options: A, B, C, D.",
-            "- Every blank must include correctOption as A/B/C/D.",
-            "- Exactly one option should be the best fit. Others can be plausible but less correct.",
-            "- LEARN FIRST must make the correct option understandable before the student chooses.",
-            "- First sentence role must be topic. Last must be conclusion. Middle must be detail.",
-            `- Prefer total blanks between ${ESSAY_TARGET_BLANK_MIN} and ${ESSAY_TARGET_BLANK_MAX}. Only exceed if needed to keep draft above minimum words.`,
-            `- targetWordMin must be >= ${ESSAY_TARGET_WORD_MIN} and targetWordMax must be <= ${ESSAY_TARGET_WORD_MAX}.`,
-            "- targetSentenceCount and targetBlankCount must match the actual generated totals.",
-            "- Ignore any source-internal word-count instruction that conflicts with mode targets. Mode targets are the only valid word limits.",
-            "- Draft must produce a complete essay paragraph when blanks are filled.",
-            "Unit text:",
-            aiSourceText,
-          ].join("\n"),
-          emptyMessage:
-            "Groq returned an empty essay builder payload.",
-          parseMessage:
-            "Could not parse the Groq essay builder payload.",
-        },
-      );
-
-      lastModel = model;
-      const draftJson =
-        sanitizeEssayBuilderDraft(
-          parsed,
-          normalizedMode,
-          sourceSanitization.text,
-        );
-      const validation =
-        validateEssayBuilderDraft(
-          draftJson,
-          {
-            allowOverflowBlanks,
-          },
-        );
-
-      if (validation.isValid) {
-        return {
-          title: String(
-            title || "",
-          ).trim(),
-          teacherNote:
-            "Complete each sentence by choosing A/B/C/D options to build your essay.",
-          questions: [],
-          aiModel: model,
-          draftJson,
-        };
-      }
-
-      lastValidationErrors =
-        validation.errors;
-      lastError = createError(
-        502,
-        validation.errors.join(
-          " | ",
-        ),
-      );
-      console.error(
-        "[groq] essay_builder_validation_failed",
-        {
-          missionDraftId:
-            String(
-              missionDraftId || "",
-            ).trim() || null,
-          teacherId:
-            String(
-              teacherId || "",
-            ).trim() || null,
-          mode: normalizedMode,
-          retryCount:
-            attempt,
-          validationErrors:
-            validation.errors,
-          metrics:
-            validation.metrics,
-        },
-      );
-    } catch (error) {
-      if (error?.statusCode === 503) {
-        throw error;
-      }
-      lastError = error;
-      lastValidationErrors = [
-        String(
-          error?.message ||
-            "Unknown Groq generation failure.",
-        ),
-      ];
-      console.error(
-        "[groq] essay_builder_generation_failed",
-        {
-          missionDraftId:
-            String(
-              missionDraftId || "",
-            ).trim() || null,
-          teacherId:
-            String(
-              teacherId || "",
-            ).trim() || null,
-          mode: normalizedMode,
-          retryCount:
-            attempt,
-          validationErrors:
-            lastValidationErrors,
-        },
-      );
-    }
-  }
-
-  if (lastError?.statusCode === 503) {
-    throw lastError;
-  }
-
-  const friendlyError =
-    createError(
+    throw createError(
       502,
-      "Could not generate an essay draft from this text. Try selecting a different task section or simplify the source.",
+      "Groq did not return a valid essay builder draft.",
     );
-  friendlyError.metadata = {
-    missionDraftId:
-      String(
-        missionDraftId || "",
-      ).trim() || null,
-    teacherId:
-      String(
-        teacherId || "",
-      ).trim() || null,
-    mode: normalizedMode,
-    aiModel: lastModel,
-    validationErrors:
-      lastValidationErrors,
+  }
+
+  const draftJson =
+    sanitizeEssayBuilderDraft(parsed);
+  if (
+    draftJson.type !== "ESSAY_BUILDER"
+  ) {
+    throw createError(
+      502,
+      "Groq did not return ESSAY_BUILDER draft data.",
+    );
+  }
+
+  const learnFirst =
+    draftJson.learnFirst || {};
+  const builder =
+    draftJson.builder || {};
+  const sentences =
+    Array.isArray(builder.sentences) ?
+      builder.sentences
+    : [];
+  const targetSentenceCount = Number(
+    builder.targetSentenceCount || 0,
+  );
+
+  if (
+    !learnFirst ||
+    !Array.isArray(
+      learnFirst.bullets,
+    ) ||
+    sentences.length < 1
+  ) {
+    throw createError(
+      502,
+      "Groq essay builder draft is missing required sections.",
+    );
+  }
+
+  if (targetSentenceCount !== 10) {
+    throw createError(
+      502,
+      "Groq essay builder must include 10 sentences.",
+    );
+  }
+
+  // WHY: The guided workflow is locked to 10 steps, so the sentence array must
+  // exactly match the target count to avoid incomplete or overlong missions.
+  if (sentences.length !== 10) {
+    throw createError(
+      502,
+      "Groq essay builder must return exactly 10 sentences.",
+    );
+  }
+
+  const blankCount = sentences.reduce(
+    (total, sentence) => {
+      const parts =
+        Array.isArray(sentence.parts) ?
+          sentence.parts
+        : [];
+      const blanks = parts.filter(
+        (part) =>
+          part && part.type === "blank",
+      );
+      return total + blanks.length;
+    },
+    0,
+  );
+
+  const invalidBlank = sentences.some(
+    (sentence) => {
+      const parts =
+        Array.isArray(sentence.parts) ?
+          sentence.parts
+        : [];
+      return parts.some((part) => {
+        if (
+          !part ||
+          part.type !== "blank"
+        ) {
+          return false;
+        }
+        const options =
+          part.options || {};
+        const correctKey = String(
+          part.correctKey || "",
+        ).toUpperCase();
+        const keys =
+          Object.keys(options);
+        return (
+          !["A", "B", "C", "D"].every(
+            (key) => keys.includes(key),
+          ) ||
+          ![
+            "A",
+            "B",
+            "C",
+            "D",
+          ].includes(correctKey)
+        );
+      });
+    },
+  );
+
+  const invalidSentenceLearnFirst =
+    sentences.some((sentence) => {
+      const sentenceLearnFirst =
+        sentence?.learnFirst || {};
+      const bullets =
+        (
+          Array.isArray(
+            sentenceLearnFirst.bullets,
+          )
+        ) ?
+          sentenceLearnFirst.bullets
+        : [];
+      return (
+        !String(
+          sentenceLearnFirst.title ||
+            "",
+        ).trim() ||
+        bullets.length < 3 ||
+        bullets.length > 6 ||
+        !String(
+          sentenceLearnFirst.miniExample ||
+            "",
+        ).trim()
+      );
+    });
+
+  // WHY: Essay builder must stay within a guided blank count so the activity
+  // remains structured and suitable for SEN learners.
+  if (
+    blankCount < 10 ||
+    blankCount > 14
+  ) {
+    throw createError(
+      502,
+      "Groq essay builder must include 10–19 blanks.",
+    );
+  }
+
+  // WHY: Each blank must offer four fixed options so students never type.
+  if (invalidBlank) {
+    throw createError(
+      502,
+      "Essay builder blanks must include A/B/C/D options and a valid correctKey.",
+    );
+  }
+
+  // WHY: Students need sentence-level teaching scaffolds so each fill-in step
+  // has focused guidance before they choose A/B/C/D options.
+  if (invalidSentenceLearnFirst) {
+    throw createError(
+      502,
+      "Each essay sentence must include a sentence-level Learn First block.",
+    );
+  }
+
+  return {
+    title: String(title || "").trim(),
+    teacherNote:
+      "Complete each sentence by choosing the best A/B/C/D option.",
+    questions: [],
+    aiModel: model,
+    draftJson,
   };
-  throw friendlyError;
 }
 
 async function generateLearningAndBlocksWithGroq({

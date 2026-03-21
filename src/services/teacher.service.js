@@ -230,6 +230,569 @@ function parseTaskCodeUploadField(value) {
   return normalizeTaskCodes(rawValue.split(","));
 }
 
+function normalizeUploadMode(value) {
+  const normalized = String(value || "ai_draft")
+    .trim()
+    .toLowerCase();
+
+  return normalized === "populate_draft" ? "populate_draft" : "ai_draft";
+}
+
+function normalizeImportedTextBlock(value) {
+  return String(value || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+function extractImportedMissionTitle(sourceText) {
+  const firstMarkerMatch =
+    /(?:^|\n)\s*(?:UNIT TEXT|Question\s+\d+)/im.exec(String(sourceText || ""));
+  const titleRegion = firstMarkerMatch
+    ? String(sourceText || "").slice(0, firstMarkerMatch.index)
+    : String(sourceText || "");
+  const titleLines = titleRegion
+    .split(/\n+/)
+    .map((line) => String(line || "").trim())
+    .filter(Boolean)
+    .filter(
+      (line) =>
+        !/^student copy$/i.test(line) &&
+        !/^teacher copy$/i.test(line) &&
+        !/^questions?$/i.test(line),
+    );
+
+  return titleLines.length > 0 ? titleLines[titleLines.length - 1] : "";
+}
+
+function extractImportedUnitText(sourceText) {
+  const normalizedSourceText = String(sourceText || "");
+  const unitTextMatch =
+    /(?:^|\n)\s*UNIT TEXT\s*:?\s*([\s\S]*?)(?=(?:^|\n)\s*Question\s+\d+\s*:?\s*|$)/im.exec(
+      normalizedSourceText,
+    );
+
+  if (unitTextMatch) {
+    return normalizeImportedTextBlock(unitTextMatch[1]);
+  }
+
+  const firstQuestionMatch =
+    /(?:^|\n)\s*Question\s+\d+\s*:?\s*/im.exec(normalizedSourceText);
+
+  if (!firstQuestionMatch) {
+    return "";
+  }
+
+  const preQuestionLines = normalizedSourceText
+    .slice(0, firstQuestionMatch.index)
+    .split(/\n+/)
+    .map((line) => String(line || "").trim())
+    .filter(Boolean);
+
+  if (preQuestionLines.length <= 1) {
+    return "";
+  }
+
+  return normalizeImportedTextBlock(preQuestionLines.slice(1).join("\n"));
+}
+
+function splitImportedQuestionBlocks(sourceText) {
+  const normalizedSourceText = String(sourceText || "");
+  const questionPattern = /(?:^|\n)\s*Question\s+(\d+)\s*:?\s*/gim;
+  const matches = [];
+  let match;
+
+  while ((match = questionPattern.exec(normalizedSourceText)) !== null) {
+    matches.push({
+      number: Number(match[1]),
+      index: match.index,
+      contentStart: questionPattern.lastIndex,
+    });
+  }
+
+  return matches.map((item, index) => {
+    const nextIndex =
+      index + 1 < matches.length ? matches[index + 1].index : normalizedSourceText.length;
+
+    return {
+      number: item.number,
+      body: normalizeImportedTextBlock(
+        normalizedSourceText.slice(item.contentStart, nextIndex),
+      ),
+    };
+  });
+}
+
+function extractImportedQuestionSections(questionBody) {
+  const normalizedBody = String(questionBody || "");
+  const labelPattern =
+    /(?:^|\n)\s*(Learn First|Prompt|Options|Correct Answer|Explanation|Expected Answer|Minimum Word Count)\s*:?\s*/gim;
+  const matches = [];
+  let match;
+
+  while ((match = labelPattern.exec(normalizedBody)) !== null) {
+    matches.push({
+      label: String(match[1] || "").trim().toLowerCase(),
+      start: match.index,
+      contentStart: labelPattern.lastIndex,
+    });
+  }
+
+  return matches.reduce((sections, item, index) => {
+    const nextStart =
+      index + 1 < matches.length ? matches[index + 1].start : normalizedBody.length;
+    return {
+      ...sections,
+      [item.label]: normalizeImportedTextBlock(
+        normalizedBody.slice(item.contentStart, nextStart),
+      ),
+    };
+  }, {});
+}
+
+function parseImportedOptionList(rawOptions) {
+  const optionsByLetter = new Map();
+  const optionLines = String(rawOptions || "")
+    .split(/\n+/)
+    .map((line) => String(line || "").trim())
+    .filter(Boolean);
+
+  for (const line of optionLines) {
+    const lineMatch = /^([A-D])[\).:\-]\s*(.+)$/i.exec(line);
+
+    if (!lineMatch) {
+      continue;
+    }
+
+    optionsByLetter.set(
+      lineMatch[1].trim().toUpperCase(),
+      normalizeImportedTextBlock(lineMatch[2]),
+    );
+  }
+
+  if (optionsByLetter.size < 4) {
+    const compactOptionsText = String(rawOptions || "")
+      .replace(/\n+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const inlinePattern = /([A-D])[\).:\-]\s*([\s\S]*?)(?=(?:\s+[A-D][\).:\-]\s)|$)/gi;
+    let inlineMatch;
+
+    while ((inlineMatch = inlinePattern.exec(compactOptionsText)) !== null) {
+      const optionLetter = inlineMatch[1].trim().toUpperCase();
+
+      if (optionsByLetter.has(optionLetter)) {
+        continue;
+      }
+
+      optionsByLetter.set(
+        optionLetter,
+        normalizeImportedTextBlock(inlineMatch[2]),
+      );
+    }
+  }
+
+  return ["A", "B", "C", "D"].map((letter) => optionsByLetter.get(letter) || "");
+}
+
+function resolveImportedCorrectIndex(correctAnswer, options) {
+  const normalizedAnswer = normalizeImportedTextBlock(correctAnswer);
+
+  if (!normalizedAnswer) {
+    return -1;
+  }
+
+  const leadingLetterMatch =
+    /^(?:option\s+)?\(?([A-D])\)?(?:[\).:\-]|\s|$)/i.exec(normalizedAnswer);
+
+  if (leadingLetterMatch) {
+    return ["A", "B", "C", "D"].indexOf(leadingLetterMatch[1].toUpperCase());
+  }
+
+  const resolvedIndex = options.findIndex(
+    (option) => normalizeForMatch(option) === normalizeForMatch(normalizedAnswer),
+  );
+
+  return resolvedIndex;
+}
+
+function resolveImportedTheoryExpectedAnswer({ sections, options }) {
+  const explicitExpectedAnswer = normalizeImportedTextBlock(
+    sections["expected answer"],
+  );
+
+  if (explicitExpectedAnswer) {
+    return explicitExpectedAnswer;
+  }
+
+  const correctIndex = resolveImportedCorrectIndex(sections["correct answer"], options);
+
+  if (correctIndex >= 0 && correctIndex < options.length) {
+    return options[correctIndex];
+  }
+
+  return normalizeImportedTextBlock(sections["correct answer"]);
+}
+
+function parseImportedMinimumWordCount(value) {
+  const match = String(value || "").match(/\d+/);
+
+  if (!match) {
+    return null;
+  }
+
+  return Number(match[0]);
+}
+
+function parseImportedMissionFromText({ sourceText, draftFormat }) {
+  const normalizedDraftFormat = normalizeDraftFormat(draftFormat);
+  const parsedTitle = extractImportedMissionTitle(sourceText);
+  const unitText = extractImportedUnitText(sourceText);
+  const questionBlocks = splitImportedQuestionBlocks(sourceText);
+  const parsedQuestions = [];
+  const errors = [];
+
+  if (normalizedDraftFormat === "ESSAY_BUILDER") {
+    return {
+      title: parsedTitle,
+      unitText,
+      questions: [],
+      questionBlockCount: questionBlocks.length,
+      errors: [
+        "Populate draft currently supports structured Questions or Theory imports only.",
+      ],
+    };
+  }
+
+  if (!unitText) {
+    // WHY: Imported drafts still need a clean unit-text area so teachers can
+    // review exactly what teaching content was parsed out of the upload.
+    errors.push(
+      "No UNIT TEXT section was found before the imported questions.",
+    );
+  }
+
+  if (questionBlocks.length === 0) {
+    errors.push(
+      "No structured Question sections were found in the uploaded file.",
+    );
+  }
+
+  for (const questionBlock of questionBlocks) {
+    const questionLabel = `Question ${questionBlock.number || parsedQuestions.length + 1}`;
+    const sections = extractImportedQuestionSections(questionBlock.body);
+    const learningText = normalizeImportedTextBlock(sections["learn first"]);
+    const prompt = normalizeImportedTextBlock(sections.prompt);
+    const explanation = normalizeImportedTextBlock(sections.explanation);
+
+    if (!learningText) {
+      errors.push(`${questionLabel} is missing Learn First.`);
+      continue;
+    }
+
+    if (!prompt) {
+      errors.push(`${questionLabel} is missing Prompt.`);
+      continue;
+    }
+
+    if (normalizedDraftFormat === "THEORY") {
+      const options = parseImportedOptionList(sections.options);
+      const expectedAnswer = resolveImportedTheoryExpectedAnswer({
+        sections,
+        options,
+      });
+      const minimumWordCount =
+        parseImportedMinimumWordCount(sections["minimum word count"]) || 12;
+
+      if (!expectedAnswer) {
+        errors.push(
+          `${questionLabel} is missing Expected Answer or Correct Answer.`,
+        );
+        continue;
+      }
+
+      parsedQuestions.push({
+        answerMode: "short_answer",
+        learningText,
+        prompt,
+        options: [],
+        correctIndex: -1,
+        explanation,
+        expectedAnswer,
+        minWordCount: minimumWordCount,
+      });
+      continue;
+    }
+
+    const options = parseImportedOptionList(sections.options);
+    if (options.length !== 4 || options.some((option) => !option)) {
+      errors.push(`${questionLabel} needs exactly four imported answer options.`);
+      continue;
+    }
+
+    const correctIndex = resolveImportedCorrectIndex(
+      sections["correct answer"],
+      options,
+    );
+
+    if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex > 3) {
+      errors.push(`${questionLabel} is missing a usable Correct Answer.`);
+      continue;
+    }
+
+    parsedQuestions.push({
+      learningText,
+      prompt,
+      options,
+      correctIndex,
+      explanation,
+    });
+  }
+
+  let normalizedQuestions = [];
+
+  if (errors.length === 0 && parsedQuestions.length > 0) {
+    try {
+      normalizedQuestions = normalizeQuestions(parsedQuestions, {
+        draftFormat: normalizedDraftFormat,
+      });
+    } catch (error) {
+      errors.push(
+        String(error?.message || "The imported draft could not be validated."),
+      );
+    }
+  }
+
+  return {
+    title: parsedTitle,
+    unitText,
+    questions: normalizedQuestions,
+    questionBlockCount: questionBlocks.length,
+    errors: dedupeTextList(errors),
+  };
+}
+
+function buildImportedDraftReadiness({ parsedDraft, draftFormat }) {
+  const normalizedDraftFormat = normalizeDraftFormat(draftFormat);
+  const detectedSignals = [];
+  const warningNotes = [];
+  const missingRequirements = dedupeTextList(parsedDraft.errors);
+  const importedQuestionCount = parsedDraft.questions.length;
+
+  if (parsedDraft.unitText) {
+    detectedSignals.push(
+      `Unit text section detected (${countWords(parsedDraft.unitText)} words).`,
+    );
+  }
+
+  if (parsedDraft.questionBlockCount > 0) {
+    detectedSignals.push(
+      `${parsedDraft.questionBlockCount} structured question block${
+        parsedDraft.questionBlockCount === 1 ? "" : "s"
+      } detected.`,
+    );
+  }
+
+  if (importedQuestionCount > 0) {
+    detectedSignals.push(
+      `${importedQuestionCount} ${
+        normalizedDraftFormat === "THEORY" ? "theory" : "question"
+      } draft item${importedQuestionCount === 1 ? "" : "s"} imported without AI.`,
+    );
+  }
+
+  if (
+    parsedDraft.questionBlockCount > 0 &&
+    importedQuestionCount > 0 &&
+    parsedDraft.questionBlockCount !== importedQuestionCount &&
+    missingRequirements.length === 0
+  ) {
+    warningNotes.push(
+      "The imported file included extra question text that was not needed after validation.",
+    );
+  }
+
+  const status = missingRequirements.length > 0 ? "needs_attention" : "ready";
+
+  return {
+    status,
+    summary:
+      status === "ready"
+        ? normalizedDraftFormat === "THEORY"
+          ? "The uploaded file was parsed directly into a theory draft without AI."
+          : "The uploaded file was parsed directly into a question draft without AI."
+        : "The upload was extracted, but the draft could not be populated cleanly from this file yet.",
+    detectedSignals: dedupeTextList(detectedSignals),
+    missingRequirements,
+    warningNotes: dedupeTextList(warningNotes),
+  };
+}
+
+function buildImportedUnitPlan({
+  subjectName,
+  payload,
+  draftFormat,
+  parsedDraft,
+}) {
+  const normalizedDraftFormat = normalizeDraftFormat(draftFormat);
+  const importedQuestionCount = parsedDraft.questions.length;
+  const fallbackQuestionCount =
+    normalizedDraftFormat === "THEORY" ? THEORY_QUESTION_COUNT_MIN : 5;
+  const suggestedQuestionCount =
+    importedQuestionCount > 0
+      ? importedQuestionCount
+      : fallbackQuestionCount;
+
+  return {
+    unitTitle: parsedDraft.title || `${subjectName} imported draft`,
+    unitSummary:
+      importedQuestionCount > 0
+        ? "Imported directly from the uploaded file without AI rewriting."
+        : "Uploaded file extracted for direct draft import review.",
+    keyPoints: dedupeTextList([
+      parsedDraft.unitText
+        ? "Unit text section detected from the uploaded file."
+        : "",
+      parsedDraft.questionBlockCount > 0
+        ? `${parsedDraft.questionBlockCount} structured question blocks detected.`
+        : "",
+      importedQuestionCount > 0
+        ? `${importedQuestionCount} draft items validated for direct import.`
+        : "",
+    ]).slice(0, 6),
+    suggestedMissionTitle:
+      String(payload.title || "").trim() ||
+      parsedDraft.title ||
+      `${subjectName} Mission`,
+    suggestedTeacherNote: "",
+    suggestedQuestionCount,
+    suggestedXpReward: resolveMissionRewardPolicy({
+      draftFormat: normalizedDraftFormat,
+      questionCount: suggestedQuestionCount,
+    }).xpReward,
+    aiModel: null,
+  };
+}
+
+async function buildImportedMissionFromSource({
+  teacherId,
+  subject,
+  extractedSource,
+  payload,
+  parsedDraft,
+}) {
+  const studentId = String(payload.studentId || "").trim();
+  const targetDate = String(payload.targetDate || "").trim();
+
+  if (!studentId || !targetDate) {
+    return null;
+  }
+
+  const draftFormat = normalizeDraftFormat(payload.draftFormat);
+  const normalizedTaskCodes = parseTaskCodeUploadField(payload.taskCodes);
+  const difficulty =
+    ["easy", "medium", "hard"].includes(String(payload.difficulty || "").trim().toLowerCase())
+      ? String(payload.difficulty || "").trim().toLowerCase()
+      : "medium";
+  const availability = await assertTeacherOwnsScheduledLesson({
+    teacherId,
+    studentId,
+    subjectId: String(subject._id),
+    sessionType: String(payload.sessionType || "").trim().toLowerCase(),
+    targetDate,
+  });
+  const missionDraftId = String(payload.missionDraftId || "").trim();
+  const title =
+    String(payload.title || "").trim() ||
+    parsedDraft.title ||
+    `${subject.name} Mission`;
+  const baseMission = {
+    id: "",
+    title,
+    teacherNote: "",
+    sourceUnitText: parsedDraft.unitText,
+    sourceRawText: extractedSource.extractedText,
+    draftFormat,
+    essayMode: null,
+    draftJson: null,
+    source: "bank",
+    status: "draft",
+    aiModel: "",
+    sessionType: String(payload.sessionType || "").trim().toLowerCase(),
+    availableOnDate: availability.availableOnDate,
+    availableOnDay: availability.availableOnDay,
+    difficulty,
+    taskCodes: normalizedTaskCodes,
+    sourceFileName: extractedSource.fileName,
+    sourceFileType: extractedSource.mimeType,
+    questions: parsedDraft.questions,
+    subjectId: subject,
+    createdAt: new Date(),
+    publishedAt: null,
+  };
+
+  if (missionDraftId) {
+    // WHY: Re-importing onto an existing draft should stay review-first. The
+    // teacher still decides whether to save the imported content over the draft.
+    return serializeMission(baseMission);
+  }
+
+  const [student, teacher] = await Promise.all([
+    User.findOne({ _id: studentId, role: "student" }).lean(),
+    User.findOne({ _id: teacherId, role: "teacher" }).lean(),
+  ]);
+
+  if (!student) {
+    throw createError(404, "Student not found.");
+  }
+
+  if (!teacher) {
+    throw createError(404, "Teacher not found.");
+  }
+
+  const certificationSnapshot = await loadMissionCertificationSnapshot({
+    studentId: String(student._id),
+    subjectId: String(subject._id),
+  });
+
+  const mission = await Mission.create({
+    studentId: student._id,
+    subjectId: subject._id,
+    sessionType: baseMission.sessionType,
+    title: baseMission.title,
+    teacherNote: baseMission.teacherNote,
+    sourceUnitText: baseMission.sourceUnitText,
+    sourceRawText: baseMission.sourceRawText,
+    draftFormat: baseMission.draftFormat,
+    essayMode: null,
+    draftJson: null,
+    source: "bank",
+    status: "draft",
+    aiModel: "",
+    availableOnDate: baseMission.availableOnDate,
+    availableOnDay: baseMission.availableOnDay,
+    difficulty: baseMission.difficulty,
+    taskCodes: normalizedTaskCodes,
+    ...certificationSnapshot,
+    xpReward: resolveMissionRewardPolicy({
+      draftFormat,
+      questionCount: parsedDraft.questions.length,
+    }).xpReward,
+    sourceFileName: baseMission.sourceFileName,
+    sourceFileType: baseMission.sourceFileType,
+    questions: parsedDraft.questions,
+    createdBy: teacher._id,
+  });
+
+  const savedMission = await Mission.findById(mission._id)
+    .populate("subjectId", "name icon color")
+    .lean();
+
+  return serializeMission(savedMission);
+}
+
 function buildMissionSourceReadinessSummary({
   status,
   missingRequirements,
@@ -1681,69 +2244,101 @@ async function extractSourcePlan(teacherId, payload) {
     teacherId: String(teacherId),
     subjectId: String(subject._id),
     sessionType: String(payload.sessionType || "").trim().toLowerCase(),
+    uploadMode: normalizeUploadMode(payload.uploadMode),
     hasStudentContext:
       String(payload.studentId || "").trim().length > 0 &&
       String(payload.targetDate || "").trim().length > 0,
   });
 
   const extractedSource = await extractTextFromUploadedSource(payload.file);
-  const unitPlan = await planUnitFromSourceWithGroq({
-    subjectName: subject.name,
-    sessionType: payload.sessionType,
-    sourceText: extractedSource.extractedText,
-    fileName: extractedSource.fileName,
-  });
-  const draftReadiness = inspectUploadedMissionSource({
-    sourceText: extractedSource.extractedText,
-    draftFormat: payload.draftFormat,
-    taskCodes: parseTaskCodeUploadField(payload.taskCodes),
-  });
+  const uploadMode = normalizeUploadMode(payload.uploadMode);
+  let unitPlan;
   let prefilledMission = null;
-  let resolvedDraftReadiness = draftReadiness;
+  let resolvedDraftReadiness;
 
-  if (draftReadiness.status === "ready") {
-    try {
-      prefilledMission = await buildUploadedMissionFromSource({
+  if (uploadMode === "populate_draft") {
+    const parsedDraft = parseImportedMissionFromText({
+      sourceText: extractedSource.extractedText,
+      draftFormat: payload.draftFormat,
+    });
+    unitPlan = buildImportedUnitPlan({
+      subjectName: subject.name,
+      payload,
+      draftFormat: payload.draftFormat,
+      parsedDraft,
+    });
+    resolvedDraftReadiness = buildImportedDraftReadiness({
+      parsedDraft,
+      draftFormat: payload.draftFormat,
+    });
+
+    if (resolvedDraftReadiness.status === "ready") {
+      prefilledMission = await buildImportedMissionFromSource({
         teacherId,
         subject,
         extractedSource,
-        unitPlan,
         payload,
+        parsedDraft,
       });
-    } catch (error) {
-      const statusCode = Number(error?.statusCode || 0);
+    }
+  } else {
+    unitPlan = await planUnitFromSourceWithGroq({
+      subjectName: subject.name,
+      sessionType: payload.sessionType,
+      sourceText: extractedSource.extractedText,
+      fileName: extractedSource.fileName,
+    });
+    const draftReadiness = inspectUploadedMissionSource({
+      sourceText: extractedSource.extractedText,
+      draftFormat: payload.draftFormat,
+      taskCodes: parseTaskCodeUploadField(payload.taskCodes),
+    });
+    resolvedDraftReadiness = draftReadiness;
 
-      if ([400, 422, 502].includes(statusCode)) {
-        resolvedDraftReadiness = inspectUploadedMissionSource({
-          sourceText: extractedSource.extractedText,
-          draftFormat: payload.draftFormat,
-          taskCodes: parseTaskCodeUploadField(payload.taskCodes),
+    if (draftReadiness.status === "ready") {
+      try {
+        prefilledMission = await buildUploadedMissionFromSource({
+          teacherId,
+          subject,
+          extractedSource,
+          unitPlan,
+          payload,
         });
-        resolvedDraftReadiness = {
-          ...resolvedDraftReadiness,
-          status: "needs_attention",
-          missingRequirements: dedupeTextList([
-            ...resolvedDraftReadiness.missingRequirements,
-            String(error.message || "").trim() ||
-              "The uploaded file still needs a bit more lesson detail before the draft can be built.",
-          ]),
-        };
-        resolvedDraftReadiness = {
-          ...resolvedDraftReadiness,
-          summary: buildMissionSourceReadinessSummary({
-            status: resolvedDraftReadiness.status,
-            missingRequirements: resolvedDraftReadiness.missingRequirements,
-            warningNotes: resolvedDraftReadiness.warningNotes,
+      } catch (error) {
+        const statusCode = Number(error?.statusCode || 0);
+
+        if ([400, 422, 502].includes(statusCode)) {
+          resolvedDraftReadiness = inspectUploadedMissionSource({
+            sourceText: extractedSource.extractedText,
             draftFormat: payload.draftFormat,
-          }),
-        };
-        console.warn("[teacher] source_plan_prefill_skipped", {
-          teacherId: String(teacherId),
-          subjectId: String(subject._id),
-          reason: String(error.message || ""),
-        });
-      } else {
-        throw error;
+            taskCodes: parseTaskCodeUploadField(payload.taskCodes),
+          });
+          resolvedDraftReadiness = {
+            ...resolvedDraftReadiness,
+            status: "needs_attention",
+            missingRequirements: dedupeTextList([
+              ...resolvedDraftReadiness.missingRequirements,
+              String(error.message || "").trim() ||
+                "The uploaded file still needs a bit more lesson detail before the draft can be built.",
+            ]),
+          };
+          resolvedDraftReadiness = {
+            ...resolvedDraftReadiness,
+            summary: buildMissionSourceReadinessSummary({
+              status: resolvedDraftReadiness.status,
+              missingRequirements: resolvedDraftReadiness.missingRequirements,
+              warningNotes: resolvedDraftReadiness.warningNotes,
+              draftFormat: payload.draftFormat,
+            }),
+          };
+          console.warn("[teacher] source_plan_prefill_skipped", {
+            teacherId: String(teacherId),
+            subjectId: String(subject._id),
+            reason: String(error.message || ""),
+          });
+        } else {
+          throw error;
+        }
       }
     }
   }
@@ -1751,6 +2346,7 @@ async function extractSourcePlan(teacherId, payload) {
   console.info("[teacher] source_plan_upload_complete", {
     teacherId: String(teacherId),
     subjectId: String(subject._id),
+    uploadMode,
     readinessStatus: resolvedDraftReadiness.status,
     missingRequirementCount:
       resolvedDraftReadiness.missingRequirements.length,

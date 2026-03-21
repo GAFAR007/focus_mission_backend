@@ -365,6 +365,10 @@ router.post(
       .optional()
       .isString()
       .withMessage("missionDraftId must be text."),
+    body("uploadMode")
+      .optional()
+      .isIn(["ai_draft", "populate_draft"])
+      .withMessage("uploadMode must be ai_draft or populate_draft."),
     validateRequest,
   ],
   teacherController.extractSourcePlan,
