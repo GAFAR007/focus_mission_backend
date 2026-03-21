@@ -616,21 +616,23 @@ function sortResultHistoryEntries(entries) {
     const rightDate = String(
       right.availableOnDate || right.createdAt || "",
     ).trim();
-    const byDate = rightDate.compareTo(leftDate);
+    // WHY: This service runs in Node.js, so string ordering must use
+    // localeCompare rather than Dart's compareTo API.
+    const byDate = rightDate.localeCompare(leftDate);
     if (byDate !== 0) {
       return byDate;
     }
 
     const leftCreated = String(left.createdAt || "").trim();
     const rightCreated = String(right.createdAt || "").trim();
-    const byCreated = rightCreated.compareTo(leftCreated);
+    const byCreated = rightCreated.localeCompare(leftCreated);
     if (byCreated !== 0) {
       return byCreated;
     }
 
     return String(left.title || "")
       .toLowerCase()
-      .compareTo(String(right.title || "").toLowerCase());
+      .localeCompare(String(right.title || "").toLowerCase());
   });
 }
 
