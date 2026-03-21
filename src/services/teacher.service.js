@@ -270,7 +270,7 @@ function extractImportedMissionTitle(sourceText) {
 function extractImportedUnitText(sourceText) {
   const normalizedSourceText = String(sourceText || "");
   const unitTextMatch =
-    /(?:^|\n)\s*UNIT TEXT\s*:?\s*([\s\S]*?)(?=(?:^|\n)\s*Question\s+\d+\s*:?\s*|$)/im.exec(
+    /(?:^|\n)\s*UNIT TEXT\s*:?\s*([\s\S]*?)(?=\n\s*Question\s+\d+\s*:?\s*|\s*$)/i.exec(
       normalizedSourceText,
     );
 
