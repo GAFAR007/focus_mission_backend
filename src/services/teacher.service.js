@@ -446,13 +446,30 @@ function parseImportedMinimumWordCount(value) {
   return Number(match[0]);
 }
 
+function buildImportedUnitTextFallbackFromQuestions(questions) {
+  const uniqueLearningBlocks = [];
+
+  for (const question of Array.isArray(questions) ? questions : []) {
+    const learningText = normalizeImportedTextBlock(question?.learningText);
+
+    if (!learningText || uniqueLearningBlocks.includes(learningText)) {
+      continue;
+    }
+
+    uniqueLearningBlocks.push(learningText);
+  }
+
+  return uniqueLearningBlocks.join("\n\n").trim();
+}
+
 function parseImportedMissionFromText({ sourceText, draftFormat }) {
   const normalizedDraftFormat = normalizeDraftFormat(draftFormat);
   const parsedTitle = extractImportedMissionTitle(sourceText);
-  const unitText = extractImportedUnitText(sourceText);
+  let unitText = extractImportedUnitText(sourceText);
   const questionBlocks = splitImportedQuestionBlocks(sourceText);
   const parsedQuestions = [];
   const errors = [];
+  let usedLearningFallbackForUnitText = false;
 
   if (normalizedDraftFormat === "ESSAY_BUILDER") {
     return {
@@ -460,18 +477,11 @@ function parseImportedMissionFromText({ sourceText, draftFormat }) {
       unitText,
       questions: [],
       questionBlockCount: questionBlocks.length,
+      usedLearningFallbackForUnitText,
       errors: [
         "Populate draft currently supports structured Questions or Theory imports only.",
       ],
     };
-  }
-
-  if (!unitText) {
-    // WHY: Imported drafts still need a clean unit-text area so teachers can
-    // review exactly what teaching content was parsed out of the upload.
-    errors.push(
-      "No UNIT TEXT section was found before the imported questions.",
-    );
   }
 
   if (questionBlocks.length === 0) {
@@ -551,6 +561,22 @@ function parseImportedMissionFromText({ sourceText, draftFormat }) {
     });
   }
 
+  if (!unitText && parsedQuestions.length > 0) {
+    // WHY: Some imported classroom exports contain question blocks only. Using
+    // the uploaded Learn First content is safer than leaving Unit text empty,
+    // and still keeps Populate draft as a pure file import with no AI rewrite.
+    unitText = buildImportedUnitTextFallbackFromQuestions(parsedQuestions);
+    usedLearningFallbackForUnitText = unitText.length > 0;
+  }
+
+  if (!unitText) {
+    // WHY: Imported drafts still need a clean unit-text area so teachers can
+    // review exactly what teaching content was parsed out of the upload.
+    errors.push(
+      "No UNIT TEXT section was found before the imported questions.",
+    );
+  }
+
   let normalizedQuestions = [];
 
   if (errors.length === 0 && parsedQuestions.length > 0) {
@@ -570,6 +596,7 @@ function parseImportedMissionFromText({ sourceText, draftFormat }) {
     unitText,
     questions: normalizedQuestions,
     questionBlockCount: questionBlocks.length,
+    usedLearningFallbackForUnitText,
     errors: dedupeTextList(errors),
   };
 }
@@ -592,6 +619,12 @@ function buildImportedDraftReadiness({ parsedDraft, draftFormat }) {
       `${parsedDraft.questionBlockCount} structured question block${
         parsedDraft.questionBlockCount === 1 ? "" : "s"
       } detected.`,
+    );
+  }
+
+  if (parsedDraft.usedLearningFallbackForUnitText) {
+    warningNotes.push(
+      "No separate UNIT TEXT section was found, so Unit text was rebuilt from the imported Learn First content.",
     );
   }
 
