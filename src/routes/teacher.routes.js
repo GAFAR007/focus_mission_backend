@@ -885,6 +885,9 @@ router.post(
     body("paperKind")
       .isIn(["TEST", "EXAM", "test", "exam"])
       .withMessage("paperKind must be TEST or EXAM."),
+    body("sessionType")
+      .isIn(["morning", "afternoon"])
+      .withMessage("sessionType must be morning or afternoon."),
     body("title")
       .optional()
       .isString()
@@ -914,6 +917,9 @@ router.post(
     body("paperKind")
       .isIn(["TEST", "EXAM"])
       .withMessage("paperKind must be TEST or EXAM."),
+    body("sessionType")
+      .isIn(["morning", "afternoon"])
+      .withMessage("sessionType must be morning or afternoon."),
     body("title")
       .trim()
       .notEmpty()
@@ -968,6 +974,10 @@ router.patch(
       .optional()
       .isIn(["TEST", "EXAM"])
       .withMessage("paperKind must be TEST or EXAM."),
+    body("sessionType")
+      .optional()
+      .isIn(["morning", "afternoon"])
+      .withMessage("sessionType must be morning or afternoon."),
     body("title")
       .optional()
       .trim()
@@ -1023,6 +1033,74 @@ router.delete(
     validateRequest,
   ],
   teacherController.deleteStandalonePaper,
+);
+
+router.post(
+  "/standalone-papers/:paperId/publish",
+  [
+    param("paperId")
+      .isMongoId()
+      .withMessage("Valid paperId is required."),
+    validateRequest,
+  ],
+  teacherController.publishStandalonePaper,
+);
+
+router.post(
+  "/standalone-papers/:paperId/unpublish",
+  [
+    param("paperId")
+      .isMongoId()
+      .withMessage("Valid paperId is required."),
+    validateRequest,
+  ],
+  teacherController.unpublishStandalonePaper,
+);
+
+router.get(
+  "/standalone-papers/:paperId/session",
+  [
+    param("paperId")
+      .isMongoId()
+      .withMessage("Valid paperId is required."),
+    validateRequest,
+  ],
+  teacherController.getLatestStandalonePaperSession,
+);
+
+router.post(
+  "/standalone-paper-sessions/:sessionId/reset",
+  [
+    param("sessionId")
+      .isMongoId()
+      .withMessage("Valid sessionId is required."),
+    validateRequest,
+  ],
+  teacherController.resetStandalonePaperSession,
+);
+
+router.post(
+  "/standalone-paper-sessions/:sessionId/review",
+  [
+    param("sessionId")
+      .isMongoId()
+      .withMessage("Valid sessionId is required."),
+    body("reviews")
+      .isArray({ min: 1, max: 60 })
+      .withMessage("reviews must include between 1 and 60 theory scores."),
+    body("reviews.*.itemIndex")
+      .isInt({ min: 0, max: 59 })
+      .withMessage("review itemIndex must be between 0 and 59."),
+    body("reviews.*.scorePercent")
+      .isInt({ min: 0, max: 100 })
+      .withMessage("review scorePercent must be between 0 and 100."),
+    body("reviews.*.feedback")
+      .optional()
+      .isString()
+      .withMessage("review feedback must be a string."),
+    validateRequest,
+  ],
+  teacherController.scoreStandalonePaperSession,
 );
 
 router.get(

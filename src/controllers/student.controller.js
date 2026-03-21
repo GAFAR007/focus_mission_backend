@@ -10,6 +10,7 @@
  * start-session, and complete-session payloads.
  */
 const studentService = require("../services/student.service");
+const standalonePaperSessionService = require("../services/standalonePaperSession.service");
 
 async function getDashboard(req, res, next) {
   try {
@@ -87,6 +88,98 @@ async function completeSession(req, res, next) {
   }
 }
 
+async function listStandalonePapers(req, res, next) {
+  try {
+    const papers = await standalonePaperSessionService.listAvailableStandalonePapersForStudent({
+      studentId: req.params.studentId,
+      requesterId: req.user.id,
+    });
+    res.json({ papers });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function startStandalonePaperSession(req, res, next) {
+  try {
+    const result = await standalonePaperSessionService.startStandalonePaperSession({
+      studentId: req.body.studentId,
+      requesterId: req.user.id,
+      paperId: req.params.paperId,
+    });
+    res.status(201).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getStandalonePaperSession(req, res, next) {
+  try {
+    const result = await standalonePaperSessionService.getStandalonePaperSessionForStudent({
+      studentId: req.params.studentId,
+      requesterId: req.user.id,
+      sessionId: req.params.sessionId,
+    });
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function saveStandalonePaperSessionProgress(req, res, next) {
+  try {
+    const result = await standalonePaperSessionService.saveStandalonePaperSessionProgress({
+      studentId: req.body.studentId,
+      requesterId: req.user.id,
+      sessionId: req.params.sessionId,
+      payload: req.body,
+    });
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function recordStandalonePaperHeartbeat(req, res, next) {
+  try {
+    const result = await standalonePaperSessionService.recordStandalonePaperHeartbeat({
+      studentId: req.body.studentId,
+      requesterId: req.user.id,
+      sessionId: req.params.sessionId,
+    });
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function recordStandalonePaperIntegrityEvent(req, res, next) {
+  try {
+    const result = await standalonePaperSessionService.recordStandalonePaperIntegrityEvent({
+      studentId: req.body.studentId,
+      requesterId: req.user.id,
+      sessionId: req.params.sessionId,
+      payload: req.body,
+    });
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function submitStandalonePaperSession(req, res, next) {
+  try {
+    const result = await standalonePaperSessionService.submitStandalonePaperSession({
+      studentId: req.body.studentId,
+      requesterId: req.user.id,
+      sessionId: req.params.sessionId,
+    });
+    res.status(201).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   getDashboard,
   getResultReport,
@@ -95,4 +188,11 @@ module.exports = {
   listAssignedMissions,
   startSession,
   completeSession,
+  listStandalonePapers,
+  startStandalonePaperSession,
+  getStandalonePaperSession,
+  saveStandalonePaperSessionProgress,
+  recordStandalonePaperHeartbeat,
+  recordStandalonePaperIntegrityEvent,
+  submitStandalonePaperSession,
 };

@@ -18,6 +18,7 @@ const Target = require("../models/Target");
 const Timetable = require("../models/Timetable");
 const User = require("../models/User");
 const resultService = require("./result.service");
+const standalonePaperSessionService = require("./standalonePaperSession.service");
 const subjectCertificationService = require("./subjectCertification.service");
 const {
   buildQuestionBankMission,
@@ -855,6 +856,11 @@ async function getDashboard(studentId) {
       applyAwards: true,
     }),
   ]);
+  const todayStandalonePapers =
+    await standalonePaperSessionService.listAvailableStandalonePapersForStudent({
+      studentId,
+      requesterId: studentId,
+    });
   const dayPerformance = summarizeDailyPerformance({
     student,
     dateKey,
@@ -892,6 +898,7 @@ async function getDashboard(studentId) {
     ),
     subjectCertification,
     today: timetable ? serializeTimetableEntry(timetable) : null,
+    todayStandalonePapers,
     recentSessions,
   };
 }

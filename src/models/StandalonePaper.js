@@ -140,6 +140,15 @@ const standalonePaperSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    sessionType: {
+      type: String,
+      enum: ["morning", "afternoon"],
+      required: true,
+      index: true,
+      // WHY: Standalone Test and Exam delivery still needs to respect the real
+      // lesson slot so student access stays timetable-controlled, even though
+      // the paper content itself is separate from missions.
+    },
     title: {
       type: String,
       required: true,
@@ -213,6 +222,7 @@ standalonePaperSchema.index({
   teacherId: 1,
   studentId: 1,
   paperKind: 1,
+  sessionType: 1,
   updatedAt: -1,
 });
 

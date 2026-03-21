@@ -15,6 +15,7 @@ const mongoose = require("mongoose");
 const SessionLog = require("../models/SessionLog");
 const resultService = require("../services/result.service");
 const standalonePaperService = require("../services/standalonePaper.service");
+const standalonePaperSessionService = require("../services/standalonePaperSession.service");
 const subjectCertificationService = require("../services/subjectCertification.service");
 const teacherService = require("../services/teacher.service");
 
@@ -318,6 +319,69 @@ async function uploadStandalonePaperSourceDraft(req, res, next) {
       file: req.file,
     });
     res.status(201).json(uploaded);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function publishStandalonePaper(req, res, next) {
+  try {
+    const result = await standalonePaperSessionService.publishStandalonePaper({
+      teacherId: req.user.id,
+      paperId: req.params.paperId,
+    });
+    const paper = standalonePaperService.serializeStandalonePaper(result.paper);
+    res.json({ paper });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function unpublishStandalonePaper(req, res, next) {
+  try {
+    const result = await standalonePaperSessionService.unpublishStandalonePaper({
+      teacherId: req.user.id,
+      paperId: req.params.paperId,
+    });
+    const paper = standalonePaperService.serializeStandalonePaper(result.paper);
+    res.json({ paper });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getLatestStandalonePaperSession(req, res, next) {
+  try {
+    const session = await standalonePaperSessionService.getLatestStandalonePaperSessionForTeacher({
+      teacherId: req.user.id,
+      paperId: req.params.paperId,
+    });
+    res.json({ session });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function resetStandalonePaperSession(req, res, next) {
+  try {
+    const result = await standalonePaperSessionService.resetStandalonePaperSession({
+      teacherId: req.user.id,
+      sessionId: req.params.sessionId,
+    });
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function scoreStandalonePaperSession(req, res, next) {
+  try {
+    const result = await standalonePaperSessionService.scoreStandalonePaperSession({
+      teacherId: req.user.id,
+      sessionId: req.params.sessionId,
+      payload: req.body,
+    });
+    res.json(result);
   } catch (error) {
     next(error);
   }
@@ -676,6 +740,11 @@ module.exports = {
   updateStandalonePaper,
   deleteStandalonePaper,
   uploadStandalonePaperSourceDraft,
+  publishStandalonePaper,
+  unpublishStandalonePaper,
+  getLatestStandalonePaperSession,
+  resetStandalonePaperSession,
+  scoreStandalonePaperSession,
   reextractMissionSource,
   getStudentDailyTrend,
   getStudentSessionBreakdown,

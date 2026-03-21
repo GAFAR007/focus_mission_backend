@@ -80,6 +80,115 @@ router.get(
   studentController.listAssignedMissions,
 );
 
+router.get(
+  "/standalone-papers/:studentId",
+  [
+    authorizeRoles("student"),
+    param("studentId").isMongoId().withMessage("Valid studentId is required."),
+    validateRequest,
+  ],
+  studentController.listStandalonePapers,
+);
+
+router.post(
+  "/standalone-papers/:paperId/start",
+  [
+    authorizeRoles("student"),
+    param("paperId").isMongoId().withMessage("Valid paperId is required."),
+    body("studentId").isMongoId().withMessage("Valid studentId is required."),
+    validateRequest,
+  ],
+  studentController.startStandalonePaperSession,
+);
+
+router.get(
+  "/standalone-paper-sessions/:sessionId/:studentId",
+  [
+    authorizeRoles("student"),
+    param("sessionId").isMongoId().withMessage("Valid sessionId is required."),
+    param("studentId").isMongoId().withMessage("Valid studentId is required."),
+    validateRequest,
+  ],
+  studentController.getStandalonePaperSession,
+);
+
+router.patch(
+  "/standalone-paper-sessions/:sessionId/progress",
+  [
+    authorizeRoles("student"),
+    param("sessionId").isMongoId().withMessage("Valid sessionId is required."),
+    body("studentId").isMongoId().withMessage("Valid studentId is required."),
+    body("itemIndex")
+      .isInt({ min: 0, max: 59 })
+      .withMessage("itemIndex must be between 0 and 59."),
+    body("selectedOptionIndex")
+      .optional({ nullable: true })
+      .isInt({ min: -1, max: 3 })
+      .withMessage("selectedOptionIndex must be between -1 and 3."),
+    body("textAnswer")
+      .optional()
+      .isString()
+      .withMessage("textAnswer must be a string."),
+    body("flagged")
+      .optional()
+      .isBoolean()
+      .withMessage("flagged must be a boolean."),
+    body("currentItemIndex")
+      .optional()
+      .isInt({ min: 0, max: 59 })
+      .withMessage("currentItemIndex must be between 0 and 59."),
+    validateRequest,
+  ],
+  studentController.saveStandalonePaperSessionProgress,
+);
+
+router.post(
+  "/standalone-paper-sessions/:sessionId/heartbeat",
+  [
+    authorizeRoles("student"),
+    param("sessionId").isMongoId().withMessage("Valid sessionId is required."),
+    body("studentId").isMongoId().withMessage("Valid studentId is required."),
+    validateRequest,
+  ],
+  studentController.recordStandalonePaperHeartbeat,
+);
+
+router.post(
+  "/standalone-paper-sessions/:sessionId/integrity",
+  [
+    authorizeRoles("student"),
+    param("sessionId").isMongoId().withMessage("Valid sessionId is required."),
+    body("studentId").isMongoId().withMessage("Valid studentId is required."),
+    body("eventType")
+      .isIn([
+        "page_hidden",
+        "window_blur",
+        "fullscreen_exit",
+        "route_leave",
+        "app_backgrounded",
+        "manual_back_attempt",
+      ])
+      .withMessage("eventType is not supported."),
+    body("detail")
+      .optional()
+      .isString()
+      .withMessage("detail must be a string."),
+    validateRequest,
+  ],
+  studentController.recordStandalonePaperIntegrityEvent,
+);
+
+router.post(
+  "/standalone-paper-sessions/:sessionId/submit",
+  [
+    authorizeRoles("student"),
+    param("sessionId").isMongoId().withMessage("Valid sessionId is required."),
+    body("studentId").isMongoId().withMessage("Valid studentId is required."),
+    validateRequest,
+  ],
+  studentController.submitStandalonePaperSession,
+);
+
 router.post(
   "/session/start",
   [

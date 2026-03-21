@@ -83,6 +83,25 @@ function normalizeStandalonePaperKind(value, { required = true } = {}) {
   return normalized;
 }
 
+function normalizeStandalonePaperSessionType(value, { required = true } = {}) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+
+  if (!normalized) {
+    if (required) {
+      throw createError(400, "sessionType is required.");
+    }
+    return "";
+  }
+
+  if (!["morning", "afternoon"].includes(normalized)) {
+    throw createError(400, "sessionType must be morning or afternoon.");
+  }
+
+  return normalized;
+}
+
 function normalizeStandaloneItemType(value, { required = true } = {}) {
   const normalized = String(value || "")
     .trim()
@@ -916,6 +935,9 @@ function serializeStandalonePaper(paper) {
     teacherId: String(paper?.teacherId || "").trim(),
     studentId: String(paper?.studentId || "").trim(),
     paperKind: normalizeStandalonePaperKind(paper?.paperKind, { required: false }),
+    sessionType: normalizeStandalonePaperSessionType(paper?.sessionType, {
+      required: false,
+    }),
     title: String(paper?.title || "").trim(),
     teacherNote: String(paper?.teacherNote || "").trim(),
     sourceUnitText: String(paper?.sourceUnitText || "").trim(),
@@ -968,6 +990,7 @@ async function createStandalonePaper({
   const studentId = String(payload.studentId || "").trim();
   const subjectId = String(payload.subjectId || "").trim();
   const paperKind = normalizeStandalonePaperKind(payload.paperKind);
+  const sessionType = normalizeStandalonePaperSessionType(payload.sessionType);
   const title = String(payload.title || "").trim();
   const teacherNote = String(payload.teacherNote || "").trim();
   const sourceUnitText = String(payload.sourceUnitText || "").trim();
@@ -993,6 +1016,7 @@ async function createStandalonePaper({
     studentId,
     subjectId,
     paperKind,
+    sessionType,
     title,
     teacherNote,
     sourceUnitText,
@@ -1043,9 +1067,23 @@ async function updateStandalonePaper({
   const nextPaperKind = String(payload.paperKind || existing.paperKind || "").trim()
     ? normalizeStandalonePaperKind(payload.paperKind || existing.paperKind)
     : normalizeStandalonePaperKind(existing.paperKind);
+  const nextSessionType = String(
+    payload.sessionType !== undefined ? payload.sessionType : existing.sessionType,
+  ).trim()
+    ? normalizeStandalonePaperSessionType(
+        payload.sessionType !== undefined ? payload.sessionType : existing.sessionType,
+      )
+    : normalizeStandalonePaperSessionType(existing.sessionType);
 
   if (nextPaperKind !== normalizeStandalonePaperKind(existing.paperKind)) {
     throw createError(400, "paperKind cannot be changed after the draft is created.");
+  }
+
+  if (String(existing.status || "").trim() === "published") {
+    throw createError(
+      409,
+      "Published standalone papers must be unpublished before they can be edited.",
+    );
   }
 
   const nextTitle = String(
@@ -1061,6 +1099,7 @@ async function updateStandalonePaper({
   );
 
   const update = {
+    sessionType: nextSessionType,
     title: nextTitle,
     teacherNote: String(
       payload.teacherNote !== undefined ? payload.teacherNote : existing.teacherNote,
@@ -1142,6 +1181,7 @@ async function uploadStandalonePaperSourceDraft({
   const studentId = String(payload.studentId || "").trim();
   const subjectId = String(payload.subjectId || "").trim();
   const paperKind = normalizeStandalonePaperKind(payload.paperKind);
+  const sessionType = normalizeStandalonePaperSessionType(payload.sessionType);
   const title = String(payload.title || "").trim();
   const targetDate = normalizeDateKey(payload.targetDate);
   const { subject } = await assertTeacherOwnsStandalonePaperContext({
@@ -1165,6 +1205,7 @@ async function uploadStandalonePaperSourceDraft({
           studentId,
           subjectId: subject,
           paperKind,
+          sessionType,
           title:
             title ||
             parsedPaper.title ||
@@ -1201,4 +1242,5 @@ module.exports = {
   updateStandalonePaper,
   deleteStandalonePaper,
   uploadStandalonePaperSourceDraft,
+  serializeStandalonePaper,
 };
