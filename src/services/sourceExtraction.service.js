@@ -102,9 +102,12 @@ function inferSourceKind(file) {
   return "";
 }
 
-async function extractTextFromUploadedSource(file) {
+async function extractTextFromUploadedSource(file, options = {}) {
   assertUploadPresent(file);
   const sourceKind = inferSourceKind(file);
+  const minCharacters = Number(options?.minCharacters);
+  const requiredCharacterCount =
+    Number.isInteger(minCharacters) && minCharacters >= 0 ? minCharacters : 80;
 
   if (!sourceKind) {
     throw createError(
@@ -135,12 +138,14 @@ async function extractTextFromUploadedSource(file) {
       );
   }
 
-  if (extractedText.length < 80) {
+  if (extractedText.length < requiredCharacterCount) {
     // WHY: AI drafting needs enough real lesson content to plan a useful unit
     // and produce safe teach-first questions rather than guessing from scraps.
     throw createError(
       422,
-      "The uploaded file did not produce enough readable text. Try a clearer scan or a text-based export.",
+      requiredCharacterCount <= 20
+        ? "The uploaded file did not produce enough readable text for import. Try a clearer scan or a text-based export."
+        : "The uploaded file did not produce enough readable text. Try a clearer scan or a text-based export.",
     );
   }
 

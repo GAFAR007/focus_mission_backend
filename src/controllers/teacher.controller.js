@@ -14,6 +14,7 @@
 const mongoose = require("mongoose");
 const SessionLog = require("../models/SessionLog");
 const resultService = require("../services/result.service");
+const standalonePaperService = require("../services/standalonePaper.service");
 const subjectCertificationService = require("../services/subjectCertification.service");
 const teacherService = require("../services/teacher.service");
 
@@ -254,6 +255,69 @@ async function deleteMission(req, res, next) {
       success: true,
       missionId: deleted.missionId,
     });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getStandalonePapers(req, res, next) {
+  try {
+    const papers = await standalonePaperService.listStandalonePapers({
+      teacherId: req.user.id,
+      studentId: req.params.studentId,
+      paperKind: req.query.paperKind,
+    });
+    res.json({ papers });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function createStandalonePaper(req, res, next) {
+  try {
+    const paper = await standalonePaperService.createStandalonePaper({
+      teacherId: req.user.id,
+      payload: req.body,
+    });
+    res.status(201).json({ paper });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function updateStandalonePaper(req, res, next) {
+  try {
+    const paper = await standalonePaperService.updateStandalonePaper({
+      teacherId: req.user.id,
+      paperId: req.params.paperId,
+      payload: req.body,
+    });
+    res.json({ paper });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function deleteStandalonePaper(req, res, next) {
+  try {
+    const deleted = await standalonePaperService.deleteStandalonePaper({
+      teacherId: req.user.id,
+      paperId: req.params.paperId,
+    });
+    res.json(deleted);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function uploadStandalonePaperSourceDraft(req, res, next) {
+  try {
+    const uploaded = await standalonePaperService.uploadStandalonePaperSourceDraft({
+      teacherId: req.user.id,
+      payload: req.body,
+      file: req.file,
+    });
+    res.status(201).json(uploaded);
   } catch (error) {
     next(error);
   }
@@ -607,6 +671,11 @@ module.exports = {
   getRecentMissions,
   updateMission,
   deleteMission,
+  getStandalonePapers,
+  createStandalonePaper,
+  updateStandalonePaper,
+  deleteStandalonePaper,
+  uploadStandalonePaperSourceDraft,
   reextractMissionSource,
   getStudentDailyTrend,
   getStudentSessionBreakdown,

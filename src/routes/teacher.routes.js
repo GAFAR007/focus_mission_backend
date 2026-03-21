@@ -858,6 +858,174 @@ router.delete(
 );
 
 router.get(
+  "/standalone-papers/:studentId",
+  [
+    param("studentId")
+      .isMongoId()
+      .withMessage("Valid studentId is required."),
+    query("paperKind")
+      .optional()
+      .isIn(["TEST", "EXAM", "test", "exam"])
+      .withMessage("paperKind must be TEST or EXAM."),
+    validateRequest,
+  ],
+  teacherController.getStandalonePapers,
+);
+
+router.post(
+  "/standalone-papers/import",
+  upload.single("sourceFile"),
+  [
+    body("studentId")
+      .isMongoId()
+      .withMessage("Valid studentId is required."),
+    body("subjectId")
+      .isMongoId()
+      .withMessage("Valid subjectId is required."),
+    body("paperKind")
+      .isIn(["TEST", "EXAM", "test", "exam"])
+      .withMessage("paperKind must be TEST or EXAM."),
+    body("title")
+      .optional()
+      .isString()
+      .withMessage("title must be a string."),
+    body("targetDate")
+      .optional()
+      .trim()
+      .isISO8601({
+        strict: true,
+        strictSeparator: true,
+      })
+      .withMessage("targetDate must be a valid YYYY-MM-DD date."),
+    validateRequest,
+  ],
+  teacherController.uploadStandalonePaperSourceDraft,
+);
+
+router.post(
+  "/standalone-papers",
+  [
+    body("studentId")
+      .isMongoId()
+      .withMessage("Valid studentId is required."),
+    body("subjectId")
+      .isMongoId()
+      .withMessage("Valid subjectId is required."),
+    body("paperKind")
+      .isIn(["TEST", "EXAM"])
+      .withMessage("paperKind must be TEST or EXAM."),
+    body("title")
+      .trim()
+      .notEmpty()
+      .withMessage("Standalone paper title is required."),
+    body("teacherNote")
+      .optional()
+      .isString()
+      .withMessage("teacherNote must be a string."),
+    body("sourceUnitText")
+      .optional()
+      .isString()
+      .withMessage("sourceUnitText must be a string."),
+    body("sourceRawText")
+      .optional()
+      .isString()
+      .withMessage("sourceRawText must be a string."),
+    body("sourceFileName")
+      .optional()
+      .isString()
+      .withMessage("sourceFileName must be a string."),
+    body("sourceFileType")
+      .optional()
+      .isString()
+      .withMessage("sourceFileType must be a string."),
+    body("targetDate")
+      .optional()
+      .trim()
+      .isISO8601({
+        strict: true,
+        strictSeparator: true,
+      })
+      .withMessage("targetDate must be a valid YYYY-MM-DD date."),
+    body("durationMinutes")
+      .optional()
+      .isInt({ min: 0, max: 600 })
+      .withMessage("durationMinutes must be between 0 and 600."),
+    body("items")
+      .isArray({ min: 1, max: 60 })
+      .withMessage("items must include between 1 and 60 entries."),
+    validateRequest,
+  ],
+  teacherController.createStandalonePaper,
+);
+
+router.patch(
+  "/standalone-papers/:paperId",
+  [
+    param("paperId")
+      .isMongoId()
+      .withMessage("Valid paperId is required."),
+    body("paperKind")
+      .optional()
+      .isIn(["TEST", "EXAM"])
+      .withMessage("paperKind must be TEST or EXAM."),
+    body("title")
+      .optional()
+      .trim()
+      .notEmpty()
+      .withMessage("Standalone paper title must not be empty."),
+    body("teacherNote")
+      .optional()
+      .isString()
+      .withMessage("teacherNote must be a string."),
+    body("sourceUnitText")
+      .optional()
+      .isString()
+      .withMessage("sourceUnitText must be a string."),
+    body("sourceRawText")
+      .optional()
+      .isString()
+      .withMessage("sourceRawText must be a string."),
+    body("sourceFileName")
+      .optional()
+      .isString()
+      .withMessage("sourceFileName must be a string."),
+    body("sourceFileType")
+      .optional()
+      .isString()
+      .withMessage("sourceFileType must be a string."),
+    body("targetDate")
+      .optional()
+      .trim()
+      .isISO8601({
+        strict: true,
+        strictSeparator: true,
+      })
+      .withMessage("targetDate must be a valid YYYY-MM-DD date."),
+    body("durationMinutes")
+      .optional()
+      .isInt({ min: 0, max: 600 })
+      .withMessage("durationMinutes must be between 0 and 600."),
+    body("items")
+      .optional()
+      .isArray({ min: 1, max: 60 })
+      .withMessage("items must include between 1 and 60 entries."),
+    validateRequest,
+  ],
+  teacherController.updateStandalonePaper,
+);
+
+router.delete(
+  "/standalone-papers/:paperId",
+  [
+    param("paperId")
+      .isMongoId()
+      .withMessage("Valid paperId is required."),
+    validateRequest,
+  ],
+  teacherController.deleteStandalonePaper,
+);
+
+router.get(
   "/results/:resultPackageId",
   [
     param("resultPackageId")
