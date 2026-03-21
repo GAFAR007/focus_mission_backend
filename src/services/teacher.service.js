@@ -607,6 +607,7 @@ function buildImportedDraftReadiness({ parsedDraft, draftFormat }) {
   const warningNotes = [];
   const missingRequirements = dedupeTextList(parsedDraft.errors);
   const importedQuestionCount = parsedDraft.questions.length;
+  const hasMissingRequirements = missingRequirements.length > 0;
 
   if (parsedDraft.unitText) {
     detectedSignals.push(
@@ -628,11 +629,20 @@ function buildImportedDraftReadiness({ parsedDraft, draftFormat }) {
     );
   }
 
-  if (importedQuestionCount > 0) {
+  if (importedQuestionCount > 0 && !hasMissingRequirements) {
     detectedSignals.push(
       `${importedQuestionCount} ${
         normalizedDraftFormat === "THEORY" ? "theory" : "question"
       } draft item${importedQuestionCount === 1 ? "" : "s"} imported without AI.`,
+    );
+  }
+
+  if (importedQuestionCount > 0 && hasMissingRequirements) {
+    // WHY: Populate draft is a strict file import. If any question block is
+    // incomplete, the teacher should see that nothing was populated yet rather
+    // than reading a partial-success message.
+    warningNotes.push(
+      "Some question sections were readable, but no draft was populated because the import file is incomplete.",
     );
   }
 
@@ -647,16 +657,21 @@ function buildImportedDraftReadiness({ parsedDraft, draftFormat }) {
     );
   }
 
-  const status = missingRequirements.length > 0 ? "needs_attention" : "ready";
+  const status = hasMissingRequirements ? "needs_attention" : "ready";
+  const summary =
+    status === "ready"
+      ? normalizedDraftFormat === "THEORY"
+        ? "The uploaded file was parsed directly into a theory draft without AI."
+        : "The uploaded file was parsed directly into a question draft without AI."
+      : parsedDraft.questionBlockCount === 0
+      ? "Populate draft could not find a structured question set in this file, so no draft was imported."
+      : importedQuestionCount > 0
+      ? "Populate draft stopped because at least one imported question section was incomplete, so no draft was populated."
+      : "Populate draft could not import this file cleanly, so no draft was populated.";
 
   return {
     status,
-    summary:
-      status === "ready"
-        ? normalizedDraftFormat === "THEORY"
-          ? "The uploaded file was parsed directly into a theory draft without AI."
-          : "The uploaded file was parsed directly into a question draft without AI."
-        : "The upload was extracted, but the draft could not be populated cleanly from this file yet.",
+    summary,
     detectedSignals: dedupeTextList(detectedSignals),
     missingRequirements,
     warningNotes: dedupeTextList(warningNotes),
