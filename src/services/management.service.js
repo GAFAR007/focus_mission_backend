@@ -1,15 +1,16 @@
 /**
  * WHAT:
  * management.service provides management-only result access, user creation,
- * and timetable setup actions.
+ * archive recovery, and timetable setup actions.
  * WHY:
  * Management needs a dedicated, auditable route surface for reviewing student
  * outcomes, creating core users, and configuring student timetables without
  * inheriting teacher authoring flows.
  * HOW:
  * Verify management ownership boundaries, load recent mission and paper result
- * history, create student or teacher accounts with explicit validation, and
- * save weekday timetable entries with explicit subject and teacher ownership.
+ * history, create student or teacher accounts with explicit validation,
+ * archive/unarchive learners safely, and save weekday timetable entries with
+ * explicit subject and teacher ownership.
  */
 const bcrypt = require("bcryptjs");
 const Mission = require("../models/Mission");
@@ -51,6 +52,18 @@ function normalizeWeekday(value) {
     (weekday) => weekday.toLowerCase() === trimmed,
   );
   return match || "";
+}
+
+function normalizeStudentStatusFilter(value) {
+  const trimmed = String(value || "")
+    .trim()
+    .toLowerCase();
+
+  if (["active", "archived", "all"].includes(trimmed)) {
+    return trimmed;
+  }
+
+  return "active";
 }
 
 function collectTeacherIdsFromTimetables(entries) {
@@ -123,6 +136,8 @@ function serializeUser(user) {
       user.loginDayCount || 0,
     ),
     daysSinceFirstLogin: 0,
+    isArchived: Boolean(user.isArchived),
+    archivedAt: user.archivedAt || null,
     preferredDifficulty: String(
       user.preferredDifficulty || "",
     ),
@@ -252,7 +267,10 @@ async function listStudentResults({
   ]).slice(0, MANAGEMENT_RESULTS_HISTORY_LIMIT);
 }
 
-async function listStudents({ managementId }) {
+async function listStudents({
+  managementId,
+  status = "active",
+}) {
   const managementUser = await User.findById(managementId)
     .select("role")
     .lean();
@@ -264,16 +282,24 @@ async function listStudents({ managementId }) {
     throw createError(403, "Management access is required.");
   }
 
-  // WHY: Management is responsible for timetable and setup across all learners,
-  // so the student picker must read the current full student roster instead of
-  // a stale login snapshot or a manually curated subset.
-  return User.find({
+  const normalizedStatus = normalizeStudentStatusFilter(status);
+  const studentFilter = {
     role: "student",
-    isArchived: { $ne: true },
-  })
-    .sort({ name: 1 })
+  };
+
+  if (normalizedStatus === "active") {
+    studentFilter.isArchived = { $ne: true };
+  } else if (normalizedStatus === "archived") {
+    studentFilter.isArchived = true;
+  }
+
+  // WHY: Management is responsible for timetable and setup across all learners,
+  // so roster views must read the live student records instead of a stale
+  // login snapshot or a manually curated subset.
+  return User.find(studentFilter)
+    .sort({ isArchived: 1, name: 1 })
     .select(
-      "name role avatar avatarSeed xp streak preferredDifficulty firstLoginAt lastLoginAt loginDayCount",
+      "name role avatar avatarSeed xp streak preferredDifficulty firstLoginAt lastLoginAt loginDayCount isArchived archivedAt",
     )
     .lean()
     .then((students) => students.map(serializeUser));
@@ -334,6 +360,77 @@ async function archiveStudent({
   });
 
   return serializeUser(archivedStudent);
+}
+
+async function unarchiveStudent({
+  managementId,
+  studentId,
+}) {
+  const managementUser = await User.findById(managementId)
+    .select("role")
+    .lean();
+
+  if (
+    !managementUser ||
+    String(managementUser.role || "") !== "management"
+  ) {
+    throw createError(403, "Management access is required.");
+  }
+
+  const restoredStudent = await User.findOneAndUpdate(
+    {
+      _id: studentId,
+      role: "student",
+      isArchived: true,
+    },
+    {
+      isArchived: false,
+      archivedAt: null,
+      archivedBy: null,
+    },
+    {
+      new: true,
+    },
+  ).lean();
+
+  if (!restoredStudent) {
+    throw createError(404, "Archived student not found.");
+  }
+
+  // WHY: Unarchived learners must reappear for broad oversight roles
+  // immediately, while teacher access is restored from the live timetable so
+  // classroom ownership stays schedule-driven instead of archival-history-driven.
+  await User.updateMany(
+    {
+      role: { $in: ["management", "mentor"] },
+    },
+    {
+      $addToSet: {
+        assignedStudents: restoredStudent._id,
+      },
+    },
+  );
+
+  const timetableEntries = await Timetable.find({
+    studentId: restoredStudent._id,
+  })
+    .select("morningTeacherId afternoonTeacherId")
+    .lean();
+  const affectedTeacherIds = Array.from(
+    collectTeacherIdsFromTimetables(timetableEntries),
+  );
+
+  await syncTeacherAssignmentsForStudent({
+    studentId: restoredStudent._id,
+    affectedTeacherIds,
+  });
+
+  console.info("[management] student_unarchived", {
+    managementId: String(managementId || ""),
+    studentId: String(restoredStudent._id || ""),
+  });
+
+  return serializeUser(restoredStudent);
 }
 
 async function createManagedUser({
@@ -669,6 +766,7 @@ async function saveStudentTimetableEntry({
 
 module.exports = {
   archiveStudent,
+  unarchiveStudent,
   listStudents,
   listStudentResults,
   assertManagementStudentAccess,

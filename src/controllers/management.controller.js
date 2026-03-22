@@ -1,11 +1,11 @@
 /**
  * WHAT:
  * management.controller exposes management handlers for student setup,
- * reporting, and timetable configuration.
+ * archive recovery, reporting, and timetable configuration.
  * WHY:
  * Management needs a dedicated controller boundary so reporting access stays
  * separate from teacher authoring and mentor support actions while still
- * allowing controlled student timetable setup.
+ * allowing controlled student lifecycle and timetable setup.
  * HOW:
  * Validate params in routes, call the management/result services, and return a
  * stable JSON response payload.
@@ -87,6 +87,23 @@ async function archiveStudent(
   }
 }
 
+async function unarchiveStudent(
+  req,
+  res,
+  next,
+) {
+  try {
+    const student =
+      await managementService.unarchiveStudent({
+        managementId: req.user.id,
+        studentId: req.params.studentId,
+      });
+    res.json({ student });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function getStudents(
   req,
   res,
@@ -96,6 +113,7 @@ async function getStudents(
     const students =
       await managementService.listStudents({
         managementId: req.user.id,
+        status: req.query.status,
       });
     res.json({ students });
   } catch (error) {
@@ -220,5 +238,6 @@ module.exports = {
   listTeachers,
   listSubjects,
   saveStudentTimetableEntry,
+  unarchiveStudent,
   updateSubjectCertificationSettings,
 };

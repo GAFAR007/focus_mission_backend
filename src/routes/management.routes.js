@@ -1,6 +1,7 @@
 /**
  * WHAT:
- * management.routes registers management-only setup and reporting endpoints.
+ * management.routes registers management-only setup, archive recovery, and
+ * reporting endpoints.
  * WHY:
  * Management needs result visibility, student setup tools, and timetable
  * editing without inheriting teacher publishing or send-result permissions.
@@ -80,6 +81,19 @@ router.patch(
     validateRequest,
   ],
   managementController.archiveStudent,
+);
+
+router.patch(
+  "/students/:studentId/unarchive",
+  [
+    param("studentId")
+      .isMongoId()
+      .withMessage(
+        "Valid studentId is required.",
+      ),
+    validateRequest,
+  ],
+  managementController.unarchiveStudent,
 );
 
 router.get(
