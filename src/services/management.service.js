@@ -24,6 +24,7 @@ const {
   sortResultHistoryEntries,
 } = require("./result.service");
 const subjectCertificationService = require("./subjectCertification.service");
+const { normalizeStudentYearGroup } = require("../utils/studentYearGroup");
 
 const MANAGEMENT_RESULTS_HISTORY_LIMIT = 60;
 const WEEKDAY_OPTIONS = [
@@ -118,6 +119,7 @@ function serializeUser(user) {
     subjectSpecialty: String(
       user.subjectSpecialty || "",
     ),
+    yearGroup: normalizeStudentYearGroup(user?.yearGroup),
     isPlaceholder: Boolean(
       user.isPlaceholder,
     ),
@@ -299,7 +301,7 @@ async function listStudents({
   return User.find(studentFilter)
     .sort({ isArchived: 1, name: 1 })
     .select(
-      "name role avatar avatarSeed xp streak preferredDifficulty firstLoginAt lastLoginAt loginDayCount isArchived archivedAt",
+      "name role avatar avatarSeed xp streak preferredDifficulty firstLoginAt lastLoginAt loginDayCount isArchived archivedAt yearGroup",
     )
     .lean()
     .then((students) => students.map(serializeUser));
@@ -473,6 +475,7 @@ async function createManagedUser({
   const subjectSpecialty = String(
     payload?.subjectSpecialty || "",
   ).trim();
+  const yearGroup = normalizeStudentYearGroup(payload?.yearGroup);
 
   if (
     !["student", "teacher"].includes(
@@ -544,6 +547,7 @@ async function createManagedUser({
         role === "teacher" ?
           subjectSpecialty
         : "",
+      yearGroup: role === "student" ? yearGroup : "",
       isPlaceholder: false,
     });
 
@@ -579,6 +583,49 @@ async function createManagedUser({
   return serializeUser(
     freshUser || createdUser,
   );
+}
+
+async function updateStudentYearGroup({
+  managementId,
+  studentId,
+  payload,
+}) {
+  const managementUser = await User.findById(managementId)
+    .select("role")
+    .lean();
+
+  if (
+    !managementUser ||
+    String(managementUser.role || "") !== "management"
+  ) {
+    throw createError(403, "Management access is required.");
+  }
+
+  const yearGroup = normalizeStudentYearGroup(payload?.yearGroup);
+  const updatedStudent = await User.findOneAndUpdate(
+    {
+      _id: studentId,
+      role: "student",
+    },
+    {
+      yearGroup,
+    },
+    {
+      new: true,
+    },
+  ).lean();
+
+  if (!updatedStudent) {
+    throw createError(404, "Student not found.");
+  }
+
+  console.info("[management] student_year_group_updated", {
+    managementId: String(managementId || ""),
+    studentId: String(updatedStudent._id || ""),
+    yearGroup,
+  });
+
+  return serializeUser(updatedStudent);
 }
 
 async function listSubjects() {
@@ -773,6 +820,7 @@ module.exports = {
   createManagedUser,
   listTeachers,
   listSubjects,
+  updateStudentYearGroup,
   getSubjectCertificationSettings,
   updateSubjectCertificationSettings,
   getStudentCertification,

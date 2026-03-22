@@ -35,6 +35,7 @@ function serializeStudent(student) {
   return {
     id: String(student._id),
     name: student.name,
+    yearGroup: String(student.yearGroup || ""),
     xp: student.xp,
     streak: student.streak,
     streakBadgeUnlocked: Boolean(student.streakBadgeUnlocked),

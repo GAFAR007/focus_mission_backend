@@ -60,6 +60,12 @@ router.post(
       .withMessage(
         "subjectSpecialty must be text.",
       ),
+    body("yearGroup")
+      .optional()
+      .isString()
+      .withMessage(
+        "yearGroup must be text.",
+      ),
     validateRequest,
   ],
   managementController.createUser,
@@ -81,6 +87,25 @@ router.patch(
     validateRequest,
   ],
   managementController.archiveStudent,
+);
+
+router.patch(
+  "/students/:studentId/year-group",
+  [
+    param("studentId")
+      .isMongoId()
+      .withMessage(
+        "Valid studentId is required.",
+      ),
+    body("yearGroup")
+      .optional()
+      .isString()
+      .withMessage(
+        "yearGroup must be text.",
+      ),
+    validateRequest,
+  ],
+  managementController.updateStudentYearGroup,
 );
 
 router.patch(

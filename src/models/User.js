@@ -42,6 +42,15 @@ const userSchema = new mongoose.Schema(
       default: "",
       trim: true,
     },
+    yearGroup: {
+      type: String,
+      default: "",
+      trim: true,
+      index: true,
+      // WHY: Year-group targeting powers roster filtering and same-time
+      // standalone Test/Exam assignment without forcing teachers to select
+      // every student one by one each time.
+    },
     isPlaceholder: {
       type: Boolean,
       default: false,

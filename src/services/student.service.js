@@ -407,6 +407,7 @@ function serializeStudent(student) {
     name: student.name,
     avatar: student.avatar,
     avatarSeed: student.avatarSeed,
+    yearGroup: String(student.yearGroup || ""),
     xp: student.xp,
     streak: student.streak,
     streakBadgeUnlocked: Boolean(student.streakBadgeUnlocked),

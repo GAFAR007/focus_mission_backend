@@ -56,9 +56,28 @@ router.post(
     body("password")
       .isLength({ min: 8 })
       .withMessage("Password must be at least 8 characters."),
+    body("yearGroup")
+      .optional()
+      .isString()
+      .withMessage("yearGroup must be text."),
     validateRequest,
   ],
   teacherController.createStudent,
+);
+
+router.patch(
+  "/students/:id/year-group",
+  [
+    param("id")
+      .isMongoId()
+      .withMessage("Valid student id is required."),
+    body("yearGroup")
+      .optional()
+      .isString()
+      .withMessage("yearGroup must be text."),
+    validateRequest,
+  ],
+  teacherController.updateStudentYearGroup,
 );
 
 router.get(

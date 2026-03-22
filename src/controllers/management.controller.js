@@ -104,6 +104,24 @@ async function unarchiveStudent(
   }
 }
 
+async function updateStudentYearGroup(
+  req,
+  res,
+  next,
+) {
+  try {
+    const student =
+      await managementService.updateStudentYearGroup({
+        managementId: req.user.id,
+        studentId: req.params.studentId,
+        payload: req.body,
+      });
+    res.json({ student });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function getStudents(
   req,
   res,
@@ -239,5 +257,6 @@ module.exports = {
   listSubjects,
   saveStudentTimetableEntry,
   unarchiveStudent,
+  updateStudentYearGroup,
   updateSubjectCertificationSettings,
 };

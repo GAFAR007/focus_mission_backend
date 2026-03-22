@@ -41,6 +41,7 @@ const {
 } = require("./sourceExtraction.service");
 const { serializeMission } = require("../utils/missionSerializer");
 const { serializeJourney } = require("../utils/userJourney");
+const { normalizeStudentYearGroup } = require("../utils/studentYearGroup");
 const {
   clampNumber,
   getDateKey,
@@ -74,6 +75,7 @@ function serializeUser(user) {
     email: String(user?.email || ""),
     role: String(user?.role || ""),
     subjectSpecialty: String(user?.subjectSpecialty || ""),
+    yearGroup: normalizeStudentYearGroup(user?.yearGroup),
     isPlaceholder: Boolean(user?.isPlaceholder),
     avatar: String(user?.avatar || ""),
     avatarSeed: String(user?.avatarSeed || ""),
@@ -1749,7 +1751,7 @@ async function listStudents(teacherId) {
   })
     .sort({ name: 1 })
     .select(
-      "name role avatar avatarSeed xp streak preferredDifficulty firstLoginAt lastLoginAt loginDayCount",
+      "name role avatar avatarSeed xp streak preferredDifficulty firstLoginAt lastLoginAt loginDayCount yearGroup",
     )
     .lean();
 }
@@ -1772,6 +1774,7 @@ async function createStudent({
   const name = String(payload?.name || "").trim();
   const email = normalizeEmail(payload?.email);
   const password = String(payload?.password || "");
+  const yearGroup = normalizeStudentYearGroup(payload?.yearGroup);
 
   if (!name) {
     throw createError(400, "Name is required.");
@@ -1802,6 +1805,7 @@ async function createStudent({
     passwordHash,
     role: "student",
     subjectSpecialty: "",
+    yearGroup,
     isPlaceholder: false,
   });
 
@@ -1830,6 +1834,51 @@ async function createStudent({
 
   const freshUser = await User.findById(createdUser._id).lean();
   return serializeUser(freshUser || createdUser);
+}
+
+async function updateStudentYearGroup({
+  teacherId,
+  studentId,
+  payload,
+}) {
+  const teacher = await User.findOne({
+    _id: teacherId,
+    role: "teacher",
+    assignedStudents: studentId,
+  })
+    .select("_id")
+    .lean();
+
+  if (!teacher) {
+    throw createError(403, "Teachers can only update year groups for assigned students.");
+  }
+
+  const yearGroup = normalizeStudentYearGroup(payload?.yearGroup);
+  const updatedStudent = await User.findOneAndUpdate(
+    {
+      _id: studentId,
+      role: "student",
+      isArchived: { $ne: true },
+    },
+    {
+      yearGroup,
+    },
+    {
+      new: true,
+    },
+  ).lean();
+
+  if (!updatedStudent) {
+    throw createError(404, "Student not found.");
+  }
+
+  console.info("[teacher] student_year_group_updated", {
+    teacherId: String(teacherId || ""),
+    studentId: String(updatedStudent._id || ""),
+    yearGroup,
+  });
+
+  return serializeUser(updatedStudent);
 }
 
 async function listSubjects(teacherId) {
@@ -3108,6 +3157,7 @@ async function reextractMissionSource(teacherId, missionId) {
 
 module.exports = {
   createStudent,
+  updateStudentYearGroup,
   listStudents,
   listSubjects,
   listStudentResults,

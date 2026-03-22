@@ -88,6 +88,19 @@ async function createStudent(req, res, next) {
   }
 }
 
+async function updateStudentYearGroup(req, res, next) {
+  try {
+    const user = await teacherService.updateStudentYearGroup({
+      teacherId: req.user.id,
+      studentId: req.params.id,
+      payload: req.body,
+    });
+    res.json({ user });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function getSubjects(req, res, next) {
   try {
     const subjects = await teacherService.listSubjects(req.user.id);
@@ -717,6 +730,7 @@ async function getResultScreenshot(req, res, next) {
 
 module.exports = {
   createStudent,
+  updateStudentYearGroup,
   getStudents,
   getSubjects,
   getStudentResults,

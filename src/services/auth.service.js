@@ -24,6 +24,7 @@ const {
   DAILY_LOGIN_XP,
   getDateKey,
 } = require("../utils/xpPolicy");
+const { normalizeStudentYearGroup } = require("../utils/studentYearGroup");
 
 const PUBLIC_DEMO_ACCOUNT_LIMIT = 24;
 
@@ -51,6 +52,7 @@ function serializeUser(user) {
     email: user.email,
     role: user.role,
     subjectSpecialty: user.subjectSpecialty,
+    yearGroup: normalizeStudentYearGroup(user.yearGroup),
     isPlaceholder: user.isPlaceholder,
     avatar: user.avatar,
     avatarSeed: user.avatarSeed,
@@ -69,6 +71,7 @@ function serializeDemoAccount(user) {
     email: String(user.email || ""),
     role: String(user.role || ""),
     subject: String(user.subjectSpecialty || ""),
+    yearGroup: normalizeStudentYearGroup(user.yearGroup),
     isPlaceholder: Boolean(user.isPlaceholder),
   };
 }
