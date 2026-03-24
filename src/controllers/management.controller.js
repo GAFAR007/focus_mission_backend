@@ -32,6 +32,26 @@ async function getStudentResults(
   }
 }
 
+async function getStudentDayPlan(
+  req,
+  res,
+  next,
+) {
+  try {
+    const dayPlan =
+      await managementService.getStudentDayPlan(
+        {
+          managementId: req.user.id,
+          studentId: req.params.studentId,
+          date: req.query.date,
+        },
+      );
+    res.json({ dayPlan });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function getResultPackage(
   req,
   res,
@@ -248,6 +268,7 @@ async function saveStudentTimetableEntry(
 module.exports = {
   archiveStudent,
   createUser,
+  getStudentDayPlan,
   getStudents,
   getStudentResults,
   getResultPackage,

@@ -24,9 +24,11 @@ const {
   sortResultHistoryEntries,
 } = require("./result.service");
 const subjectCertificationService = require("./subjectCertification.service");
+const { serializeMission } = require("../utils/missionSerializer");
 const { normalizeStudentYearGroup } = require("../utils/studentYearGroup");
 
 const MANAGEMENT_RESULTS_HISTORY_LIMIT = 60;
+const MANAGEMENT_DAY_PLAN_MISSION_LIMIT = 16;
 const WEEKDAY_OPTIONS = [
   "Monday",
   "Tuesday",
@@ -65,6 +67,50 @@ function normalizeStudentStatusFilter(value) {
   }
 
   return "active";
+}
+
+function parseRequestedDate(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12);
+  }
+
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (!match) {
+    return null;
+  }
+
+  const [, year, month, day] = match;
+  const parsed = new Date(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    12,
+    0,
+    0,
+    0,
+  );
+  if (
+    parsed.getFullYear() !== Number(year) ||
+    parsed.getMonth() !== Number(month) - 1 ||
+    parsed.getDate() !== Number(day)
+  ) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function formatDateKey(date) {
+  const year = date.getFullYear().toString().padStart(4, "0");
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function weekdayForDate(date) {
+  return new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(date);
 }
 
 function collectTeacherIdsFromTimetables(entries) {
@@ -171,6 +217,39 @@ function serializeTimetableEntry(entry) {
     afternoonMission: entry.afternoonSubject,
     morningTeacher: entry.morningTeacherId || null,
     afternoonTeacher: entry.afternoonTeacherId || null,
+  };
+}
+
+function serializeSubjectSummary(subject) {
+  if (!subject) {
+    return null;
+  }
+
+  return {
+    id: String(subject._id || subject.id || ""),
+    name: String(subject.name || ""),
+    icon: String(subject.icon || ""),
+    color: String(subject.color || ""),
+  };
+}
+
+function serializePlannedSession({
+  sessionType,
+  subject,
+  teacher,
+  missions,
+}) {
+  return {
+    sessionType,
+    hasScheduledLesson: Boolean(
+      subject &&
+        String(subject._id || subject.id || "").trim(),
+    ),
+    subject: serializeSubjectSummary(subject),
+    teacher: teacher ? serializeTeacher(teacher) : null,
+    missions: Array.isArray(missions)
+      ? missions.map(serializeMission)
+      : [],
   };
 }
 
@@ -811,11 +890,125 @@ async function saveStudentTimetableEntry({
   return serializeTimetableEntry(updated);
 }
 
+async function getStudentDayPlan({
+  managementId,
+  studentId,
+  date,
+}) {
+  await assertManagementStudentAccess(
+    managementId,
+    studentId,
+  );
+
+  const selectedDate = parseRequestedDate(date);
+  if (!selectedDate) {
+    throw createError(
+      400,
+      "date must be in YYYY-MM-DD format.",
+    );
+  }
+
+  const dateKey = formatDateKey(selectedDate);
+  const weekday = weekdayForDate(selectedDate);
+
+  const student = await User.findOne({
+    _id: studentId,
+    role: "student",
+    isArchived: { $ne: true },
+  })
+    .select(
+      "name avatar avatarSeed xp streak yearGroup isArchived archivedAt",
+    )
+    .lean();
+
+  if (!student) {
+    throw createError(
+      404,
+      "Student not found.",
+    );
+  }
+
+  const timetable = await Timetable.findOne({
+    studentId,
+    day: weekday,
+  })
+    .populate("morningSubject", "name icon color")
+    .populate("afternoonSubject", "name icon color")
+    .populate(
+      "morningTeacherId",
+      "name email avatar subjectSpecialty",
+    )
+    .populate(
+      "afternoonTeacherId",
+      "name email avatar subjectSpecialty",
+    )
+    .lean();
+
+  const morningSubjectId = String(
+    timetable?.morningSubject?._id || timetable?.morningSubject || "",
+  ).trim();
+  const afternoonSubjectId = String(
+    timetable?.afternoonSubject?._id || timetable?.afternoonSubject || "",
+  ).trim();
+
+  const [morningMissions, afternoonMissions] = await Promise.all([
+    !morningSubjectId
+      ? []
+      : Mission.find({
+          studentId,
+          subjectId: morningSubjectId,
+          sessionType: "morning",
+          availableOnDate: dateKey,
+          manualResultOnly: { $ne: true },
+          $or: [{ status: "published" }, { status: { $exists: false } }],
+        })
+          .sort({ publishedAt: -1, createdAt: -1 })
+          .limit(MANAGEMENT_DAY_PLAN_MISSION_LIMIT)
+          .populate("subjectId", "name icon color")
+          .lean(),
+    !afternoonSubjectId
+      ? []
+      : Mission.find({
+          studentId,
+          subjectId: afternoonSubjectId,
+          sessionType: "afternoon",
+          availableOnDate: dateKey,
+          manualResultOnly: { $ne: true },
+          $or: [{ status: "published" }, { status: { $exists: false } }],
+        })
+          .sort({ publishedAt: -1, createdAt: -1 })
+          .limit(MANAGEMENT_DAY_PLAN_MISSION_LIMIT)
+          .populate("subjectId", "name icon color")
+          .lean(),
+  ]);
+
+  return {
+    student: serializeUser(student),
+    dateKey,
+    weekday,
+    hasTimetableEntry: Boolean(timetable),
+    room: String(timetable?.room || "").trim(),
+    morning: serializePlannedSession({
+      sessionType: "morning",
+      subject: timetable?.morningSubject || null,
+      teacher: timetable?.morningTeacherId || null,
+      missions: morningMissions,
+    }),
+    afternoon: serializePlannedSession({
+      sessionType: "afternoon",
+      subject: timetable?.afternoonSubject || null,
+      teacher: timetable?.afternoonTeacherId || null,
+      missions: afternoonMissions,
+    }),
+  };
+}
+
 module.exports = {
   archiveStudent,
   unarchiveStudent,
   listStudents,
   listStudentResults,
+  getStudentDayPlan,
   assertManagementStudentAccess,
   createManagedUser,
   listTeachers,

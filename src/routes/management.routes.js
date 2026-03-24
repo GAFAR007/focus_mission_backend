@@ -13,6 +13,7 @@ const express = require("express");
 const {
   body,
   param,
+  query,
 } = require("express-validator");
 
 const managementController = require("../controllers/management.controller");
@@ -192,6 +193,25 @@ router.get(
     validateRequest,
   ],
   managementController.getStudentCertification,
+);
+
+router.get(
+  "/students/:studentId/day-plan",
+  [
+    param("studentId")
+      .isMongoId()
+      .withMessage(
+        "Valid studentId is required.",
+      ),
+    query("date")
+      .optional()
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage(
+        "date must be in YYYY-MM-DD format.",
+      ),
+    validateRequest,
+  ],
+  managementController.getStudentDayPlan,
 );
 
 router.get(
