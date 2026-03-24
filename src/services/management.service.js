@@ -478,7 +478,7 @@ async function listStudentTargets({
   const sessionComments = sessionLogs
     .map(serializeTargetSessionComment)
     .sort((left, right) => {
-      const dateCompare = String(right.dateKey || "").compareTo(
+      const dateCompare = String(right.dateKey || "").localeCompare(
         String(left.dateKey || ""),
       );
       if (dateCompare !== 0) {
@@ -499,7 +499,7 @@ async function listStudentTargets({
         return leftSessionOrder - rightSessionOrder;
       }
 
-      return String(left.subjectName || "").compareTo(
+      return String(left.subjectName || "").localeCompare(
         String(right.subjectName || ""),
       );
     });
