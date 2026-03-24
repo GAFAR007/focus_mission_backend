@@ -919,6 +919,19 @@ router.post(
         strictSeparator: true,
       })
       .withMessage("targetDate must be a valid YYYY-MM-DD date."),
+    body("importKind")
+      .optional()
+      .isIn([
+        "OBJECTIVE",
+        "THEORY",
+        "ESSAY",
+        "FILL_GAP",
+        "objective",
+        "theory",
+        "essay",
+        "fill_gap",
+      ])
+      .withMessage("importKind must be OBJECTIVE, THEORY, or ESSAY."),
     validateRequest,
   ],
   teacherController.uploadStandalonePaperSourceDraft,

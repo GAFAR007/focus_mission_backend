@@ -142,6 +142,50 @@ function normalizeStandaloneItemType(value, { required = true } = {}) {
   );
 }
 
+function normalizeStandaloneImportKind(value, { required = false } = {}) {
+  const normalized = String(value || "")
+    .trim()
+    .toUpperCase();
+
+  if (!normalized) {
+    if (required) {
+      throw createError(400, "importKind is required.");
+    }
+    return "";
+  }
+
+  if (["ESSAY", "FILL_GAP", "FILL GAP", "FILL-GAP"].includes(normalized)) {
+    return "FILL_GAP";
+  }
+
+  if (["OBJECTIVE", "THEORY"].includes(normalized)) {
+    return normalized;
+  }
+
+  throw createError(
+    400,
+    "importKind must be OBJECTIVE, THEORY, or ESSAY.",
+  );
+}
+
+function standaloneImportKindLabel(value) {
+  const normalized = normalizeStandaloneImportKind(value, { required: false });
+
+  if (normalized === "FILL_GAP") {
+    return "essay/fill-gap";
+  }
+
+  if (normalized === "THEORY") {
+    return "theory";
+  }
+
+  if (normalized === "OBJECTIVE") {
+    return "objective";
+  }
+
+  return "standalone paper";
+}
+
 function normalizeDateKey(value) {
   const normalized = String(value || "").trim();
 
@@ -579,13 +623,17 @@ function normalizeStandalonePaperItems(items) {
   });
 }
 
-function parseImportedStandalonePaperFromText(sourceText) {
+function parseImportedStandalonePaperFromText(sourceText, { importKind = "" } = {}) {
   const title = extractImportedPaperTitle(sourceText);
   let unitText = extractImportedUnitText(sourceText);
   const blocks = splitImportedPaperBlocks(sourceText);
   const parsedItems = [];
   const errors = [];
   let usedLearningFallbackForUnitText = false;
+  const normalizedImportKind = normalizeStandaloneImportKind(importKind, {
+    required: false,
+  });
+  let matchingBlockCount = 0;
 
   if (blocks.length === 0) {
     errors.push("No structured Test or Exam items were found in the uploaded file.");
@@ -602,6 +650,12 @@ function parseImportedStandalonePaperFromText(sourceText) {
       sections,
       prompt,
     });
+
+    if (normalizedImportKind && itemType !== normalizedImportKind) {
+      continue;
+    }
+
+    matchingBlockCount += 1;
 
     if (!prompt) {
       errors.push(`${itemLabel} is missing Prompt.`);
@@ -702,6 +756,12 @@ function parseImportedStandalonePaperFromText(sourceText) {
     errors.push("No UNIT TEXT section was found before the imported items.");
   }
 
+  if (blocks.length > 0 && matchingBlockCount === 0 && normalizedImportKind) {
+    errors.push(
+      `No structured ${standaloneImportKindLabel(normalizedImportKind)} items were found in the uploaded file.`,
+    );
+  }
+
   let normalizedItems = [];
 
   if (errors.length === 0 && parsedItems.length > 0) {
@@ -720,7 +780,8 @@ function parseImportedStandalonePaperFromText(sourceText) {
     title,
     unitText,
     items: normalizedItems,
-    blockCount: blocks.length,
+    blockCount: matchingBlockCount,
+    importKind: normalizedImportKind,
     usedLearningFallbackForUnitText,
     errors: dedupeTextList(errors),
   };
@@ -732,6 +793,7 @@ function buildImportedStandalonePaperReadiness(parsedPaper) {
   const missingRequirements = dedupeTextList(parsedPaper.errors);
   const importedItemCount = parsedPaper.items.length;
   const hasMissingRequirements = missingRequirements.length > 0;
+  const importLabel = standaloneImportKindLabel(parsedPaper.importKind);
 
   if (parsedPaper.unitText) {
     detectedSignals.push(
@@ -770,9 +832,11 @@ function buildImportedStandalonePaperReadiness(parsedPaper) {
   const status = hasMissingRequirements ? "needs_attention" : "ready";
   const summary =
     status === "ready"
-      ? "The uploaded file was parsed directly into a standalone paper draft without AI."
+      ? `The uploaded file was parsed directly into a standalone ${importLabel} draft without AI.`
       : parsedPaper.blockCount === 0
-      ? "Populate draft could not find a structured Test or Exam item set in this file, so no draft was imported."
+      ? parsedPaper.importKind
+        ? `Populate draft could not find a structured ${importLabel} set in this file, so no draft was imported.`
+        : "Populate draft could not find a structured Test or Exam item set in this file, so no draft was imported."
       : importedItemCount > 0
       ? "Populate draft stopped because at least one imported item section was incomplete, so no standalone paper draft was populated."
       : "Populate draft could not import this file cleanly, so no standalone paper draft was populated.";
@@ -1194,6 +1258,9 @@ async function uploadStandalonePaperSourceDraft({
   });
   const parsedPaper = parseImportedStandalonePaperFromText(
     extractedSource.extractedText,
+    {
+      importKind: payload.importKind,
+    },
   );
   const draftReadiness = buildImportedStandalonePaperReadiness(parsedPaper);
 
