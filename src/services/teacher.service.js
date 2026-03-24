@@ -448,6 +448,429 @@ function parseImportedMinimumWordCount(value) {
   return Number(match[0]);
 }
 
+function parseImportedWordRange(value) {
+  const normalized = String(value || "")
+    .replace(/[–—]/g, "-")
+    .trim();
+  const rangeMatch = normalized.match(/(\d+)\s*-\s*(\d+)/);
+
+  if (rangeMatch) {
+    const first = Number(rangeMatch[1]);
+    const second = Number(rangeMatch[2]);
+    return {
+      min: Math.min(first, second),
+      max: Math.max(first, second),
+    };
+  }
+
+  const singleValue = parseImportedMinimumWordCount(normalized);
+  if (singleValue == null) {
+    return null;
+  }
+
+  return {
+    min: singleValue,
+    max: singleValue,
+  };
+}
+
+function splitImportedEssaySentenceBlocks(sourceText) {
+  const normalizedSourceText = String(sourceText || "");
+  const sentencePattern =
+    /(?:^|\n)\s*Sentence\s+(\d+)(?:\s*[·:\-]\s*([^\n]+))?\s*/gim;
+  const matches = [];
+  let match;
+
+  while ((match = sentencePattern.exec(normalizedSourceText)) !== null) {
+    matches.push({
+      number: Number(match[1]),
+      role: normalizeImportedTextBlock(match[2]),
+      index: match.index,
+      contentStart: sentencePattern.lastIndex,
+    });
+  }
+
+  return matches.map((item, index) => {
+    const nextIndex =
+      index + 1 < matches.length ? matches[index + 1].index : normalizedSourceText.length;
+
+    return {
+      number: item.number,
+      role: item.role,
+      body: normalizeImportedTextBlock(
+        normalizedSourceText.slice(item.contentStart, nextIndex),
+      ),
+    };
+  });
+}
+
+function extractImportedEssaySentenceSections(sentenceBody) {
+  const normalizedBody = String(sentenceBody || "");
+  const labelPattern =
+    /(?:^|\n)\s*(Unit Text|Learn First Title|Learn First Bullet\s+\d+|Sentence Preview|Blank\s+\d+)\s*:?\s*/gim;
+  const matches = [];
+  let match;
+
+  while ((match = labelPattern.exec(normalizedBody)) !== null) {
+    matches.push({
+      label: String(match[1] || "").trim(),
+      normalizedLabel: String(match[1] || "").trim().toLowerCase(),
+      start: match.index,
+      contentStart: labelPattern.lastIndex,
+    });
+  }
+
+  return matches.reduce(
+    (sections, item, index) => {
+      const nextStart =
+        index + 1 < matches.length ? matches[index + 1].start : normalizedBody.length;
+      const content = normalizeImportedTextBlock(
+        normalizedBody.slice(item.contentStart, nextStart),
+      );
+
+      if (item.normalizedLabel === "unit text") {
+        return {
+          ...sections,
+          unitText: content,
+        };
+      }
+
+      if (item.normalizedLabel === "learn first title") {
+        return {
+          ...sections,
+          learnFirstTitle: content,
+        };
+      }
+
+      if (item.normalizedLabel.startsWith("learn first bullet")) {
+        return {
+          ...sections,
+          learnFirstBullets: [...sections.learnFirstBullets, content],
+        };
+      }
+
+      if (item.normalizedLabel === "sentence preview") {
+        return {
+          ...sections,
+          sentencePreview: content,
+        };
+      }
+
+      if (item.normalizedLabel.startsWith("blank ")) {
+        return {
+          ...sections,
+          blankBlocks: [
+            ...sections.blankBlocks,
+            {
+              number:
+                parseImportedMinimumWordCount(item.normalizedLabel) ||
+                sections.blankBlocks.length + 1,
+              body: content,
+            },
+          ],
+        };
+      }
+
+      return sections;
+    },
+    {
+      unitText: "",
+      learnFirstTitle: "",
+      learnFirstBullets: [],
+      sentencePreview: "",
+      blankBlocks: [],
+    },
+  );
+}
+
+function extractImportedEssayBlankSections(blankBody) {
+  const normalizedBody = String(blankBody || "");
+  const labelPattern = /(?:^|\n)\s*(Hint|Correct Answer)\s*:?\s*/gim;
+  const matches = [];
+  let match;
+
+  while ((match = labelPattern.exec(normalizedBody)) !== null) {
+    matches.push({
+      label: String(match[1] || "").trim().toLowerCase(),
+      start: match.index,
+      contentStart: labelPattern.lastIndex,
+    });
+  }
+
+  return matches.reduce((sections, item, index) => {
+    const nextStart =
+      index + 1 < matches.length ? matches[index + 1].start : normalizedBody.length;
+
+    return {
+      ...sections,
+      [item.label]: normalizeImportedTextBlock(
+        normalizedBody.slice(item.contentStart, nextStart),
+      ),
+    };
+  }, {});
+}
+
+function resolveImportedCorrectOption(correctAnswer, options) {
+  const correctIndex = resolveImportedCorrectIndex(correctAnswer, options);
+
+  if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex > 3) {
+    return "";
+  }
+
+  return ["A", "B", "C", "D"][correctIndex];
+}
+
+function buildImportedUnitTextFallbackFromEssaySentences(sentences) {
+  const uniqueSections = [];
+
+  for (const sentence of Array.isArray(sentences) ? sentences : []) {
+    const explicitUnitText = normalizeImportedTextBlock(sentence?.unitText);
+    if (explicitUnitText && !uniqueSections.includes(explicitUnitText)) {
+      uniqueSections.push(explicitUnitText);
+    }
+  }
+
+  if (uniqueSections.length > 0) {
+    return uniqueSections.join("\n\n").trim();
+  }
+
+  for (const sentence of Array.isArray(sentences) ? sentences : []) {
+    const bullets = Array.isArray(sentence?.learnFirstBullets)
+      ? sentence.learnFirstBullets
+      : [];
+    for (const bullet of bullets) {
+      const normalizedBullet = normalizeImportedTextBlock(bullet);
+      if (!normalizedBullet || uniqueSections.includes(normalizedBullet)) {
+        continue;
+      }
+      uniqueSections.push(normalizedBullet);
+    }
+  }
+
+  return uniqueSections.join("\n\n").trim();
+}
+
+function parseImportedEssayDraftFromText({
+  sourceText,
+  parsedTitle,
+  unitText,
+  essayMode,
+}) {
+  const sentenceBlocks = splitImportedEssaySentenceBlocks(sourceText);
+  const errors = [];
+  const parsedSentences = [];
+  let usedLearningFallbackForUnitText = false;
+
+  if (sentenceBlocks.length === 0) {
+    errors.push(
+      "No structured Sentence sections were found in the uploaded file.",
+    );
+  }
+
+  for (const sentenceBlock of sentenceBlocks) {
+    const sentenceLabel =
+      `Sentence ${sentenceBlock.number || parsedSentences.length + 1}`;
+    const sections = extractImportedEssaySentenceSections(sentenceBlock.body);
+    const learnFirstTitle =
+      normalizeImportedTextBlock(sections.learnFirstTitle) || "LEARN FIRST";
+    const learnFirstBullets = sections.learnFirstBullets
+      .map((bullet) => normalizeImportedTextBlock(bullet))
+      .filter(Boolean);
+    const sentencePreview = normalizeImportedTextBlock(sections.sentencePreview);
+
+    if (learnFirstBullets.length < 3) {
+      errors.push(`${sentenceLabel} needs at least 3 Learn First bullets.`);
+      continue;
+    }
+
+    if (!sentencePreview) {
+      errors.push(`${sentenceLabel} is missing Sentence Preview.`);
+      continue;
+    }
+
+    if (!sections.blankBlocks.length) {
+      errors.push(`${sentenceLabel} needs at least one Blank section.`);
+      continue;
+    }
+
+    const blankEntries = [];
+    let hasBlankError = false;
+
+    for (const blankBlock of sections.blankBlocks) {
+      const blankLabel =
+        `${sentenceLabel} blank ${blankBlock.number || blankEntries.length + 1}`;
+      const blankSections = extractImportedEssayBlankSections(blankBlock.body);
+      const options = parseImportedOptionList(blankBlock.body);
+      const correctOption = resolveImportedCorrectOption(
+        blankSections["correct answer"],
+        options,
+      );
+
+      if (options.length !== 4 || options.some((option) => !option)) {
+        errors.push(`${blankLabel} needs exactly four imported answer options.`);
+        hasBlankError = true;
+        continue;
+      }
+
+      if (!correctOption) {
+        errors.push(`${blankLabel} is missing a usable Correct Answer.`);
+        hasBlankError = true;
+        continue;
+      }
+
+      blankEntries.push({
+        type: "blank",
+        blankId: `s${sentenceBlock.number || parsedSentences.length + 1}b${
+          blankBlock.number || blankEntries.length + 1
+        }`,
+        hint: normalizeImportedTextBlock(blankSections.hint),
+        options: {
+          A: options[0],
+          B: options[1],
+          C: options[2],
+          D: options[3],
+        },
+        correctOption,
+      });
+    }
+
+    if (hasBlankError) {
+      continue;
+    }
+
+    const previewParts = sentencePreview
+      .split(/(_{2,})/)
+      .filter((part) => String(part || "").isNotEmpty);
+    const placeholderCount = previewParts.filter((part) => /^_{2,}$/.test(part)).length;
+
+    if (placeholderCount !== blankEntries.length) {
+      errors.push(
+        `${sentenceLabel} has ${placeholderCount} preview blank${
+          placeholderCount === 1 ? "" : "s"
+        } but ${blankEntries.length} imported Blank section${
+          blankEntries.length === 1 ? "" : "s"
+        }.`,
+      );
+      continue;
+    }
+
+    const parts = [];
+    let blankCursor = 0;
+
+    for (const part of previewParts) {
+      if (/^_{2,}$/.test(part)) {
+        parts.push(blankEntries[blankCursor]);
+        blankCursor += 1;
+        continue;
+      }
+
+      parts.push({
+        type: "text",
+        value: part,
+      });
+    }
+
+    parsedSentences.push({
+      id: `s${sentenceBlock.number || parsedSentences.length + 1}`,
+      role:
+        normalizeImportedTextBlock(sentenceBlock.role) ||
+        `sentence_${sentenceBlock.number || parsedSentences.length + 1}`,
+      unitText: normalizeImportedTextBlock(sections.unitText),
+      learnFirstTitle,
+      learnFirstBullets,
+      parts,
+    });
+  }
+
+  if (!unitText && parsedSentences.length > 0) {
+    unitText = buildImportedUnitTextFallbackFromEssaySentences(parsedSentences);
+    usedLearningFallbackForUnitText = unitText.length > 0;
+  }
+
+  if (!unitText) {
+    errors.push(
+      "No UNIT TEXT section was found before the imported essay draft.",
+    );
+  }
+
+  const normalizedEssayMode = normalizeEssayMode(essayMode || "NORMAL");
+  const defaultWordRange = parseImportedWordRange(
+    /(?:^|\n)\s*Target Words\s*:?\s*([^\n]+)/im.exec(String(sourceText || ""))?.[1],
+  ) || {
+    min: 80,
+    max: 120,
+  };
+  const explicitTargetSentenceCount = parseImportedMinimumWordCount(
+    /(?:^|\n)\s*Target Sentences\s*:?\s*([^\n]+)/im.exec(String(sourceText || ""))?.[1],
+  );
+  const explicitTargetBlankCount = parseImportedMinimumWordCount(
+    /(?:^|\n)\s*Target Blanks\s*:?\s*([^\n]+)/im.exec(String(sourceText || ""))?.[1],
+  );
+  const actualBlankCount = parsedSentences.reduce(
+    (total, sentence) =>
+      total +
+      sentence.parts.filter((part) => part && part.type === "blank").length,
+    0,
+  );
+  const targetSentenceCount =
+    explicitTargetSentenceCount || parsedSentences.length;
+  const targetBlankCount = explicitTargetBlankCount || actualBlankCount;
+
+  if (
+    explicitTargetSentenceCount &&
+    parsedSentences.length > 0 &&
+    explicitTargetSentenceCount !== parsedSentences.length
+  ) {
+    errors.push(
+      `Target Sentences says ${explicitTargetSentenceCount}, but ${parsedSentences.length} sentence sections were imported.`,
+    );
+  }
+
+  if (
+    explicitTargetBlankCount &&
+    actualBlankCount > 0 &&
+    explicitTargetBlankCount !== actualBlankCount
+  ) {
+    errors.push(
+      `Target Blanks says ${explicitTargetBlankCount}, but ${actualBlankCount} blanks were imported from the file.`,
+    );
+  }
+
+  return {
+    title: parsedTitle,
+    unitText,
+    questions: [],
+    draftJson:
+      errors.length === 0
+        ? {
+            type: "ESSAY_BUILDER",
+            mode: normalizedEssayMode,
+            targets: {
+              targetWordMin: defaultWordRange.min,
+              targetWordMax: defaultWordRange.max,
+              targetSentenceCount,
+              targetBlankCount,
+            },
+            sentences: parsedSentences.map((sentence) => ({
+              id: sentence.id,
+              role: sentence.role,
+              learnFirst: {
+                title: sentence.learnFirstTitle,
+                bullets: sentence.learnFirstBullets,
+              },
+              parts: sentence.parts,
+            })),
+          }
+        : null,
+    questionBlockCount: sentenceBlocks.length,
+    structuredBlockCount: sentenceBlocks.length,
+    structuredBlockLabel: "sentence",
+    importedItemCount: parsedSentences.length,
+    usedLearningFallbackForUnitText,
+    errors: dedupeTextList(errors),
+  };
+}
+
 function buildImportedUnitTextFallbackFromQuestions(questions) {
   const uniqueLearningBlocks = [];
 
@@ -464,7 +887,7 @@ function buildImportedUnitTextFallbackFromQuestions(questions) {
   return uniqueLearningBlocks.join("\n\n").trim();
 }
 
-function parseImportedMissionFromText({ sourceText, draftFormat }) {
+function parseImportedMissionFromText({ sourceText, draftFormat, essayMode }) {
   const normalizedDraftFormat = normalizeDraftFormat(draftFormat);
   const parsedTitle = extractImportedMissionTitle(sourceText);
   let unitText = extractImportedUnitText(sourceText);
@@ -474,16 +897,12 @@ function parseImportedMissionFromText({ sourceText, draftFormat }) {
   let usedLearningFallbackForUnitText = false;
 
   if (normalizedDraftFormat === "ESSAY_BUILDER") {
-    return {
-      title: parsedTitle,
+    return parseImportedEssayDraftFromText({
+      sourceText,
+      parsedTitle,
       unitText,
-      questions: [],
-      questionBlockCount: questionBlocks.length,
-      usedLearningFallbackForUnitText,
-      errors: [
-        "Populate draft currently supports structured Questions or Theory imports only.",
-      ],
-    };
+      essayMode,
+    });
   }
 
   if (questionBlocks.length === 0) {
@@ -597,7 +1016,11 @@ function parseImportedMissionFromText({ sourceText, draftFormat }) {
     title: parsedTitle,
     unitText,
     questions: normalizedQuestions,
+    draftJson: null,
     questionBlockCount: questionBlocks.length,
+    structuredBlockCount: questionBlocks.length,
+    structuredBlockLabel: "question",
+    importedItemCount: normalizedQuestions.length,
     usedLearningFallbackForUnitText,
     errors: dedupeTextList(errors),
   };
@@ -608,8 +1031,30 @@ function buildImportedDraftReadiness({ parsedDraft, draftFormat }) {
   const detectedSignals = [];
   const warningNotes = [];
   const missingRequirements = dedupeTextList(parsedDraft.errors);
-  const importedQuestionCount = parsedDraft.questions.length;
+  const importedQuestionCount =
+    normalizedDraftFormat === "ESSAY_BUILDER"
+      ? Number(
+          parsedDraft.importedItemCount ||
+            parsedDraft?.draftJson?.targets?.targetSentenceCount ||
+            (Array.isArray(parsedDraft?.draftJson?.sentences)
+              ? parsedDraft.draftJson.sentences.length
+              : 0),
+        )
+      : parsedDraft.questions.length;
   const hasMissingRequirements = missingRequirements.length > 0;
+  const structuredBlockCount = Number(
+    parsedDraft.structuredBlockCount || parsedDraft.questionBlockCount || 0,
+  );
+  const structuredBlockLabel =
+    normalizedDraftFormat === "ESSAY_BUILDER"
+      ? "sentence"
+      : parsedDraft.structuredBlockLabel || "question";
+  const importedItemLabel =
+    normalizedDraftFormat === "ESSAY_BUILDER"
+      ? "essay sentence"
+      : normalizedDraftFormat === "THEORY"
+      ? "theory"
+      : "question";
 
   if (parsedDraft.unitText) {
     detectedSignals.push(
@@ -617,10 +1062,10 @@ function buildImportedDraftReadiness({ parsedDraft, draftFormat }) {
     );
   }
 
-  if (parsedDraft.questionBlockCount > 0) {
+  if (structuredBlockCount > 0) {
     detectedSignals.push(
-      `${parsedDraft.questionBlockCount} structured question block${
-        parsedDraft.questionBlockCount === 1 ? "" : "s"
+      `${structuredBlockCount} structured ${structuredBlockLabel} block${
+        structuredBlockCount === 1 ? "" : "s"
       } detected.`,
     );
   }
@@ -633,9 +1078,9 @@ function buildImportedDraftReadiness({ parsedDraft, draftFormat }) {
 
   if (importedQuestionCount > 0 && !hasMissingRequirements) {
     detectedSignals.push(
-      `${importedQuestionCount} ${
-        normalizedDraftFormat === "THEORY" ? "theory" : "question"
-      } draft item${importedQuestionCount === 1 ? "" : "s"} imported without AI.`,
+      `${importedQuestionCount} ${importedItemLabel} draft item${
+        importedQuestionCount === 1 ? "" : "s"
+      } imported without AI.`,
     );
   }
 
@@ -649,26 +1094,32 @@ function buildImportedDraftReadiness({ parsedDraft, draftFormat }) {
   }
 
   if (
-    parsedDraft.questionBlockCount > 0 &&
+    structuredBlockCount > 0 &&
     importedQuestionCount > 0 &&
-    parsedDraft.questionBlockCount !== importedQuestionCount &&
+    structuredBlockCount !== importedQuestionCount &&
     missingRequirements.length === 0
   ) {
     warningNotes.push(
-      "The imported file included extra question text that was not needed after validation.",
+      `The imported file included extra ${structuredBlockLabel} text that was not needed after validation.`,
     );
   }
 
   const status = hasMissingRequirements ? "needs_attention" : "ready";
   const summary =
     status === "ready"
-      ? normalizedDraftFormat === "THEORY"
+      ? normalizedDraftFormat === "ESSAY_BUILDER"
+        ? "The uploaded file was parsed directly into an essay draft without AI."
+        : normalizedDraftFormat === "THEORY"
         ? "The uploaded file was parsed directly into a theory draft without AI."
         : "The uploaded file was parsed directly into a question draft without AI."
-      : parsedDraft.questionBlockCount === 0
-      ? "Populate draft could not find a structured question set in this file, so no draft was imported."
+      : structuredBlockCount === 0
+      ? normalizedDraftFormat === "ESSAY_BUILDER"
+        ? "Populate draft could not find a structured essay sentence set in this file, so no draft was imported."
+        : "Populate draft could not find a structured question set in this file, so no draft was imported."
       : importedQuestionCount > 0
-      ? "Populate draft stopped because at least one imported question section was incomplete, so no draft was populated."
+      ? normalizedDraftFormat === "ESSAY_BUILDER"
+        ? "Populate draft stopped because at least one imported sentence section was incomplete, so no draft was populated."
+        : "Populate draft stopped because at least one imported question section was incomplete, so no draft was populated."
       : "Populate draft could not import this file cleanly, so no draft was populated.";
 
   return {
@@ -687,9 +1138,22 @@ function buildImportedUnitPlan({
   parsedDraft,
 }) {
   const normalizedDraftFormat = normalizeDraftFormat(draftFormat);
-  const importedQuestionCount = parsedDraft.questions.length;
+  const importedQuestionCount =
+    normalizedDraftFormat === "ESSAY_BUILDER"
+      ? Number(
+          parsedDraft.importedItemCount ||
+            parsedDraft?.draftJson?.targets?.targetSentenceCount ||
+            (Array.isArray(parsedDraft?.draftJson?.sentences)
+              ? parsedDraft.draftJson.sentences.length
+              : 0),
+        )
+      : parsedDraft.questions.length;
   const fallbackQuestionCount =
-    normalizedDraftFormat === "THEORY" ? THEORY_QUESTION_COUNT_MIN : 5;
+    normalizedDraftFormat === "ESSAY_BUILDER"
+      ? 10
+      : normalizedDraftFormat === "THEORY"
+      ? THEORY_QUESTION_COUNT_MIN
+      : 5;
   const suggestedQuestionCount =
     importedQuestionCount > 0
       ? importedQuestionCount
@@ -705,8 +1169,10 @@ function buildImportedUnitPlan({
       parsedDraft.unitText
         ? "Unit text section detected from the uploaded file."
         : "",
-      parsedDraft.questionBlockCount > 0
-        ? `${parsedDraft.questionBlockCount} structured question blocks detected.`
+      Number(parsedDraft.structuredBlockCount || parsedDraft.questionBlockCount || 0) > 0
+        ? `${Number(parsedDraft.structuredBlockCount || parsedDraft.questionBlockCount || 0)} structured ${
+            normalizedDraftFormat === "ESSAY_BUILDER" ? "sentence" : "question"
+          } blocks detected.`
         : "",
       importedQuestionCount > 0
         ? `${importedQuestionCount} draft items validated for direct import.`
@@ -758,6 +1224,25 @@ async function buildImportedMissionFromSource({
     String(payload.title || "").trim() ||
     parsedDraft.title ||
     `${subject.name} Mission`;
+  const importedItemCount =
+    draftFormat === "ESSAY_BUILDER"
+      ? Number(
+          parsedDraft.importedItemCount ||
+            parsedDraft?.draftJson?.targets?.targetSentenceCount ||
+            (Array.isArray(parsedDraft?.draftJson?.sentences)
+              ? parsedDraft.draftJson.sentences.length
+              : 0),
+        )
+      : parsedDraft.questions.length;
+  const resolvedEssayMode =
+    draftFormat === "ESSAY_BUILDER"
+      ? normalizeEssayMode(
+          payload.essayMode ||
+            parsedDraft?.draftJson?.mode ||
+            "NORMAL",
+          { required: true },
+        )
+      : null;
   const baseMission = {
     id: "",
     title,
@@ -765,8 +1250,9 @@ async function buildImportedMissionFromSource({
     sourceUnitText: parsedDraft.unitText,
     sourceRawText: extractedSource.extractedText,
     draftFormat,
-    essayMode: null,
-    draftJson: null,
+    essayMode: resolvedEssayMode,
+    draftJson:
+      draftFormat === "ESSAY_BUILDER" ? parsedDraft.draftJson || null : null,
     source: "bank",
     status: "draft",
     aiModel: "",
@@ -777,7 +1263,7 @@ async function buildImportedMissionFromSource({
     taskCodes: normalizedTaskCodes,
     sourceFileName: extractedSource.fileName,
     sourceFileType: extractedSource.mimeType,
-    questions: parsedDraft.questions,
+    questions: draftFormat === "ESSAY_BUILDER" ? [] : parsedDraft.questions,
     subjectId: subject,
     createdAt: new Date(),
     publishedAt: null,
@@ -816,8 +1302,8 @@ async function buildImportedMissionFromSource({
     sourceUnitText: baseMission.sourceUnitText,
     sourceRawText: baseMission.sourceRawText,
     draftFormat: baseMission.draftFormat,
-    essayMode: null,
-    draftJson: null,
+    essayMode: baseMission.essayMode,
+    draftJson: baseMission.draftJson,
     source: "bank",
     status: "draft",
     aiModel: "",
@@ -828,11 +1314,11 @@ async function buildImportedMissionFromSource({
     ...certificationSnapshot,
     xpReward: resolveMissionRewardPolicy({
       draftFormat,
-      questionCount: parsedDraft.questions.length,
+      questionCount: importedItemCount,
     }).xpReward,
     sourceFileName: baseMission.sourceFileName,
     sourceFileType: baseMission.sourceFileType,
-    questions: parsedDraft.questions,
+    questions: baseMission.questions,
     createdBy: teacher._id,
   });
 
@@ -2357,6 +2843,7 @@ async function extractSourcePlan(teacherId, payload) {
     const parsedDraft = parseImportedMissionFromText({
       sourceText: extractedSource.extractedText,
       draftFormat: payload.draftFormat,
+      essayMode: payload.essayMode,
     });
     unitPlan = buildImportedUnitPlan({
       subjectName: subject.name,
