@@ -235,6 +235,12 @@ router.get(
       .withMessage(
         "Valid studentId is required.",
       ),
+    query("date")
+      .optional()
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage(
+        "date must be in YYYY-MM-DD format.",
+      ),
     validateRequest,
   ],
   managementController.getStudentTargets,

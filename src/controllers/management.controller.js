@@ -43,6 +43,7 @@ async function getStudentTargets(
         {
           managementId: req.user.id,
           studentId: req.params.studentId,
+          date: req.query.date,
         },
       );
     res.json(targetHistory);

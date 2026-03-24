@@ -28,6 +28,9 @@ const {
 const subjectCertificationService = require("./subjectCertification.service");
 const { serializeMission } = require("../utils/missionSerializer");
 const { normalizeStudentYearGroup } = require("../utils/studentYearGroup");
+const {
+  getWeekKey,
+} = require("../utils/xpPolicy");
 
 const MANAGEMENT_RESULTS_HISTORY_LIMIT = 60;
 const MANAGEMENT_TARGET_HISTORY_LIMIT = 80;
@@ -148,6 +151,58 @@ function formatDateKey(date) {
 
 function weekdayForDate(date) {
   return new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(date);
+}
+
+function buildWeekdayDateKeysForMonth(anchorDate) {
+  const keys = [];
+  const year = anchorDate.getFullYear();
+  const month = anchorDate.getMonth();
+  const lastDay = new Date(year, month + 1, 0).getDate();
+
+  for (let day = 1; day <= lastDay; day += 1) {
+    const date = new Date(year, month, day, 12, 0, 0, 0);
+    const weekday = date.getDay();
+    if (weekday === 0 || weekday === 6) {
+      continue;
+    }
+    keys.push(formatDateKey(date));
+  }
+
+  return keys;
+}
+
+function buildManagementTargetDateSections({
+  displayDateKeys,
+  targets,
+  sessionComments,
+}) {
+  return displayDateKeys.map((dateKey) => {
+    const dateWeekKey = getWeekKey(dateKey);
+    const targetsForDate = targets.filter((target) => {
+      const targetType = String(target.targetType || "").trim();
+      if (
+        targetType === "fixed_daily_mission" ||
+        targetType === "fixed_assessment"
+      ) {
+        // WHY: Fixed targets are weekly expectations, so management should see
+        // them on every weekday in that teaching week instead of only on the
+        // one day the row was first created.
+        return String(target.weekKey || "").trim() === dateWeekKey;
+      }
+
+      return String(target.awardDateKey || "").trim() === dateKey;
+    });
+
+    const commentsForDate = sessionComments.filter(
+      (comment) => String(comment.dateKey || "").trim() === dateKey,
+    );
+
+    return {
+      dateKey,
+      targets: targetsForDate,
+      sessionComments: commentsForDate,
+    };
+  });
 }
 
 function collectTeacherIdsFromTimetables(entries) {
@@ -434,14 +489,28 @@ async function listStudentResults({
 async function listStudentTargets({
   managementId,
   studentId,
+  date,
 }) {
   await assertManagementStudentAccess(
     managementId,
     studentId,
   );
 
+  const anchorDate = parseRequestedDate(date) || parseRequestedDate("");
+  const displayDateKeys = buildWeekdayDateKeysForMonth(anchorDate);
+  const displayWeekKeys = [
+    ...new Set(displayDateKeys.map((dateKey) => getWeekKey(dateKey))),
+  ];
+
   const targets = await Target.find({
     studentId,
+    $or: [
+      { awardDateKey: { $in: displayDateKeys } },
+      {
+        weekKey: { $in: displayWeekKeys },
+        targetType: { $in: ["fixed_daily_mission", "fixed_assessment"] },
+      },
+    ],
   })
     .sort({
       awardDateKey: -1,
@@ -455,18 +524,11 @@ async function listStudentTargets({
     .lean();
 
   const serializedTargets = targets.map(serializeTarget);
-  const targetDateKeys = [
-    ...new Set(
-      serializedTargets
-        .map((target) => String(target.awardDateKey || "").trim())
-        .filter(Boolean),
-    ),
-  ];
 
-  const sessionLogs = targetDateKeys.length
+  const sessionLogs = displayDateKeys.length
     ? await SessionLog.find({
         studentId,
-        dateKey: { $in: targetDateKeys },
+        dateKey: { $in: displayDateKeys },
         notes: { $exists: true, $ne: "" },
       })
         .select("dateKey sessionType notes subjectId createdBy")
@@ -505,8 +567,14 @@ async function listStudentTargets({
     });
 
   return {
+    displayDateKeys,
     targets: serializedTargets,
     sessionComments,
+    dateSections: buildManagementTargetDateSections({
+      displayDateKeys,
+      targets: serializedTargets,
+      sessionComments,
+    }),
   };
 }
 
