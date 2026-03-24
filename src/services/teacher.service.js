@@ -2813,10 +2813,27 @@ async function extractSourcePlan(teacherId, payload) {
     throw createError(404, "Subject not found.");
   }
 
-  if (
+  const studentId = String(payload.studentId || "").trim();
+  const targetDate = String(payload.targetDate || "").trim();
+  const hasStudentContext = studentId.length > 0 && targetDate.length > 0;
+
+  if (hasStudentContext) {
+    // WHY: Source uploads inside the mission builder belong to a specific
+    // timetable slot, so ownership should follow the scheduled lesson just like
+    // mission generation instead of depending on a free-text specialty label.
+    await assertTeacherOwnsScheduledLesson({
+      teacherId,
+      studentId,
+      subjectId: String(subject._id),
+      sessionType: String(payload.sessionType || "").trim().toLowerCase(),
+      targetDate,
+    });
+  } else if (
     normalizeForMatch(teacher.subjectSpecialty) !==
     normalizeForMatch(subject.name)
   ) {
+    // WHY: When no specific student/date slot is provided, the safer fallback
+    // is still the teacher's canonical subject specialty.
     throw createError(
       403,
       "Teachers can only upload and plan source material for their own subject.",
@@ -2828,9 +2845,7 @@ async function extractSourcePlan(teacherId, payload) {
     subjectId: String(subject._id),
     sessionType: String(payload.sessionType || "").trim().toLowerCase(),
     uploadMode: normalizeUploadMode(payload.uploadMode),
-    hasStudentContext:
-      String(payload.studentId || "").trim().length > 0 &&
-      String(payload.targetDate || "").trim().length > 0,
+    hasStudentContext,
   });
 
   const extractedSource = await extractTextFromUploadedSource(payload.file);

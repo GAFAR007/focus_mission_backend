@@ -49,6 +49,14 @@ function normalizeEmail(value) {
     .toLowerCase();
 }
 
+function normalizeForMatch(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function normalizeWeekday(value) {
   const trimmed = String(value || "").trim().toLowerCase();
   const match = WEEKDAY_OPTIONS.find(
@@ -100,6 +108,32 @@ function parseRequestedDate(value) {
   }
 
   return parsed;
+}
+
+async function resolveCanonicalTeacherSubjectSpecialty(subjectSpecialty) {
+  const normalizedSpecialty = normalizeForMatch(subjectSpecialty);
+
+  if (!normalizedSpecialty) {
+    return "";
+  }
+
+  const subjects = await Subject.find({})
+    .select("name")
+    .lean();
+  const matchingSubject = subjects.find(
+    (subject) => normalizeForMatch(subject.name) === normalizedSpecialty,
+  );
+
+  if (!matchingSubject) {
+    throw createError(
+      400,
+      "Teacher subject specialty must match an existing subject name.",
+    );
+  }
+
+  // WHY: Persist the catalog subject name so future teacher checks compare
+  // against one canonical value instead of preserving ad hoc free-text input.
+  return String(matchingSubject.name || "").trim();
 }
 
 function formatDateKey(date) {
@@ -555,6 +589,10 @@ async function createManagedUser({
     payload?.subjectSpecialty || "",
   ).trim();
   const yearGroup = normalizeStudentYearGroup(payload?.yearGroup);
+  const canonicalSubjectSpecialty =
+    role === "teacher"
+      ? await resolveCanonicalTeacherSubjectSpecialty(subjectSpecialty)
+      : "";
 
   if (
     !["student", "teacher"].includes(
@@ -595,7 +633,7 @@ async function createManagedUser({
 
   if (
     role === "teacher" &&
-    !subjectSpecialty
+    !canonicalSubjectSpecialty
   ) {
     throw createError(
       400,
@@ -624,7 +662,7 @@ async function createManagedUser({
       role,
       subjectSpecialty:
         role === "teacher" ?
-          subjectSpecialty
+          canonicalSubjectSpecialty
         : "",
       yearGroup: role === "student" ? yearGroup : "",
       isPlaceholder: false,
