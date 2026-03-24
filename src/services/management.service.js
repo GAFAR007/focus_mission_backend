@@ -17,6 +17,7 @@ const Mission = require("../models/Mission");
 const ResultPackage = require("../models/ResultPackage");
 const Subject = require("../models/Subject");
 const Timetable = require("../models/Timetable");
+const Target = require("../models/Target");
 const User = require("../models/User");
 const {
   serializeMissionResultHistoryEntry,
@@ -28,6 +29,7 @@ const { serializeMission } = require("../utils/missionSerializer");
 const { normalizeStudentYearGroup } = require("../utils/studentYearGroup");
 
 const MANAGEMENT_RESULTS_HISTORY_LIMIT = 60;
+const MANAGEMENT_TARGET_HISTORY_LIMIT = 80;
 const MANAGEMENT_DAY_PLAN_MISSION_LIMIT = 16;
 const WEEKDAY_OPTIONS = [
   "Monday",
@@ -267,6 +269,21 @@ function serializeSubjectSummary(subject) {
   };
 }
 
+function serializeTarget(target) {
+  return {
+    id: String(target?._id || ""),
+    title: String(target?.title || ""),
+    description: String(target?.description || ""),
+    status: String(target?.status || ""),
+    difficulty: String(target?.difficulty || ""),
+    targetType: String(target?.targetType || "custom"),
+    stars: Number(target?.stars || 0),
+    xpAwarded: Number(target?.xpAwarded || 0),
+    weekKey: String(target?.weekKey || ""),
+    awardDateKey: String(target?.awardDateKey || ""),
+  };
+}
+
 function serializePlannedSession({
   sessionType,
   subject,
@@ -380,6 +397,31 @@ async function listStudentResults({
       .map(serializeStandalonePaperResultHistoryEntry)
       .filter(Boolean),
   ]).slice(0, MANAGEMENT_RESULTS_HISTORY_LIMIT);
+}
+
+async function listStudentTargets({
+  managementId,
+  studentId,
+}) {
+  await assertManagementStudentAccess(
+    managementId,
+    studentId,
+  );
+
+  const targets = await Target.find({
+    studentId,
+  })
+    .sort({
+      awardDateKey: -1,
+      updatedAt: -1,
+      createdAt: -1,
+    })
+    .limit(
+      MANAGEMENT_TARGET_HISTORY_LIMIT,
+    )
+    .lean();
+
+  return targets.map(serializeTarget);
 }
 
 async function listStudents({
@@ -1046,6 +1088,7 @@ module.exports = {
   unarchiveStudent,
   listStudents,
   listStudentResults,
+  listStudentTargets,
   getStudentDayPlan,
   assertManagementStudentAccess,
   createManagedUser,

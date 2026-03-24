@@ -227,6 +227,19 @@ router.get(
   managementController.getStudentResults,
 );
 
+router.get(
+  "/students/:studentId/targets",
+  [
+    param("studentId")
+      .isMongoId()
+      .withMessage(
+        "Valid studentId is required.",
+      ),
+    validateRequest,
+  ],
+  managementController.getStudentTargets,
+);
+
 router.put(
   "/students/:studentId/timetable",
   [

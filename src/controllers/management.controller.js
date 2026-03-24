@@ -32,6 +32,25 @@ async function getStudentResults(
   }
 }
 
+async function getStudentTargets(
+  req,
+  res,
+  next,
+) {
+  try {
+    const targets =
+      await managementService.listStudentTargets(
+        {
+          managementId: req.user.id,
+          studentId: req.params.studentId,
+        },
+      );
+    res.json({ targets });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function getStudentDayPlan(
   req,
   res,
@@ -271,6 +290,7 @@ module.exports = {
   getStudentDayPlan,
   getStudents,
   getStudentResults,
+  getStudentTargets,
   getResultPackage,
   getStudentCertification,
   getSubjectCertificationSettings,
