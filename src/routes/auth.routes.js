@@ -30,6 +30,30 @@ router.post(
   authController.login,
 );
 
+router.post(
+  "/password-reset/request",
+  [
+    body("email").isEmail().withMessage("A valid email is required."),
+    validateRequest,
+  ],
+  authController.requestPasswordResetCode,
+);
+
+router.post(
+  "/password-reset/confirm",
+  [
+    body("email").isEmail().withMessage("A valid email is required."),
+    body("code")
+      .isLength({ min: 6, max: 6 })
+      .withMessage("Reset code must be 6 digits."),
+    body("newPassword")
+      .isLength({ min: 8 })
+      .withMessage("Password must be at least 8 characters."),
+    validateRequest,
+  ],
+  authController.confirmPasswordReset,
+);
+
 router.get(
   "/demo-accounts",
   [

@@ -50,9 +50,29 @@ async function updateAvatar(req, res, next) {
   }
 }
 
+async function requestPasswordResetCode(req, res, next) {
+  try {
+    const result = await authService.requestPasswordResetCode(req.body);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function confirmPasswordReset(req, res, next) {
+  try {
+    const result = await authService.confirmPasswordReset(req.body);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   login,
   getDemoAccounts,
   me,
   updateAvatar,
+  requestPasswordResetCode,
+  confirmPasswordReset,
 };

@@ -146,6 +146,40 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    failedLoginAttempts: {
+      type: Number,
+      default: 0,
+      min: 0,
+      // WHY: Password-reset email access opens only after repeated wrong
+      // password attempts, so the backend must persist a trustworthy counter.
+    },
+    lastFailedLoginAt: {
+      type: Date,
+      default: null,
+      // WHY: The last failure timestamp keeps reset-eligibility changes
+      // auditable without exposing raw password values anywhere.
+    },
+    passwordResetCodeHash: {
+      type: String,
+      default: "",
+      trim: true,
+      select: false,
+      // WHY: Reset codes must never be stored in plain text because email
+      // delivery is a recovery boundary, not a second password store.
+    },
+    passwordResetCodeExpiresAt: {
+      type: Date,
+      default: null,
+      select: false,
+      // WHY: Email reset codes need a short validity window so stale inbox
+      // copies cannot keep reopening account access indefinitely.
+    },
+    passwordResetLastSentAt: {
+      type: Date,
+      default: null,
+      // WHY: Recovery emails are security-sensitive, so the last send time
+      // must stay visible for audit and anti-spam checks.
+    },
     loginDayCount: {
       type: Number,
       default: 0,

@@ -11,6 +11,7 @@
  * first-login and journey fields, then serialize user-safe profile data.
  */
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 
@@ -27,11 +28,171 @@ const {
 const { normalizeStudentYearGroup } = require("../utils/studentYearGroup");
 
 const PUBLIC_DEMO_ACCOUNT_LIMIT = 24;
+const PASSWORD_RESET_CODE_LENGTH = 6;
+const PASSWORD_RESET_CODE_TTL_MINUTES = 15;
+const PASSWORD_RESET_MIN_FAILED_ATTEMPTS = 3;
+const AUTH_GENERIC_FAILURE_MESSAGE = "Invalid email or password.";
+const AUTH_RESET_AVAILABLE_MESSAGE =
+  "Invalid email or password. You can request a reset code now.";
+const PASSWORD_RESET_REQUEST_SUCCESS_MESSAGE =
+  "If the account is eligible, a reset code has been sent.";
+const PASSWORD_RESET_CONFIRM_FAILURE_MESSAGE =
+  "Reset code is invalid or has expired.";
 
 function createError(statusCode, message) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+function normalizeEmail(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase();
+}
+
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizeEmail(value));
+}
+
+function generatePasswordResetCode() {
+  return crypto
+    .randomInt(0, 10 ** PASSWORD_RESET_CODE_LENGTH)
+    .toString()
+    .padStart(PASSWORD_RESET_CODE_LENGTH, "0");
+}
+
+function hashPasswordResetCode({ email, code }) {
+  return crypto
+    .createHash("sha256")
+    .update(`${normalizeEmail(email)}:${String(code || "").trim()}`)
+    .digest("hex");
+}
+
+function passwordResetCodeMatches({
+  email,
+  code,
+  storedHash,
+}) {
+  const expectedHash = hashPasswordResetCode({
+    email,
+    code,
+  });
+  if (
+    expectedHash.length !== storedHash.length
+  ) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(
+    Buffer.from(expectedHash, "hex"),
+    Buffer.from(storedHash, "hex"),
+  );
+}
+
+function buildPasswordResetExpiry(now) {
+  return new Date(
+    now.getTime() +
+      PASSWORD_RESET_CODE_TTL_MINUTES * 60 * 1000,
+  );
+}
+
+async function sendPasswordResetCodeEmail({
+  recipientEmail,
+  recipientName,
+  resetCode,
+  expiresAt,
+}) {
+  const brevoApiKey = String(
+    process.env.BREVO_API_KEY || "",
+  ).trim();
+  if (!brevoApiKey) {
+    // WHY: Password reset email is a live recovery boundary, so the backend
+    // must fail clearly when Brevo is not configured instead of pretending the
+    // code was sent.
+    throw createError(
+      503,
+      "Password reset email is not configured right now.",
+    );
+  }
+
+  const senderEmail = normalizeEmail(
+    process.env.BREVO_SENDER_EMAIL,
+  );
+  const senderName = String(
+    process.env.BREVO_SENDER_NAME ||
+      "Focus Mission",
+  ).trim();
+  if (!isValidEmail(senderEmail)) {
+    throw createError(
+      503,
+      "BREVO_SENDER_EMAIL is missing or invalid.",
+    );
+  }
+
+  const expiryLabel = expiresAt.toLocaleTimeString(
+    "en-GB",
+    {
+      hour: "2-digit",
+      minute: "2-digit",
+    },
+  );
+  const textContent = [
+    `Hi ${recipientName || "there"},`,
+    "",
+    "You asked to reset your Focus Mission password.",
+    `Your 6-digit reset code is: ${resetCode}`,
+    `The code expires at ${expiryLabel}.`,
+    "",
+    "If this was not you, you can ignore this email.",
+  ].join("\n");
+  const htmlContent = `
+    <div style="font-family: Arial, Helvetica, sans-serif; color: #183153;">
+      <p>Hi ${String(recipientName || "there").trim()},</p>
+      <p>You asked to reset your Focus Mission password.</p>
+      <p style="font-size: 28px; font-weight: 700; letter-spacing: 6px; margin: 20px 0;">${resetCode}</p>
+      <p>The code expires at ${expiryLabel}.</p>
+      <p>If this was not you, you can ignore this email.</p>
+    </div>
+  `;
+
+  const response = await fetch(
+    "https://api.brevo.com/v3/smtp/email",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type":
+          "application/json",
+        accept: "application/json",
+        "api-key": brevoApiKey,
+      },
+      body: JSON.stringify({
+        sender: {
+          email: senderEmail,
+          name: senderName,
+        },
+        to: [
+          {
+            email: recipientEmail,
+            name: recipientName,
+          },
+        ],
+        subject:
+          "Focus Mission password reset code",
+        textContent,
+        htmlContent,
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    const responseText =
+      await response.text();
+    throw createError(
+      502,
+      `Brevo returned ${response.status}: ${responseText || "empty response"}`,
+    );
+  }
 }
 
 function ensureDatabaseReady() {
@@ -98,17 +259,49 @@ function createToken(user) {
   );
 }
 
+function serializeAuthSession(
+  user,
+  {
+    dailyLoginRewardGranted = false,
+    dailyLoginXpAwarded = 0,
+    dateKey = "",
+  } = {},
+) {
+  const token = createToken(user);
+  if (String(process.env.LOG_LOGIN_TOKEN || "").trim().toLowerCase() === "true") {
+    // WHY: Temporary debugging support can print the issued token so manual
+    // API testing is possible without separate login tooling.
+    console.log("[auth] login token issued", {
+      userId: String(user._id),
+      email: user.email,
+      role: user.role,
+      token,
+    });
+  }
+
+  return {
+    token,
+    user: serializeUser(user),
+    loginMeta: {
+      dailyLoginRewardGranted,
+      dailyLoginXpAwarded,
+      dateKey,
+    },
+  };
+}
+
 async function login({ email, password }) {
   ensureDatabaseReady();
+  const normalizedEmail = normalizeEmail(email);
 
-  const user = await User.findOne({ email: email.toLowerCase().trim() }).select(
-    "+passwordHash",
+  const user = await User.findOne({ email: normalizedEmail }).select(
+    "+passwordHash +passwordResetCodeHash +passwordResetCodeExpiresAt",
   );
 
   if (!user) {
     // WHY: The service returns the same message for missing users and bad
     // passwords so the login boundary does not leak which emails exist.
-    throw createError(401, "Invalid email or password.");
+    throw createError(401, AUTH_GENERIC_FAILURE_MESSAGE);
   }
 
   if (user.isArchived === true) {
@@ -121,9 +314,18 @@ async function login({ email, password }) {
   const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
 
   if (!isPasswordValid) {
-    // WHY: Matching the same generic failure message preserves account privacy
-    // and reduces credential probing.
-    throw createError(401, "Invalid email or password.");
+    user.failedLoginAttempts =
+      Math.max(0, Number(user.failedLoginAttempts || 0)) + 1;
+    user.lastFailedLoginAt = new Date();
+    // WHY: The failed-attempt counter gates password-reset access, so it must
+    // be persisted before the client is told whether recovery is available.
+    await user.save();
+    throw createError(
+      401,
+      user.failedLoginAttempts >= PASSWORD_RESET_MIN_FAILED_ATTEMPTS
+        ? AUTH_RESET_AVAILABLE_MESSAGE
+        : AUTH_GENERIC_FAILURE_MESSAGE,
+    );
   }
 
   const now = new Date();
@@ -131,6 +333,21 @@ async function login({ email, password }) {
   let shouldSave = false;
   let dailyLoginRewardGranted = false;
   let dailyLoginXpAwarded = 0;
+
+  if (
+    Number(user.failedLoginAttempts || 0) > 0 ||
+    user.lastFailedLoginAt ||
+    String(user.passwordResetCodeHash || "").trim().isNotEmpty ||
+    user.passwordResetCodeExpiresAt
+  ) {
+    // WHY: A successful password proves account ownership again, so any
+    // previous failed-attempt lockout state and reset code must be cleared.
+    user.failedLoginAttempts = 0;
+    user.lastFailedLoginAt = null;
+    user.passwordResetCodeHash = "";
+    user.passwordResetCodeExpiresAt = null;
+    shouldSave = true;
+  }
 
   if (!user.firstLoginAt) {
     // WHY: The first successful login defines the start of the learner journey
@@ -186,27 +403,11 @@ async function login({ email, password }) {
     await user.save();
   }
 
-  const token = createToken(user);
-  if (String(process.env.LOG_LOGIN_TOKEN || "").trim().toLowerCase() === "true") {
-    // WHY: Temporary debugging support can print the issued token so manual
-    // API testing is possible without separate login tooling.
-    console.log("[auth] login token issued", {
-      userId: String(user._id),
-      email: user.email,
-      role: user.role,
-      token,
-    });
-  }
-
-  return {
-    token,
-    user: serializeUser(user),
-    loginMeta: {
-      dailyLoginRewardGranted,
-      dailyLoginXpAwarded,
-      dateKey,
-    },
-  };
+  return serializeAuthSession(user, {
+    dailyLoginRewardGranted,
+    dailyLoginXpAwarded,
+    dateKey,
+  });
 }
 
 async function listDemoAccounts({ role }) {
@@ -258,9 +459,162 @@ async function updateAvatar(userId, { avatar, avatarSeed }) {
   return serializeUser(user);
 }
 
+async function requestPasswordResetCode({
+  email,
+}) {
+  ensureDatabaseReady();
+  const normalizedEmail = normalizeEmail(
+    email,
+  );
+  if (!isValidEmail(normalizedEmail)) {
+    throw createError(
+      400,
+      "A valid email is required.",
+    );
+  }
+
+  const user = await User.findOne({
+    email: normalizedEmail,
+    isArchived: { $ne: true },
+  }).select(
+    "+passwordResetCodeHash +passwordResetCodeExpiresAt",
+  );
+
+  if (
+    !user ||
+    Number(user.failedLoginAttempts || 0) <
+      PASSWORD_RESET_MIN_FAILED_ATTEMPTS
+  ) {
+    // WHY: Recovery requests must not reveal whether an email exists, so the
+    // response stays generic when the account is missing or not yet eligible.
+    return {
+      message:
+        PASSWORD_RESET_REQUEST_SUCCESS_MESSAGE,
+    };
+  }
+
+  const now = new Date();
+  const resetCode =
+    generatePasswordResetCode();
+  const expiresAt =
+    buildPasswordResetExpiry(now);
+
+  user.passwordResetCodeHash =
+    hashPasswordResetCode({
+      email: user.email,
+      code: resetCode,
+    });
+  user.passwordResetCodeExpiresAt =
+    expiresAt;
+  user.passwordResetLastSentAt =
+    now;
+  await user.save();
+
+  try {
+    await sendPasswordResetCodeEmail({
+      recipientEmail: user.email,
+      recipientName: user.name,
+      resetCode,
+      expiresAt,
+    });
+  } catch (error) {
+    user.passwordResetCodeHash = "";
+    user.passwordResetCodeExpiresAt = null;
+    await user.save();
+    throw error;
+  }
+
+  return {
+    message:
+      PASSWORD_RESET_REQUEST_SUCCESS_MESSAGE,
+  };
+}
+
+async function confirmPasswordReset({
+  email,
+  code,
+  newPassword,
+}) {
+  ensureDatabaseReady();
+  const normalizedEmail = normalizeEmail(
+    email,
+  );
+  const normalizedCode = String(
+    code || "",
+  ).trim();
+
+  const user = await User.findOne({
+    email: normalizedEmail,
+    isArchived: { $ne: true },
+  }).select(
+    "+passwordHash +passwordResetCodeHash +passwordResetCodeExpiresAt",
+  );
+
+  if (!user) {
+    throw createError(
+      400,
+      PASSWORD_RESET_CONFIRM_FAILURE_MESSAGE,
+    );
+  }
+
+  if (
+    !user.passwordResetCodeHash ||
+    !user.passwordResetCodeExpiresAt
+  ) {
+    throw createError(
+      400,
+      PASSWORD_RESET_CONFIRM_FAILURE_MESSAGE,
+    );
+  }
+
+  if (
+    user.passwordResetCodeExpiresAt.getTime() <
+    Date.now()
+  ) {
+    user.passwordResetCodeHash = "";
+    user.passwordResetCodeExpiresAt = null;
+    await user.save();
+    throw createError(
+      400,
+      PASSWORD_RESET_CONFIRM_FAILURE_MESSAGE,
+    );
+  }
+
+  if (
+    !passwordResetCodeMatches({
+      email: user.email,
+      code: normalizedCode,
+      storedHash:
+        user.passwordResetCodeHash,
+    })
+  ) {
+    throw createError(
+      400,
+      PASSWORD_RESET_CONFIRM_FAILURE_MESSAGE,
+    );
+  }
+
+  user.passwordHash =
+    await bcrypt.hash(newPassword, 10);
+  user.failedLoginAttempts = 0;
+  user.lastFailedLoginAt = null;
+  user.passwordResetCodeHash = "";
+  user.passwordResetCodeExpiresAt = null;
+  await user.save();
+
+  // WHY: Returning a fresh authenticated session after a valid reset removes
+  // the need for a second login step and keeps the reset boundary predictable.
+  return login({
+    email: user.email,
+    password: newPassword,
+  });
+}
+
 module.exports = {
   login,
   listDemoAccounts,
   getCurrentUser,
   updateAvatar,
+  requestPasswordResetCode,
+  confirmPasswordReset,
 };
