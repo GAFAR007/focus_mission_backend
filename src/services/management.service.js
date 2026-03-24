@@ -15,6 +15,7 @@
 const bcrypt = require("bcryptjs");
 const Mission = require("../models/Mission");
 const ResultPackage = require("../models/ResultPackage");
+const SessionLog = require("../models/SessionLog");
 const Subject = require("../models/Subject");
 const Timetable = require("../models/Timetable");
 const Target = require("../models/Target");
@@ -270,6 +271,12 @@ function serializeSubjectSummary(subject) {
 }
 
 function serializeTarget(target) {
+  const createdByStaff =
+    target?.createdByStaffId &&
+    typeof target.createdByStaffId === "object"
+      ? target.createdByStaffId
+      : null;
+
   return {
     id: String(target?._id || ""),
     title: String(target?.title || ""),
@@ -281,6 +288,31 @@ function serializeTarget(target) {
     xpAwarded: Number(target?.xpAwarded || 0),
     weekKey: String(target?.weekKey || ""),
     awardDateKey: String(target?.awardDateKey || ""),
+    createdByName: String(createdByStaff?.name || ""),
+    createdByRole: String(createdByStaff?.role || ""),
+  };
+}
+
+function serializeTargetSessionComment(sessionLog) {
+  const subject =
+    sessionLog?.subjectId &&
+    typeof sessionLog.subjectId === "object"
+      ? sessionLog.subjectId
+      : null;
+  const createdBy =
+    sessionLog?.createdBy &&
+    typeof sessionLog.createdBy === "object"
+      ? sessionLog.createdBy
+      : null;
+
+  return {
+    id: String(sessionLog?._id || ""),
+    dateKey: String(sessionLog?.dateKey || ""),
+    sessionType: String(sessionLog?.sessionType || ""),
+    subjectName: String(subject?.name || ""),
+    comment: String(sessionLog?.notes || ""),
+    teacherName: String(createdBy?.name || ""),
+    teacherRole: String(createdBy?.role || ""),
   };
 }
 
@@ -416,12 +448,66 @@ async function listStudentTargets({
       updatedAt: -1,
       createdAt: -1,
     })
+    .populate("createdByStaffId", "name role")
     .limit(
       MANAGEMENT_TARGET_HISTORY_LIMIT,
     )
     .lean();
 
-  return targets.map(serializeTarget);
+  const serializedTargets = targets.map(serializeTarget);
+  const targetDateKeys = [
+    ...new Set(
+      serializedTargets
+        .map((target) => String(target.awardDateKey || "").trim())
+        .filter(Boolean),
+    ),
+  ];
+
+  const sessionLogs = targetDateKeys.length
+    ? await SessionLog.find({
+        studentId,
+        dateKey: { $in: targetDateKeys },
+        notes: { $exists: true, $ne: "" },
+      })
+        .select("dateKey sessionType notes subjectId createdBy")
+        .populate("subjectId", "name")
+        .populate("createdBy", "name role")
+        .lean()
+    : [];
+
+  const sessionComments = sessionLogs
+    .map(serializeTargetSessionComment)
+    .sort((left, right) => {
+      const dateCompare = String(right.dateKey || "").compareTo(
+        String(left.dateKey || ""),
+      );
+      if (dateCompare !== 0) {
+        return dateCompare;
+      }
+
+      const leftSessionOrder =
+        String(left.sessionType || "").trim().toLowerCase() === "morning"
+          ? 0
+          : 1;
+      const rightSessionOrder =
+        String(right.sessionType || "").trim().toLowerCase() === "morning"
+          ? 0
+          : 1;
+      if (leftSessionOrder !== rightSessionOrder) {
+        // WHY: Morning notes should appear before afternoon notes so
+        // management reads the day in lesson order instead of lexical order.
+        return leftSessionOrder - rightSessionOrder;
+      }
+
+      return String(left.subjectName || "").compareTo(
+        String(right.subjectName || ""),
+      );
+    });
+
+  return {
+    targets: serializedTargets,
+    sessionComments,
+  };
 }
 
 async function listStudents({

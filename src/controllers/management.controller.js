@@ -38,14 +38,14 @@ async function getStudentTargets(
   next,
 ) {
   try {
-    const targets =
+    const targetHistory =
       await managementService.listStudentTargets(
         {
           managementId: req.user.id,
           studentId: req.params.studentId,
         },
       );
-    res.json({ targets });
+    res.json(targetHistory);
   } catch (error) {
     next(error);
   }
