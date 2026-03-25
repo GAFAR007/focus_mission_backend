@@ -17,6 +17,9 @@ const User = require("../models/User");
 const {
   extractTextFromUploadedSource,
 } = require("./sourceExtraction.service");
+const {
+  teacherCanTeachSubjectName,
+} = require("../utils/teacherSubjectSpecialties");
 
 function createError(statusCode, message) {
   const error = new Error(message);
@@ -857,7 +860,7 @@ async function assertTeacherOwnsStandalonePaperContext({
 }) {
   const [teacher, student, subject] = await Promise.all([
     User.findOne({ _id: teacherId, role: "teacher" })
-      .select("assignedStudents subjectSpecialty")
+      .select("assignedStudents subjectSpecialty subjectSpecialties")
       .lean(),
     User.findOne({
       _id: studentId,
@@ -894,10 +897,7 @@ async function assertTeacherOwnsStandalonePaperContext({
     throw createError(404, "Subject not found.");
   }
 
-  if (
-    normalizeForMatch(teacher.subjectSpecialty) !==
-    normalizeForMatch(subject.name)
-  ) {
+  if (!teacherCanTeachSubjectName({ teacher, subjectName: subject.name })) {
     throw createError(
       403,
       "Teachers can only create standalone papers for their own subject.",

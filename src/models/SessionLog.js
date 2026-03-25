@@ -158,6 +158,27 @@ const sessionLogSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
+    plannedTeacherId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      // WHY: Management audit must preserve who the timetable expected to
+      // teach the lesson even when the actual conductor changes for cover.
+    },
+    conductedByStaffId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      // WHY: Cover sessions must record who actually taught the lesson rather
+      // than assuming the note author and conductor are always the same.
+    },
+    coverAssignmentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "SessionCoverAssignment",
+      default: null,
+      // WHY: Linking the session log back to the approved cover override keeps
+      // mentor-led teaching sessions audit-safe without altering the timetable.
+    },
   },
   {
     timestamps: true,

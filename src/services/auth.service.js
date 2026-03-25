@@ -26,6 +26,9 @@ const {
   getDateKey,
 } = require("../utils/xpPolicy");
 const { normalizeStudentYearGroup } = require("../utils/studentYearGroup");
+const {
+  normalizeTeacherSubjectSpecialties,
+} = require("../utils/teacherSubjectSpecialties");
 
 const PUBLIC_DEMO_ACCOUNT_LIMIT = 24;
 const PASSWORD_RESET_CODE_LENGTH = 6;
@@ -207,12 +210,20 @@ function ensureDatabaseReady() {
 }
 
 function serializeUser(user) {
+  const subjectSpecialties = normalizeTeacherSubjectSpecialties({
+    primarySubjectSpecialty: user?.subjectSpecialty,
+    subjectSpecialties: user?.subjectSpecialties,
+  });
+
   return {
     id: String(user._id),
     name: user.name,
     email: user.email,
     role: user.role,
-    subjectSpecialty: user.subjectSpecialty,
+    subjectSpecialty: subjectSpecialties.length === 0
+      ? ""
+      : subjectSpecialties[0],
+    subjectSpecialties,
     yearGroup: normalizeStudentYearGroup(user.yearGroup),
     isPlaceholder: user.isPlaceholder,
     avatar: user.avatar,
@@ -227,11 +238,17 @@ function serializeUser(user) {
 }
 
 function serializeDemoAccount(user) {
+  const subjectSpecialties = normalizeTeacherSubjectSpecialties({
+    primarySubjectSpecialty: user?.subjectSpecialty,
+    subjectSpecialties: user?.subjectSpecialties,
+  });
+
   return {
     name: String(user.name || ""),
     email: String(user.email || ""),
     role: String(user.role || ""),
-    subject: String(user.subjectSpecialty || ""),
+    subject: subjectSpecialties.length === 0 ? "" : subjectSpecialties[0],
+    subjectSpecialties,
     yearGroup: normalizeStudentYearGroup(user.yearGroup),
     isPlaceholder: Boolean(user.isPlaceholder),
   };
@@ -420,7 +437,7 @@ async function listDemoAccounts({ role }) {
   })
     .sort({ isPlaceholder: 1, name: 1, email: 1 })
     .limit(PUBLIC_DEMO_ACCOUNT_LIMIT)
-    .select("name email role subjectSpecialty isPlaceholder")
+    .select("name email role subjectSpecialty subjectSpecialties isPlaceholder")
     .lean();
 
   // WHY: The public quick-fill list should expose only the safe fields needed

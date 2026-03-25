@@ -61,6 +61,18 @@ router.post(
       .withMessage(
         "subjectSpecialty must be text.",
       ),
+    body("subjectSpecialties")
+      .optional()
+      .isArray()
+      .withMessage(
+        "subjectSpecialties must be an array.",
+      ),
+    body("subjectSpecialties.*")
+      .optional()
+      .isString()
+      .withMessage(
+        "subjectSpecialties entries must be text.",
+      ),
     body("yearGroup")
       .optional()
       .isString()
@@ -130,6 +142,38 @@ router.get(
 router.get(
   "/teachers",
   managementController.listTeachers,
+);
+
+router.patch(
+  "/teachers/:teacherId/subjects",
+  [
+    param("teacherId")
+      .isMongoId()
+      .withMessage(
+        "Valid teacherId is required.",
+      ),
+    body("subjectSpecialty")
+      .isString()
+      .trim()
+      .notEmpty()
+      .withMessage(
+        "subjectSpecialty is required.",
+      ),
+    body("subjectSpecialties")
+      .optional()
+      .isArray()
+      .withMessage(
+        "subjectSpecialties must be an array.",
+      ),
+    body("subjectSpecialties.*")
+      .optional()
+      .isString()
+      .withMessage(
+        "subjectSpecialties entries must be text.",
+      ),
+    validateRequest,
+  ],
+  managementController.updateTeacherSubjects,
 );
 
 router.get(
@@ -212,6 +256,63 @@ router.get(
     validateRequest,
   ],
   managementController.getStudentDayPlan,
+);
+
+router.put(
+  "/students/:studentId/covers",
+  [
+    param("studentId")
+      .isMongoId()
+      .withMessage(
+        "Valid studentId is required.",
+      ),
+    body("dateKey")
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage(
+        "dateKey must be in YYYY-MM-DD format.",
+      ),
+    body("sessionType")
+      .isIn(["morning", "afternoon"])
+      .withMessage(
+        "sessionType must be morning or afternoon.",
+      ),
+    body("coverStaffId")
+      .isMongoId()
+      .withMessage(
+        "Valid coverStaffId is required.",
+      ),
+    body("reason")
+      .optional()
+      .isString()
+      .withMessage(
+        "reason must be text.",
+      ),
+    validateRequest,
+  ],
+  managementController.saveStudentSessionCoverAssignment,
+);
+
+router.patch(
+  "/students/:studentId/covers/remove",
+  [
+    param("studentId")
+      .isMongoId()
+      .withMessage(
+        "Valid studentId is required.",
+      ),
+    body("dateKey")
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage(
+        "dateKey must be in YYYY-MM-DD format.",
+      ),
+    body("sessionType")
+      .isIn(["morning", "afternoon"])
+      .withMessage(
+        "sessionType must be morning or afternoon.",
+      ),
+    validateRequest,
+  ],
+  managementController.removeStudentSessionCoverAssignment,
 );
 
 router.get(

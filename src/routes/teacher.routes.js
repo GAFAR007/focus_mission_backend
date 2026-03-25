@@ -319,6 +319,12 @@ router.post(
       .withMessage(
         "Session type must be morning or afternoon.",
       ),
+    body("dateKey")
+      .optional()
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage(
+        "dateKey must use YYYY-MM-DD format.",
+      ),
     body("focusScore")
       .optional()
       .isInt({ min: 0, max: 100 })

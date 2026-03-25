@@ -10,6 +10,7 @@
  * helpers for target and difficulty updates.
  */
 const SessionLog = require("../models/SessionLog");
+const SessionCoverAssignment = require("../models/SessionCoverAssignment");
 const Target = require("../models/Target");
 const User = require("../models/User");
 const { serializeJourney } = require("../utils/userJourney");
@@ -41,6 +42,110 @@ function serializeStudent(student) {
     streakBadgeUnlocked: Boolean(student.streakBadgeUnlocked),
     ...serializeJourney(student),
     preferredDifficulty: student.preferredDifficulty,
+  };
+}
+
+function parseRequestedDateKey(value) {
+  const dateKey = String(value || "").trim();
+  if (!dateKey) {
+    return getDateKey();
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+    throw createError(400, "dateKey must be a valid YYYY-MM-DD date.");
+  }
+
+  return dateKey;
+}
+
+function serializeCoveredSessionLog(sessionLog) {
+  if (!sessionLog) {
+    return null;
+  }
+
+  return {
+    id: String(sessionLog._id || ""),
+    notes: String(sessionLog.notes || ""),
+    focusScore: Number(sessionLog.focusScore || 0),
+    completedQuestions: Number(sessionLog.completedQuestions || 0),
+    behaviourStatus: String(sessionLog.behaviourStatus || "steady"),
+    xpAwarded: Number(sessionLog.xpAwarded || 0),
+    authorName: String(sessionLog.createdBy?.name || ""),
+    authorRole: String(sessionLog.createdBy?.role || ""),
+    createdAt: sessionLog.createdAt || null,
+    updatedAt: sessionLog.updatedAt || null,
+  };
+}
+
+function serializeCoveredSession(assignment, sessionLog) {
+  return {
+    id: String(assignment?._id || ""),
+    dateKey: String(assignment?.dateKey || ""),
+    sessionType: String(assignment?.sessionType || ""),
+    reason: String(assignment?.reason || ""),
+    subject: assignment?.subjectId
+      ? {
+          id: String(assignment.subjectId._id || assignment.subjectId.id || ""),
+          name: String(assignment.subjectId.name || ""),
+          icon: String(assignment.subjectId.icon || ""),
+          color: String(assignment.subjectId.color || ""),
+        }
+      : null,
+    plannedTeacher: assignment?.plannedTeacherId
+      ? {
+          id: String(assignment.plannedTeacherId._id || assignment.plannedTeacherId.id || ""),
+          name: String(assignment.plannedTeacherId.name || ""),
+          role: String(assignment.plannedTeacherId.role || ""),
+          email: String(assignment.plannedTeacherId.email || ""),
+        }
+      : null,
+    coverStaff: assignment?.coverStaffId
+      ? {
+          id: String(assignment.coverStaffId._id || assignment.coverStaffId.id || ""),
+          name: String(assignment.coverStaffId.name || ""),
+          role: String(assignment.coverStaffId.role || ""),
+          email: String(assignment.coverStaffId.email || ""),
+        }
+      : null,
+    sessionLog: serializeCoveredSessionLog(sessionLog),
+  };
+}
+
+async function assertMentorAssignedStudent({
+  mentorId,
+  studentId,
+}) {
+  const [mentor, student] = await Promise.all([
+    User.findOne({
+      _id: mentorId,
+      role: "mentor",
+      assignedStudents: studentId,
+    })
+      .select("name assignedStudents")
+      .lean(),
+    User.findOne({
+      _id: studentId,
+      role: "student",
+      isArchived: { $ne: true },
+    })
+      .select("name avatar avatarSeed xp streak yearGroup")
+      .lean(),
+  ]);
+
+  if (!mentor) {
+    throw createError(
+      403,
+      "Mentors can only work with students already assigned to them.",
+    );
+  }
+
+  if (!student) {
+    throw createError(404, "Student not found.");
+  }
+
+  return {
+    mentor,
+    student,
   };
 }
 
@@ -208,6 +313,176 @@ async function getOverview(studentId) {
   };
 }
 
+async function listCoveredSessions({
+  mentorId,
+  studentId,
+  dateKey,
+}) {
+  const resolvedDateKey = parseRequestedDateKey(dateKey);
+  const { student } = await assertMentorAssignedStudent({
+    mentorId,
+    studentId,
+  });
+
+  const coverAssignments = await SessionCoverAssignment.find({
+    studentId,
+    dateKey: resolvedDateKey,
+    coverStaffId: mentorId,
+    coverStaffRole: "mentor",
+    isActive: true,
+    sessionType: { $in: ["morning", "afternoon"] },
+  })
+    .sort({ sessionType: 1, createdAt: 1 })
+    .populate("subjectId", "name icon color")
+    .populate("plannedTeacherId", "name role email")
+    .populate("coverStaffId", "name role email")
+    .lean();
+
+  const assignmentIds = coverAssignments
+    .map((assignment) => String(assignment._id || "").trim())
+    .filter(Boolean);
+  const sessionLogs = assignmentIds.length
+    ? await SessionLog.find({
+        studentId,
+        coverAssignmentId: { $in: assignmentIds },
+      })
+        .populate("createdBy", "name role")
+        .lean()
+    : [];
+  const logsByAssignmentId = new Map(
+    sessionLogs.map((sessionLog) => [
+      String(sessionLog.coverAssignmentId || "").trim(),
+      sessionLog,
+    ]),
+  );
+
+  return {
+    student: serializeStudent(student),
+    dateKey: resolvedDateKey,
+    sessions: coverAssignments.map((assignment) =>
+      serializeCoveredSession(
+        assignment,
+        logsByAssignmentId.get(String(assignment._id || "").trim()) || null,
+      )),
+  };
+}
+
+async function createCoveredSessionLog({
+  mentorId,
+  payload,
+}) {
+  const studentId = String(payload?.studentId || "").trim();
+  const sessionType = String(payload?.sessionType || "")
+    .trim()
+    .toLowerCase();
+  const dateKey = parseRequestedDateKey(payload?.dateKey);
+  const { student } = await assertMentorAssignedStudent({
+    mentorId,
+    studentId,
+  });
+
+  if (!["morning", "afternoon"].includes(sessionType)) {
+    throw createError(400, "sessionType must be morning or afternoon.");
+  }
+
+  const coverAssignment = await SessionCoverAssignment.findOne({
+    studentId,
+    dateKey,
+    sessionType,
+    coverStaffId: mentorId,
+    coverStaffRole: "mentor",
+    isActive: true,
+  })
+    .populate("subjectId", "name icon color")
+    .populate("plannedTeacherId", "name role email")
+    .populate("coverStaffId", "name role email")
+    .lean();
+
+  if (!coverAssignment) {
+    throw createError(
+      403,
+      "An active mentor cover assignment is required before this lesson can be logged.",
+    );
+  }
+
+  const manualXpAwarded = Number.isFinite(Number(payload?.xpAwarded))
+    ? clampNumber(Number(payload.xpAwarded), 0, 50)
+    : 0;
+  const totalXpAwarded = manualXpAwarded;
+  const existingLog = await SessionLog.findOne({
+    studentId,
+    dateKey,
+    sessionType,
+    coverAssignmentId: coverAssignment._id,
+  })
+    .select("xpAwarded")
+    .lean();
+  const xpDelta = totalXpAwarded - Number(existingLog?.xpAwarded || 0);
+
+  const sessionLog = await SessionLog.findOneAndUpdate(
+    {
+      studentId,
+      dateKey,
+      sessionType,
+      coverAssignmentId: coverAssignment._id,
+    },
+    {
+      studentId,
+      subjectId: coverAssignment.subjectId?._id || coverAssignment.subjectId,
+      sessionType,
+      dateKey,
+      focusScore: clampNumber(Number(payload?.focusScore || 0), 0, 100),
+      completedQuestions: Math.max(0, Number(payload?.completedQuestions || 0)),
+      behaviourStatus: ["great", "steady", "warning", "penalty"].includes(
+        String(payload?.behaviourStatus || "").trim(),
+      )
+        ? String(payload.behaviourStatus).trim()
+        : "steady",
+      notes: String(payload?.notes || "").trim(),
+      attendanceXpAwarded: 0,
+      challengeXpAwarded: 0,
+      assessmentXpAwarded: 0,
+      performanceXpBeforeStreak: 0,
+      performanceXpAwarded: 0,
+      performanceXpCumulative: 0,
+      streakMultiplierApplied: 1,
+      performanceQualifiedForStreak: false,
+      targetXpAwarded: manualXpAwarded,
+      subjectCompletionBonusXp: 0,
+      totalXpAwarded,
+      xpAwarded: totalXpAwarded,
+      createdBy: mentorId,
+      plannedTeacherId:
+        coverAssignment.plannedTeacherId?._id || coverAssignment.plannedTeacherId,
+      conductedByStaffId: mentorId,
+      coverAssignmentId: coverAssignment._id,
+    },
+    {
+      new: true,
+      upsert: true,
+      setDefaultsOnInsert: true,
+    },
+  )
+    .populate("createdBy", "name role")
+    .populate("plannedTeacherId", "name role email")
+    .populate("coverAssignmentId")
+    .lean();
+
+  if (xpDelta !== 0) {
+    await User.findByIdAndUpdate(studentId, {
+      $inc: { xp: xpDelta },
+    });
+  }
+
+  return {
+    student: serializeStudent({
+      ...student,
+      xp: Number(student.xp || 0) + xpDelta,
+    }),
+    session: serializeCoveredSession(coverAssignment, sessionLog),
+  };
+}
+
 async function createTarget(payload, staff) {
   const dateKey = String(payload.awardDateKey || getDateKey()).trim();
   const weekKey = String(payload.weekKey || getWeekKey(dateKey)).trim();
@@ -336,6 +611,8 @@ async function updateDifficulty(studentId, { preferredDifficulty }) {
 
 module.exports = {
   getOverview,
+  listCoveredSessions,
+  createCoveredSessionLog,
   createTarget,
   updateTarget,
   updateDifficulty,

@@ -42,6 +42,18 @@ const userSchema = new mongoose.Schema(
       default: "",
       trim: true,
     },
+    subjectSpecialties: {
+      type: [String],
+      default: [],
+      set: (values) =>
+        Array.isArray(values)
+          ? values
+              .map((value) => String(value || "").trim())
+              .filter(Boolean)
+          : [],
+      // WHY: Multi-subject teachers must be able to teach more than one
+      // canonical subject without creating duplicate staff accounts.
+    },
     yearGroup: {
       type: String,
       default: "",

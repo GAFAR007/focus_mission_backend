@@ -68,6 +68,7 @@ async function findTeacherId(email) {
       passwordHash: "$2b$10$0gy7m8cDWd0l9tFtkcR1xO64sE4g8yOZj2J9EvQv3xR2K9bM82K6C",
       role: "teacher",
       subjectSpecialty: "",
+      subjectSpecialties: [],
       isPlaceholder: true,
       avatarSeed: teacherEmail,
       avatar: "",

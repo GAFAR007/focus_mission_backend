@@ -10,7 +10,7 @@
  * mentor.controller.
  */
 const express = require("express");
-const { body, param } = require("express-validator");
+const { body, param, query } = require("express-validator");
 
 const mentorController = require("../controllers/mentor.controller");
 const {
@@ -30,6 +30,56 @@ router.get(
     validateRequest,
   ],
   mentorController.getOverview,
+);
+
+router.get(
+  "/covered-sessions/:studentId",
+  authorizeRoles("mentor"),
+  [
+    param("studentId").isMongoId().withMessage("Valid studentId is required."),
+    query("date")
+      .optional()
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage("date must be a valid YYYY-MM-DD date."),
+    validateRequest,
+  ],
+  mentorController.getCoveredSessions,
+);
+
+router.post(
+  "/covered-session-log",
+  authorizeRoles("mentor"),
+  [
+    body("studentId").isMongoId().withMessage("Valid studentId is required."),
+    body("dateKey")
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage("dateKey must be a valid YYYY-MM-DD date."),
+    body("sessionType")
+      .isIn(["morning", "afternoon"])
+      .withMessage("sessionType must be morning or afternoon."),
+    body("focusScore")
+      .optional()
+      .isInt({ min: 0, max: 100 })
+      .withMessage("focusScore must be between 0 and 100."),
+    body("completedQuestions")
+      .optional()
+      .isInt({ min: 0 })
+      .withMessage("completedQuestions must be 0 or greater."),
+    body("behaviourStatus")
+      .optional()
+      .isIn(["great", "steady", "warning", "penalty"])
+      .withMessage("behaviourStatus must be great, steady, warning, or penalty."),
+    body("notes")
+      .optional()
+      .isString()
+      .withMessage("notes must be text."),
+    body("xpAwarded")
+      .optional()
+      .isInt({ min: 0, max: 50 })
+      .withMessage("xpAwarded must be between 0 and 50."),
+    validateRequest,
+  ],
+  mentorController.createCoveredSessionLog,
 );
 
 router.post(

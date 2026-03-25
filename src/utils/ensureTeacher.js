@@ -13,6 +13,9 @@ const mongoose = require("mongoose");
 
 const connectDB = require("../config/db");
 const User = require("../models/User");
+const {
+  normalizeTeacherSubjectSpecialties,
+} = require("./teacherSubjectSpecialties");
 
 async function ensureTeacher() {
   await connectDB();
@@ -21,20 +24,26 @@ async function ensureTeacher() {
   const name = String(process.argv[3] || "").trim();
   const subject = String(process.argv[4] || "").trim();
   const password = String(process.argv[5] || "flexiblelearning123!");
+  const additionalSubjects = process.argv.slice(6);
 
   if (!email || !name || !subject) {
     throw new Error(
-      "Usage: node src/utils/ensureTeacher.js <email> <name> <subject> [password]",
+      "Usage: node src/utils/ensureTeacher.js <email> <name> <primary-subject> [password] [additional-subject ...]",
     );
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
+  const normalizedSubjects = normalizeTeacherSubjectSpecialties({
+    primarySubjectSpecialty: subject,
+    subjectSpecialties: additionalSubjects,
+  });
   const update = {
     name,
     email,
     passwordHash,
     role: "teacher",
-    subjectSpecialty: subject,
+    subjectSpecialty: normalizedSubjects[0] || subject,
+    subjectSpecialties: normalizedSubjects,
     isPlaceholder: true,
     avatarSeed: name,
     avatar: "",

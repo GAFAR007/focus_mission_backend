@@ -17,6 +17,7 @@ const Criterion = require("../models/Criterion");
 const LearningContent = require("../models/LearningContent");
 const Mission = require("../models/Mission");
 const ResultPackage = require("../models/ResultPackage");
+const SessionCoverAssignment = require("../models/SessionCoverAssignment");
 const SessionLog = require("../models/SessionLog");
 const StudentProgress = require("../models/StudentProgress");
 const Subject = require("../models/Subject");
@@ -42,6 +43,10 @@ const {
 const { serializeMission } = require("../utils/missionSerializer");
 const { serializeJourney } = require("../utils/userJourney");
 const { normalizeStudentYearGroup } = require("../utils/studentYearGroup");
+const {
+  normalizeTeacherSubjectSpecialties,
+  teacherCanTeachSubjectName,
+} = require("../utils/teacherSubjectSpecialties");
 const {
   clampNumber,
   getDateKey,
@@ -69,12 +74,18 @@ function normalizeEmail(value) {
 }
 
 function serializeUser(user) {
+  const subjectSpecialties = normalizeTeacherSubjectSpecialties({
+    primarySubjectSpecialty: user?.subjectSpecialty,
+    subjectSpecialties: user?.subjectSpecialties,
+  });
+
   return {
     id: String(user?._id || ""),
     name: String(user?.name || ""),
     email: String(user?.email || ""),
     role: String(user?.role || ""),
-    subjectSpecialty: String(user?.subjectSpecialty || ""),
+    subjectSpecialty: subjectSpecialties.length === 0 ? "" : subjectSpecialties[0],
+    subjectSpecialties,
     yearGroup: normalizeStudentYearGroup(user?.yearGroup),
     isPlaceholder: Boolean(user?.isPlaceholder),
     avatar: String(user?.avatar || ""),
@@ -2107,17 +2118,14 @@ async function assertTeacherOwnsCriterionSubject(teacherId, context) {
     _id: teacherId,
     role: "teacher",
   })
-    .select("name subjectSpecialty")
+    .select("name subjectSpecialty subjectSpecialties")
     .lean();
 
   if (!teacher) {
     throw createError(404, "Teacher not found.");
   }
 
-  if (
-    normalizeForMatch(teacher.subjectSpecialty) !==
-    normalizeForMatch(context.subject.name)
-  ) {
+  if (!teacherCanTeachSubjectName({ teacher, subjectName: context.subject.name })) {
     throw createError(
       403,
       "Only the teacher responsible for this subject can generate or approve this criterion draft.",
@@ -2372,7 +2380,7 @@ async function listSubjects(teacherId) {
     _id: teacherId,
     role: "teacher",
   })
-    .select("assignedStudents subjectSpecialty")
+    .select("assignedStudents subjectSpecialty subjectSpecialties")
     .lean();
 
   if (!teacher) {
@@ -2415,8 +2423,11 @@ async function listSubjects(teacherId) {
     }
   }
 
-  const specialty = normalizeForMatch(teacher.subjectSpecialty);
-  if (!specialty) {
+  const subjectSpecialties = normalizeTeacherSubjectSpecialties({
+    primarySubjectSpecialty: teacher.subjectSpecialty,
+    subjectSpecialties: teacher.subjectSpecialties,
+  });
+  if (subjectSpecialties.length === 0) {
     // WHY: Teachers should only edit timetable slots for their own subject.
     // Returning an empty list is safer than exposing the full subject catalog
     // when a teacher account has no specialty configured.
@@ -2429,7 +2440,7 @@ async function listSubjects(teacherId) {
     .lean();
 
   return subjects.filter(
-    (subject) => normalizeForMatch(subject.name) === specialty,
+    (subject) => teacherCanTeachSubjectName({ teacher, subjectName: subject.name }),
   );
 }
 
@@ -2458,8 +2469,11 @@ async function resolveTeacherSubjectIdsForStudent({
     return subjectIds;
   }
 
-  const specialty = normalizeForMatch(teacher?.subjectSpecialty);
-  if (!specialty) {
+  const subjectSpecialties = normalizeTeacherSubjectSpecialties({
+    primarySubjectSpecialty: teacher?.subjectSpecialty,
+    subjectSpecialties: teacher?.subjectSpecialties,
+  });
+  if (subjectSpecialties.length === 0) {
     return [];
   }
 
@@ -2469,7 +2483,7 @@ async function resolveTeacherSubjectIdsForStudent({
 
   return matchingSubjects
     .filter(
-      (subject) => normalizeForMatch(subject.name) === specialty,
+      (subject) => teacherCanTeachSubjectName({ teacher, subjectName: subject.name }),
     )
     .map((subject) => String(subject._id || "").trim())
     .filter(Boolean);
@@ -2484,7 +2498,7 @@ async function assertTeacherOwnsStudent(teacherId, studentId) {
     _id: teacherId,
     role: "teacher",
   })
-    .select("assignedStudents subjectSpecialty")
+    .select("assignedStudents subjectSpecialty subjectSpecialties")
     .lean();
 
   if (!teacher) {
@@ -2545,12 +2559,9 @@ async function updateTimetableSlot({ teacherId, studentId, payload }) {
     throw createError(404, "Subject not found.");
   }
 
-  const teacherSpecialty = normalizeForMatch(teacher.subjectSpecialty);
-  const subjectName = normalizeForMatch(subject.name);
-
   // WHY: Teachers may only place their own specialty into a slot. Management
   // remains responsible for assigning other teachers or unrelated subjects.
-  if (!teacherSpecialty || subjectName !== teacherSpecialty) {
+  if (!teacherCanTeachSubjectName({ teacher, subjectName: subject.name })) {
     throw createError(
       403,
       "Teachers can only add or edit timetable subjects that match their own specialty.",
@@ -2593,8 +2604,8 @@ async function updateTimetableSlot({ teacherId, studentId, payload }) {
   const saved = await Timetable.findById(timetable._id)
     .populate("morningSubject", "name icon color")
     .populate("afternoonSubject", "name icon color")
-    .populate("morningTeacherId", "name email avatar subjectSpecialty")
-    .populate("afternoonTeacherId", "name email avatar subjectSpecialty")
+    .populate("morningTeacherId", "name email avatar subjectSpecialty subjectSpecialties")
+    .populate("afternoonTeacherId", "name email avatar subjectSpecialty subjectSpecialties")
     .lean();
 
   return serializeTimetableEntry(saved);
@@ -2669,7 +2680,72 @@ async function listStudentResults({
 }
 
 async function createSessionLog(payload) {
+  const teacherId = String(payload.createdBy || "").trim();
+  const studentId = String(payload.studentId || "").trim();
+  const subjectId = String(payload.subjectId || "").trim();
   const dateKey = String(payload.dateKey || getCurrentDateKey()).trim();
+  const sessionType = String(payload.sessionType || "")
+    .trim()
+    .toLowerCase();
+  parseDateKey(dateKey);
+
+  if (!["morning", "afternoon"].includes(sessionType)) {
+    throw createError(400, "sessionType must be morning or afternoon.");
+  }
+
+  const teacher = await assertTeacherOwnsStudent(teacherId, studentId);
+  const timetable = await Timetable.findOne({
+    studentId,
+    day: getWeekdayFromDateKey(dateKey),
+  })
+    .select(
+      "morningSubject afternoonSubject morningTeacherId afternoonTeacherId",
+    )
+    .lean();
+
+  if (!timetable) {
+    throw createError(409, "No timetable entry exists for that student and date.");
+  }
+
+  const scheduledSubjectId =
+    sessionType === "morning" ? timetable.morningSubject : timetable.afternoonSubject;
+  const scheduledTeacherId =
+    sessionType === "morning"
+      ? timetable.morningTeacherId
+      : timetable.afternoonTeacherId;
+
+  if (!scheduledSubjectId || String(scheduledSubjectId) !== subjectId) {
+    throw createError(
+      403,
+      "Teachers can only log the subject that is scheduled for that lesson slot.",
+    );
+  }
+
+  if (!scheduledTeacherId || String(scheduledTeacherId) !== teacherId) {
+    throw createError(
+      403,
+      "Only the scheduled teacher can log that lesson session.",
+    );
+  }
+
+  const activeCoverAssignment = await SessionCoverAssignment.findOne({
+    studentId,
+    dateKey,
+    sessionType,
+    isActive: true,
+  })
+    .select("_id")
+    .lean();
+
+  if (activeCoverAssignment) {
+    // WHY: Once management records mentor cover, the lesson audit must come
+    // from the mentor cover flow so management sees the real conductor.
+    throw createError(
+      409,
+      "A mentor cover assignment exists for this lesson slot, so the session must be logged from the mentor cover flow.",
+    );
+  }
+
   const manualXpAwarded = Number.isFinite(Number(payload.xpAwarded))
     ? clampNumber(Number(payload.xpAwarded), 0, 50)
     : 0;
@@ -2678,7 +2754,14 @@ async function createSessionLog(payload) {
 
   const sessionLog = await SessionLog.create({
     ...payload,
+    studentId,
+    subjectId,
+    sessionType,
     dateKey,
+    createdBy: teacher._id,
+    plannedTeacherId: teacher._id,
+    conductedByStaffId: teacher._id,
+    coverAssignmentId: null,
     attendanceXpAwarded,
     challengeXpAwarded: 0,
     assessmentXpAwarded: 0,
@@ -2800,7 +2883,7 @@ async function buildUploadedMissionFromSource({
 async function extractSourcePlan(teacherId, payload) {
   const [teacher, subject] = await Promise.all([
     User.findOne({ _id: teacherId, role: "teacher" })
-      .select("name subjectSpecialty")
+      .select("name subjectSpecialty subjectSpecialties")
       .lean(),
     Subject.findById(payload.subjectId).lean(),
   ]);
@@ -2829,8 +2912,7 @@ async function extractSourcePlan(teacherId, payload) {
       targetDate,
     });
   } else if (
-    normalizeForMatch(teacher.subjectSpecialty) !==
-    normalizeForMatch(subject.name)
+    !teacherCanTeachSubjectName({ teacher, subjectName: subject.name })
   ) {
     // WHY: When no specific student/date slot is provided, the safer fallback
     // is still the teacher's canonical subject specialty.

@@ -19,6 +19,31 @@ async function getOverview(req, res, next) {
   }
 }
 
+async function getCoveredSessions(req, res, next) {
+  try {
+    const coveredSessions = await mentorService.listCoveredSessions({
+      mentorId: req.user.id,
+      studentId: req.params.studentId,
+      dateKey: req.query.date,
+    });
+    res.json(coveredSessions);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function createCoveredSessionLog(req, res, next) {
+  try {
+    const session = await mentorService.createCoveredSessionLog({
+      mentorId: req.user.id,
+      payload: req.body,
+    });
+    res.status(201).json(session);
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function createTarget(req, res, next) {
   try {
     const target = await mentorService.createTarget(req.body, req.user);
@@ -54,7 +79,9 @@ async function updateDifficulty(req, res, next) {
 }
 
 module.exports = {
+  getCoveredSessions,
   getOverview,
+  createCoveredSessionLog,
   createTarget,
   updateTarget,
   updateDifficulty,

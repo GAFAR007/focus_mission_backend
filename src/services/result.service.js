@@ -24,6 +24,10 @@ const Timetable = require("../models/Timetable");
 const User = require("../models/User");
 const subjectCertificationService = require("./subjectCertification.service");
 const { serializeMission } = require("../utils/missionSerializer");
+const {
+  normalizeTeacherSubjectSpecialties,
+  teacherCanTeachSubjectName,
+} = require("../utils/teacherSubjectSpecialties");
 const { resolveMissionRewardPolicy } = require("../utils/xpPolicy");
 
 let retryWorkerHandle = null;
@@ -1772,7 +1776,7 @@ async function assertTeacherAccess(
   const teacher = await User.findById(
     teacherId,
   )
-    .select("role assignedStudents subjectSpecialty")
+    .select("role assignedStudents subjectSpecialty subjectSpecialties")
     .lean();
   const assignedStudents = Array.isArray(
     teacher?.assignedStudents,
@@ -1806,17 +1810,18 @@ async function assertTeacherAccess(
     });
 
     if (accessibleSubjectIds.length === 0) {
-      const specialty = normalizeForMatch(
-        teacher.subjectSpecialty,
-      );
+      const subjectSpecialties = normalizeTeacherSubjectSpecialties({
+        primarySubjectSpecialty: teacher.subjectSpecialty,
+        subjectSpecialties: teacher.subjectSpecialties,
+      });
 
-      if (specialty) {
+      if (subjectSpecialties.length > 0) {
         const matchingSubjects = await Subject.find({})
           .select("_id name")
           .lean();
         accessibleSubjectIds = matchingSubjects
           .filter(
-            (subject) => normalizeForMatch(subject.name) === specialty,
+            (subject) => teacherCanTeachSubjectName({ teacher, subjectName: subject.name }),
           )
           .map((subject) => String(subject._id || "").trim())
           .filter(Boolean);

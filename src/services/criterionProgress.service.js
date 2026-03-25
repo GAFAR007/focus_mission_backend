@@ -21,6 +21,9 @@ const Subject = require("../models/Subject");
 const Timetable = require("../models/Timetable");
 const Unit = require("../models/Unit");
 const User = require("../models/User");
+const {
+  teacherCanTeachSubjectName,
+} = require("../utils/teacherSubjectSpecialties");
 
 // WHY: Criterion is now treated as a dormant legacy progression layer. Keep
 // this service stable for existing data and staff tools, but do not build new
@@ -382,14 +385,11 @@ async function resolveTeacherRecipients({ studentId, subjectId, subjectName }) {
     role: "teacher",
     assignedStudents: studentId,
   })
-    .select("_id subjectSpecialty")
+    .select("_id subjectSpecialty subjectSpecialties")
     .lean();
 
   for (const teacher of fallbackTeachers) {
-    if (
-      normalizeComparableValue(teacher.subjectSpecialty) ===
-      normalizeComparableValue(subjectName)
-    ) {
+    if (teacherCanTeachSubjectName({ teacher, subjectName })) {
       recipientIds.add(String(teacher._id));
     }
   }
@@ -406,7 +406,7 @@ async function assertTeacherCanReviewCriterion({
     _id: teacherId,
     role: "teacher",
   })
-    .select("name subjectSpecialty assignedStudents")
+    .select("name subjectSpecialty subjectSpecialties assignedStudents")
     .lean();
 
   if (!teacher) {
@@ -424,10 +424,7 @@ async function assertTeacherCanReviewCriterion({
     );
   }
 
-  if (
-    normalizeComparableValue(teacher.subjectSpecialty) ===
-    normalizeComparableValue(context.subject?.name)
-  ) {
+  if (teacherCanTeachSubjectName({ teacher, subjectName: context.subject?.name })) {
     return teacher;
   }
 

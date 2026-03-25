@@ -15,6 +15,7 @@
 const bcrypt = require("bcryptjs");
 const Mission = require("../models/Mission");
 const ResultPackage = require("../models/ResultPackage");
+const SessionCoverAssignment = require("../models/SessionCoverAssignment");
 const SessionLog = require("../models/SessionLog");
 const Subject = require("../models/Subject");
 const Timetable = require("../models/Timetable");
@@ -28,6 +29,10 @@ const {
 const subjectCertificationService = require("./subjectCertification.service");
 const { serializeMission } = require("../utils/missionSerializer");
 const { normalizeStudentYearGroup } = require("../utils/studentYearGroup");
+const {
+  normalizeTeacherSubjectSpecialties,
+  teacherCanTeachSubjectName,
+} = require("../utils/teacherSubjectSpecialties");
 const {
   getWeekKey,
 } = require("../utils/xpPolicy");
@@ -117,29 +122,54 @@ function parseRequestedDate(value) {
 }
 
 async function resolveCanonicalTeacherSubjectSpecialty(subjectSpecialty) {
-  const normalizedSpecialty = normalizeForMatch(subjectSpecialty);
+  const subjectSpecialties = await resolveCanonicalTeacherSubjectSpecialties({
+    primarySubjectSpecialty: subjectSpecialty,
+  });
 
-  if (!normalizedSpecialty) {
-    return "";
+  return subjectSpecialties.length === 0 ? "" : subjectSpecialties[0];
+}
+
+async function resolveCanonicalTeacherSubjectSpecialties({
+  primarySubjectSpecialty,
+  subjectSpecialties,
+}) {
+  const requestedSpecialties = normalizeTeacherSubjectSpecialties({
+    primarySubjectSpecialty,
+    subjectSpecialties,
+  });
+
+  if (requestedSpecialties.length === 0) {
+    return [];
   }
 
   const subjects = await Subject.find({})
     .select("name")
     .lean();
-  const matchingSubject = subjects.find(
-    (subject) => normalizeForMatch(subject.name) === normalizedSpecialty,
+  const canonicalSubjects = new Map(
+    subjects.map((subject) => [
+      normalizeForMatch(subject.name),
+      String(subject.name || "").trim(),
+    ]),
   );
+  const resolved = [];
 
-  if (!matchingSubject) {
-    throw createError(
-      400,
-      "Teacher subject specialty must match an existing subject name.",
-    );
+  for (const specialty of requestedSpecialties) {
+    const canonicalName = canonicalSubjects.get(normalizeForMatch(specialty));
+    if (!canonicalName) {
+      throw createError(
+        400,
+        "Teacher subject specialties must match existing subject names.",
+      );
+    }
+
+    if (!resolved.includes(canonicalName)) {
+      // WHY: Management owns teacher subject lists, so every stored entry must
+      // map to one canonical subject catalog name instead of free text.
+      resolved.push(canonicalName);
+    }
   }
 
-  // WHY: Persist the catalog subject name so future teacher checks compare
-  // against one canonical value instead of preserving ad hoc free-text input.
-  return String(matchingSubject.name || "").trim();
+  return resolved;
 }
 
 function formatDateKey(date) {
@@ -205,6 +235,51 @@ function buildManagementTargetDateSections({
   });
 }
 
+async function loadScheduledSessionContextForDate({
+  studentId,
+  dateKey,
+  sessionType,
+}) {
+  const selectedDate = parseRequestedDate(dateKey);
+  if (!selectedDate) {
+    throw createError(400, "dateKey must be in YYYY-MM-DD format.");
+  }
+
+  const weekday = weekdayForDate(selectedDate);
+  const timetable = await Timetable.findOne({
+    studentId,
+    day: weekday,
+  })
+    .populate("morningSubject", "name icon color")
+    .populate("afternoonSubject", "name icon color")
+    .populate(
+      "morningTeacherId",
+      "name email avatar role subjectSpecialty subjectSpecialties",
+    )
+    .populate(
+      "afternoonTeacherId",
+      "name email avatar role subjectSpecialty subjectSpecialties",
+    )
+    .lean();
+
+  const subject =
+    sessionType === "afternoon"
+      ? timetable?.afternoonSubject || null
+      : timetable?.morningSubject || null;
+  const plannedTeacher =
+    sessionType === "afternoon"
+      ? timetable?.afternoonTeacherId || null
+      : timetable?.morningTeacherId || null;
+
+  return {
+    dateKey,
+    weekday,
+    timetable,
+    subject,
+    plannedTeacher,
+  };
+}
+
 function collectTeacherIdsFromTimetables(entries) {
   const teacherIds = new Set();
 
@@ -249,14 +324,18 @@ async function syncTeacherAssignmentsForStudent({
 }
 
 function serializeUser(user) {
+  const subjectSpecialties = normalizeTeacherSubjectSpecialties({
+    primarySubjectSpecialty: user?.subjectSpecialty,
+    subjectSpecialties: user?.subjectSpecialties,
+  });
+
   return {
     id: String(user._id || ""),
     name: String(user.name || ""),
     email: String(user.email || ""),
     role: String(user.role || ""),
-    subjectSpecialty: String(
-      user.subjectSpecialty || "",
-    ),
+    subjectSpecialty: subjectSpecialties.length === 0 ? "" : subjectSpecialties[0],
+    subjectSpecialties,
     yearGroup: normalizeStudentYearGroup(user?.yearGroup),
     isPlaceholder: Boolean(
       user.isPlaceholder,
@@ -291,14 +370,25 @@ function serializeUser(user) {
   };
 }
 
-function serializeTeacher(user) {
+function serializeStaffSummary(user) {
+  const subjectSpecialties = normalizeTeacherSubjectSpecialties({
+    primarySubjectSpecialty: user?.subjectSpecialty,
+    subjectSpecialties: user?.subjectSpecialties,
+  });
+
   return {
     id: String(user._id || ""),
     name: String(user.name || ""),
     email: String(user.email || ""),
     avatar: String(user.avatar || ""),
-    subjectSpecialty: String(user.subjectSpecialty || ""),
+    role: String(user.role || ""),
+    subjectSpecialty: subjectSpecialties.length === 0 ? "" : subjectSpecialties[0],
+    subjectSpecialties,
   };
+}
+
+function serializeTeacher(user) {
+  return serializeStaffSummary(user);
 }
 
 function serializeTimetableEntry(entry) {
@@ -359,6 +449,16 @@ function serializeTargetSessionComment(sessionLog) {
     typeof sessionLog.createdBy === "object"
       ? sessionLog.createdBy
       : null;
+  const plannedTeacher =
+    sessionLog?.plannedTeacherId &&
+    typeof sessionLog.plannedTeacherId === "object"
+      ? sessionLog.plannedTeacherId
+      : null;
+  const conductedBy =
+    sessionLog?.conductedByStaffId &&
+    typeof sessionLog.conductedByStaffId === "object"
+      ? sessionLog.conductedByStaffId
+      : null;
 
   return {
     id: String(sessionLog?._id || ""),
@@ -368,6 +468,12 @@ function serializeTargetSessionComment(sessionLog) {
     comment: String(sessionLog?.notes || ""),
     teacherName: String(createdBy?.name || ""),
     teacherRole: String(createdBy?.role || ""),
+    authorName: String(createdBy?.name || ""),
+    authorRole: String(createdBy?.role || ""),
+    plannedTeacherName: String(plannedTeacher?.name || ""),
+    plannedTeacherRole: String(plannedTeacher?.role || ""),
+    conductedByName: String(conductedBy?.name || ""),
+    conductedByRole: String(conductedBy?.role || ""),
   };
 }
 
@@ -376,6 +482,7 @@ function serializePlannedSession({
   subject,
   teacher,
   missions,
+  coverAssignment,
 }) {
   return {
     sessionType,
@@ -385,10 +492,41 @@ function serializePlannedSession({
     ),
     subject: serializeSubjectSummary(subject),
     teacher: teacher ? serializeTeacher(teacher) : null,
+    coverAssignment: coverAssignment
+      ? serializeCoverAssignment(coverAssignment)
+      : null,
     missions: Array.isArray(missions)
       ? missions.map(serializeMission)
       : [],
   };
+}
+
+function serializeCoverAssignment(assignment) {
+  return {
+    id: String(assignment?._id || ""),
+    dateKey: String(assignment?.dateKey || ""),
+    sessionType: String(assignment?.sessionType || ""),
+    reason: String(assignment?.reason || ""),
+    coverStaffRole: String(assignment?.coverStaffRole || ""),
+    plannedTeacher: assignment?.plannedTeacherId
+      ? serializeStaffSummary(assignment.plannedTeacherId)
+      : null,
+    coverStaff: assignment?.coverStaffId
+      ? serializeStaffSummary(assignment.coverStaffId)
+      : null,
+  };
+}
+
+async function listAvailableCoverStaffForStudent(studentId) {
+  const mentors = await User.find({
+    role: "mentor",
+    assignedStudents: studentId,
+  })
+    .sort({ name: 1 })
+    .select("name email avatar role subjectSpecialty subjectSpecialties")
+    .lean();
+
+  return mentors.map(serializeStaffSummary);
 }
 
 async function assertManagementStudentAccess(
@@ -531,9 +669,13 @@ async function listStudentTargets({
         dateKey: { $in: displayDateKeys },
         notes: { $exists: true, $ne: "" },
       })
-        .select("dateKey sessionType notes subjectId createdBy")
+        .select(
+          "dateKey sessionType notes subjectId createdBy plannedTeacherId conductedByStaffId coverAssignmentId",
+        )
         .populate("subjectId", "name")
         .populate("createdBy", "name role")
+        .populate("plannedTeacherId", "name role")
+        .populate("conductedByStaffId", "name role")
         .lean()
     : [];
 
@@ -784,11 +926,20 @@ async function createManagedUser({
   const subjectSpecialty = String(
     payload?.subjectSpecialty || "",
   ).trim();
+  const requestedSubjectSpecialties = Array.isArray(payload?.subjectSpecialties)
+    ? payload.subjectSpecialties
+    : [];
   const yearGroup = normalizeStudentYearGroup(payload?.yearGroup);
-  const canonicalSubjectSpecialty =
+  const canonicalSubjectSpecialties =
     role === "teacher"
-      ? await resolveCanonicalTeacherSubjectSpecialty(subjectSpecialty)
-      : "";
+      ? await resolveCanonicalTeacherSubjectSpecialties({
+          primarySubjectSpecialty: subjectSpecialty,
+          subjectSpecialties: requestedSubjectSpecialties,
+        })
+      : [];
+  const canonicalSubjectSpecialty = canonicalSubjectSpecialties.length === 0
+    ? ""
+    : canonicalSubjectSpecialties[0];
 
   if (
     !["student", "teacher"].includes(
@@ -860,6 +1011,7 @@ async function createManagedUser({
         role === "teacher" ?
           canonicalSubjectSpecialty
         : "",
+      subjectSpecialties: role === "teacher" ? canonicalSubjectSpecialties : [],
       yearGroup: role === "student" ? yearGroup : "",
       isPlaceholder: false,
     });
@@ -950,10 +1102,62 @@ async function listTeachers() {
     role: "teacher",
   })
     .sort({ name: 1 })
-    .select("name email avatar subjectSpecialty")
+    .select("name email avatar role subjectSpecialty subjectSpecialties")
     .lean();
 
   return teachers.map(serializeTeacher);
+}
+
+async function updateTeacherSubjects({
+  managementId,
+  teacherId,
+  payload,
+}) {
+  const managementUser = await User.findById(managementId)
+    .select("role")
+    .lean();
+
+  if (
+    !managementUser ||
+    String(managementUser.role || "") !== "management"
+  ) {
+    throw createError(403, "Management access is required.");
+  }
+
+  const canonicalSubjectSpecialties =
+    await resolveCanonicalTeacherSubjectSpecialties({
+      primarySubjectSpecialty: payload?.subjectSpecialty,
+      subjectSpecialties: payload?.subjectSpecialties,
+    });
+  const canonicalSubjectSpecialty = canonicalSubjectSpecialties.length === 0
+    ? ""
+    : canonicalSubjectSpecialties[0];
+
+  if (!canonicalSubjectSpecialty) {
+    throw createError(400, "Primary teacher subject is required.");
+  }
+
+  const updatedTeacher = await User.findOneAndUpdate(
+    {
+      _id: teacherId,
+      role: "teacher",
+    },
+    {
+      subjectSpecialty: canonicalSubjectSpecialty,
+      subjectSpecialties: canonicalSubjectSpecialties,
+    },
+    {
+      new: true,
+    },
+  )
+    .select("name email avatar role subjectSpecialty subjectSpecialties")
+    .lean();
+
+  if (!updatedTeacher) {
+    throw createError(404, "Teacher not found.");
+  }
+
+  return serializeTeacher(updatedTeacher);
 }
 
 async function getSubjectCertificationSettings({
@@ -1046,7 +1250,7 @@ async function saveStudentTimetableEntry({
     _id: { $in: teacherIds },
     role: "teacher",
   })
-    .select("name email avatar subjectSpecialty")
+    .select("name email avatar role subjectSpecialty subjectSpecialties")
     .lean();
   const teacherMap = new Map(
     teachers.map((teacher) => [String(teacher._id || ""), teacher]),
@@ -1064,6 +1268,36 @@ async function saveStudentTimetableEntry({
     throw createError(
       400,
       "Afternoon teacher must be a valid teacher account.",
+    );
+  }
+
+  const morningTeacher = teacherMap.get(morningTeacherId);
+  if (
+    morningTeacherId &&
+    morningTeacher &&
+    !teacherCanTeachSubjectName({
+      teacher: morningTeacher,
+      subjectName: morningSubject.name,
+    })
+  ) {
+    throw createError(
+      400,
+      "Morning teacher must be configured to teach the selected morning subject.",
+    );
+  }
+
+  const afternoonTeacher = teacherMap.get(afternoonTeacherId);
+  if (
+    afternoonTeacherId &&
+    afternoonTeacher &&
+    !teacherCanTeachSubjectName({
+      teacher: afternoonTeacher,
+      subjectName: afternoonSubject.name,
+    })
+  ) {
+    throw createError(
+      400,
+      "Afternoon teacher must be configured to teach the selected afternoon subject.",
     );
   }
 
@@ -1097,8 +1331,14 @@ async function saveStudentTimetableEntry({
   )
     .populate("morningSubject")
     .populate("afternoonSubject")
-    .populate("morningTeacherId", "name email avatar subjectSpecialty")
-    .populate("afternoonTeacherId", "name email avatar subjectSpecialty")
+    .populate(
+      "morningTeacherId",
+      "name email avatar role subjectSpecialty subjectSpecialties",
+    )
+    .populate(
+      "afternoonTeacherId",
+      "name email avatar role subjectSpecialty subjectSpecialties",
+    )
     .lean();
 
   const affectedTeacherIds = [
@@ -1162,21 +1402,11 @@ async function getStudentDayPlan({
     );
   }
 
-  const timetable = await Timetable.findOne({
+  const { timetable } = await loadScheduledSessionContextForDate({
     studentId,
-    day: weekday,
-  })
-    .populate("morningSubject", "name icon color")
-    .populate("afternoonSubject", "name icon color")
-    .populate(
-      "morningTeacherId",
-      "name email avatar subjectSpecialty",
-    )
-    .populate(
-      "afternoonTeacherId",
-      "name email avatar subjectSpecialty",
-    )
-    .lean();
+    dateKey,
+    sessionType: "morning",
+  });
 
   const morningSubjectId = String(
     timetable?.morningSubject?._id || timetable?.morningSubject || "",
@@ -1185,7 +1415,8 @@ async function getStudentDayPlan({
     timetable?.afternoonSubject?._id || timetable?.afternoonSubject || "",
   ).trim();
 
-  const [morningMissions, afternoonMissions] = await Promise.all([
+  const [morningMissions, afternoonMissions, activeCoverAssignments, availableCoverStaff] =
+    await Promise.all([
     !morningSubjectId
       ? []
       : Mission.find({
@@ -1214,7 +1445,29 @@ async function getStudentDayPlan({
           .limit(MANAGEMENT_DAY_PLAN_MISSION_LIMIT)
           .populate("subjectId", "name icon color")
           .lean(),
+    SessionCoverAssignment.find({
+      studentId,
+      dateKey,
+      isActive: true,
+      sessionType: { $in: ["morning", "afternoon"] },
+    })
+      .populate(
+        "plannedTeacherId",
+        "name email avatar role subjectSpecialty subjectSpecialties",
+      )
+      .populate(
+        "coverStaffId",
+        "name email avatar role subjectSpecialty subjectSpecialties",
+      )
+      .lean(),
+    listAvailableCoverStaffForStudent(studentId),
   ]);
+  const coverAssignmentsBySessionType = new Map(
+    activeCoverAssignments.map((assignment) => [
+      String(assignment.sessionType || "").trim().toLowerCase(),
+      assignment,
+    ]),
+  );
 
   return {
     student: serializeUser(student),
@@ -1222,19 +1475,176 @@ async function getStudentDayPlan({
     weekday,
     hasTimetableEntry: Boolean(timetable),
     room: String(timetable?.room || "").trim(),
+    availableCoverStaff,
     morning: serializePlannedSession({
       sessionType: "morning",
       subject: timetable?.morningSubject || null,
       teacher: timetable?.morningTeacherId || null,
+      coverAssignment: coverAssignmentsBySessionType.get("morning") || null,
       missions: morningMissions,
     }),
     afternoon: serializePlannedSession({
       sessionType: "afternoon",
       subject: timetable?.afternoonSubject || null,
       teacher: timetable?.afternoonTeacherId || null,
+      coverAssignment: coverAssignmentsBySessionType.get("afternoon") || null,
       missions: afternoonMissions,
     }),
   };
+}
+
+async function saveStudentSessionCoverAssignment({
+  managementId,
+  studentId,
+  payload,
+}) {
+  await assertManagementStudentAccess(managementId, studentId);
+
+  const dateKey = String(payload?.dateKey || "").trim();
+  const sessionType = String(payload?.sessionType || "")
+    .trim()
+    .toLowerCase();
+  const coverStaffId = String(payload?.coverStaffId || "").trim();
+  const reason = String(payload?.reason || "").trim();
+
+  if (!parseRequestedDate(dateKey)) {
+    throw createError(400, "dateKey must be in YYYY-MM-DD format.");
+  }
+
+  if (!["morning", "afternoon"].includes(sessionType)) {
+    throw createError(400, "sessionType must be morning or afternoon.");
+  }
+
+  if (!coverStaffId) {
+    throw createError(400, "coverStaffId is required.");
+  }
+
+  const { timetable, subject, plannedTeacher } = await loadScheduledSessionContextForDate({
+    studentId,
+    dateKey,
+    sessionType,
+  });
+
+  if (!timetable || !subject) {
+    throw createError(
+      409,
+      "A timetable subject must exist for that student, date, and session before cover can be assigned.",
+    );
+  }
+
+  if (!plannedTeacher?._id) {
+    throw createError(
+      409,
+      "That lesson slot has no planned teacher yet, so cover cannot be assigned.",
+    );
+  }
+
+  const coverStaff = await User.findOne({
+    _id: coverStaffId,
+    role: "mentor",
+    assignedStudents: studentId,
+  })
+    .select("name email avatar role subjectSpecialty subjectSpecialties")
+    .lean();
+
+  if (!coverStaff) {
+    throw createError(
+      403,
+      "Only a mentor already assigned to this student can be selected for cover.",
+    );
+  }
+
+  const assignment = await SessionCoverAssignment.findOneAndUpdate(
+    {
+      studentId,
+      dateKey,
+      sessionType,
+      isActive: true,
+    },
+    {
+      studentId,
+      dateKey,
+      sessionType,
+      subjectId: subject._id,
+      plannedTeacherId: plannedTeacher._id,
+      coverStaffId,
+      coverStaffRole: "mentor",
+      createdByManagementId: managementId,
+      reason,
+      isActive: true,
+      deactivatedAt: null,
+      deactivatedByManagementId: null,
+    },
+    {
+      new: true,
+      upsert: true,
+      setDefaultsOnInsert: true,
+    },
+  )
+    .populate(
+      "plannedTeacherId",
+      "name email avatar role subjectSpecialty subjectSpecialties",
+    )
+    .populate(
+      "coverStaffId",
+      "name email avatar role subjectSpecialty subjectSpecialties",
+    )
+    .lean();
+
+  return serializeCoverAssignment(assignment);
+}
+
+async function removeStudentSessionCoverAssignment({
+  managementId,
+  studentId,
+  payload,
+}) {
+  await assertManagementStudentAccess(managementId, studentId);
+
+  const dateKey = String(payload?.dateKey || "").trim();
+  const sessionType = String(payload?.sessionType || "")
+    .trim()
+    .toLowerCase();
+
+  if (!parseRequestedDate(dateKey)) {
+    throw createError(400, "dateKey must be in YYYY-MM-DD format.");
+  }
+
+  if (!["morning", "afternoon"].includes(sessionType)) {
+    throw createError(400, "sessionType must be morning or afternoon.");
+  }
+
+  const assignment = await SessionCoverAssignment.findOneAndUpdate(
+    {
+      studentId,
+      dateKey,
+      sessionType,
+      isActive: true,
+    },
+    {
+      isActive: false,
+      deactivatedAt: new Date(),
+      deactivatedByManagementId: managementId,
+    },
+    {
+      new: true,
+    },
+  )
+    .populate(
+      "plannedTeacherId",
+      "name email avatar role subjectSpecialty subjectSpecialties",
+    )
+    .populate(
+      "coverStaffId",
+      "name email avatar role subjectSpecialty subjectSpecialties",
+    )
+    .lean();
+
+  if (!assignment) {
+    throw createError(404, "No active cover assignment was found for that lesson slot.");
+  }
+
+  return serializeCoverAssignment(assignment);
 }
 
 module.exports = {
@@ -1253,4 +1663,7 @@ module.exports = {
   updateSubjectCertificationSettings,
   getStudentCertification,
   saveStudentTimetableEntry,
+  saveStudentSessionCoverAssignment,
+  removeStudentSessionCoverAssignment,
+  updateTeacherSubjects,
 };

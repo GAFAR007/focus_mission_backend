@@ -110,6 +110,24 @@ async function createUser(
   }
 }
 
+async function updateTeacherSubjects(
+  req,
+  res,
+  next,
+) {
+  try {
+    const teacher =
+      await managementService.updateTeacherSubjects({
+        managementId: req.user.id,
+        teacherId: req.params.teacherId,
+        payload: req.body,
+      });
+    res.json({ teacher });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function archiveStudent(
   req,
   res,
@@ -157,6 +175,42 @@ async function updateStudentYearGroup(
         payload: req.body,
       });
     res.json({ student });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function saveStudentSessionCoverAssignment(
+  req,
+  res,
+  next,
+) {
+  try {
+    const coverAssignment =
+      await managementService.saveStudentSessionCoverAssignment({
+        managementId: req.user.id,
+        studentId: req.params.studentId,
+        payload: req.body,
+      });
+    res.json({ coverAssignment });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function removeStudentSessionCoverAssignment(
+  req,
+  res,
+  next,
+) {
+  try {
+    const coverAssignment =
+      await managementService.removeStudentSessionCoverAssignment({
+        managementId: req.user.id,
+        studentId: req.params.studentId,
+        payload: req.body,
+      });
+    res.json({ coverAssignment });
   } catch (error) {
     next(error);
   }
@@ -297,8 +351,11 @@ module.exports = {
   getSubjectCertificationSettings,
   listTeachers,
   listSubjects,
+  removeStudentSessionCoverAssignment,
   saveStudentTimetableEntry,
+  saveStudentSessionCoverAssignment,
   unarchiveStudent,
+  updateTeacherSubjects,
   updateStudentYearGroup,
   updateSubjectCertificationSettings,
 };
