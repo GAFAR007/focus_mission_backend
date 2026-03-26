@@ -12,7 +12,9 @@ const mentorService = require("../services/mentor.service");
 
 async function getOverview(req, res, next) {
   try {
-    const overview = await mentorService.getOverview(req.params.studentId);
+    const overview = await mentorService.getOverview(req.params.studentId, {
+      dateKey: req.query.date,
+    });
     res.json(overview);
   } catch (error) {
     next(error);

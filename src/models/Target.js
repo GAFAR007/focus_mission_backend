@@ -58,6 +58,28 @@ const targetSchema = new mongoose.Schema(
       // WHY: Target XP contributes to daily and weekly totals, so each award
       // requires an explicit calendar-day identity.
     },
+    subjectId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Subject",
+      default: null,
+      // WHY: When teachers backdate targets for a specific taught lesson, the
+      // linked subject keeps management audit grounded in the real timetable slot.
+    },
+    sessionType: {
+      type: String,
+      enum: ["", "morning", "afternoon"],
+      default: "",
+      trim: true,
+      // WHY: Session type distinguishes whether the target belonged to the
+      // morning or afternoon teaching slot for audit review later on.
+    },
+    plannedTeacherId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      // WHY: The target audit should preserve who the timetable expected to
+      // teach the lesson even if the target was saved later as part of review.
+    },
     targetType: {
       type: String,
       enum: ["fixed_daily_mission", "fixed_assessment", "custom"],

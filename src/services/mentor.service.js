@@ -11,6 +11,7 @@
  */
 const SessionLog = require("../models/SessionLog");
 const SessionCoverAssignment = require("../models/SessionCoverAssignment");
+const Timetable = require("../models/Timetable");
 const Target = require("../models/Target");
 const User = require("../models/User");
 const { serializeJourney } = require("../utils/userJourney");
@@ -56,6 +57,75 @@ function parseRequestedDateKey(value) {
   }
 
   return dateKey;
+}
+
+function parseDateKeyToDate(dateKey) {
+  const normalizedDateKey = parseRequestedDateKey(dateKey);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(normalizedDateKey);
+  const year = Number(match?.[1] || 0);
+  const month = Number(match?.[2] || 0);
+  const day = Number(match?.[3] || 0);
+  return new Date(year, month - 1, day, 12, 0, 0, 0);
+}
+
+function weekdayForDateKey(dateKey) {
+  return new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(
+    parseDateKeyToDate(dateKey),
+  );
+}
+
+function assertDateKeyNotFuture(dateKey, fieldName = "dateKey") {
+  if (String(dateKey || "").trim() > getDateKey()) {
+    throw createError(400, `${fieldName} cannot be in the future.`);
+  }
+}
+
+function serializeTarget(target) {
+  const createdByStaff =
+    target?.createdByStaffId &&
+    typeof target.createdByStaffId === "object"
+      ? target.createdByStaffId
+      : null;
+  const awardedByStaff =
+    target?.awardedByStaffId &&
+    typeof target.awardedByStaffId === "object"
+      ? target.awardedByStaffId
+      : null;
+  const subject =
+    target?.subjectId &&
+    typeof target.subjectId === "object"
+      ? target.subjectId
+      : null;
+  const plannedTeacher =
+    target?.plannedTeacherId &&
+    typeof target.plannedTeacherId === "object"
+      ? target.plannedTeacherId
+      : null;
+
+  return {
+    id: String(target?._id || ""),
+    title: String(target?.title || ""),
+    description: String(target?.description || ""),
+    status: String(target?.status || ""),
+    difficulty: String(target?.difficulty || ""),
+    targetType: String(target?.targetType || "custom"),
+    stars: Number(target?.stars || 0),
+    xpAwarded: Number(target?.xpAwarded || 0),
+    weekKey: String(target?.weekKey || ""),
+    awardDateKey: String(target?.awardDateKey || ""),
+    sessionType: String(target?.sessionType || ""),
+    subjectId: String(subject?._id || target?.subjectId || ""),
+    subjectName: String(subject?.name || ""),
+    plannedTeacherName: String(plannedTeacher?.name || ""),
+    plannedTeacherRole: String(plannedTeacher?.role || ""),
+    createdByName: String(createdByStaff?.name || ""),
+    createdByRole: String(createdByStaff?.role || ""),
+    awardedByName: String(awardedByStaff?.name || ""),
+    awardedByRole: String(awardedByStaff?.role || ""),
+    createdAt: target?.createdAt || null,
+    updatedAt: target?.updatedAt || null,
+    awardedAt: target?.awardedAt || null,
+  };
 }
 
 function serializeCoveredSessionLog(sessionLog) {
@@ -147,6 +217,281 @@ async function assertMentorAssignedStudent({
     mentor,
     student,
   };
+}
+
+async function assertTeacherAssignedStudent({
+  teacherId,
+  studentId,
+}) {
+  const [teacher, student] = await Promise.all([
+    User.findOne({
+      _id: teacherId,
+      role: "teacher",
+      assignedStudents: studentId,
+    })
+      .select("name assignedStudents")
+      .lean(),
+    User.findOne({
+      _id: studentId,
+      role: "student",
+      isArchived: { $ne: true },
+    })
+      .select("name")
+      .lean(),
+  ]);
+
+  if (!teacher) {
+    throw createError(
+      403,
+      "Teachers can only manage targets for students already assigned to them.",
+    );
+  }
+
+  if (!student) {
+    throw createError(404, "Student not found.");
+  }
+
+  return {
+    teacher,
+    student,
+  };
+}
+
+async function loadScheduledTeacherSessionContext({
+  studentId,
+  dateKey,
+  sessionType,
+}) {
+  const timetable = await Timetable.findOne({
+    studentId,
+    day: weekdayForDateKey(dateKey),
+  })
+    .populate("morningSubject", "name")
+    .populate("afternoonSubject", "name")
+    .select(
+      "morningSubject afternoonSubject morningTeacherId afternoonTeacherId",
+    )
+    .lean();
+
+  if (!timetable) {
+    return null;
+  }
+
+  if (sessionType === "morning") {
+    return {
+      sessionType: "morning",
+      subjectId: String(
+        timetable.morningSubject?._id || timetable.morningSubject || "",
+      ),
+      subjectName: String(timetable.morningSubject?.name || ""),
+      plannedTeacherId: String(timetable.morningTeacherId || ""),
+    };
+  }
+
+  if (sessionType === "afternoon") {
+    return {
+      sessionType: "afternoon",
+      subjectId: String(
+        timetable.afternoonSubject?._id || timetable.afternoonSubject || "",
+      ),
+      subjectName: String(timetable.afternoonSubject?.name || ""),
+      plannedTeacherId: String(timetable.afternoonTeacherId || ""),
+    };
+  }
+
+  return null;
+}
+
+async function resolveTeacherTargetAuditContext({
+  teacherId,
+  studentId,
+  awardDateKey,
+  targetType,
+  sessionType,
+  subjectId,
+}) {
+  await assertTeacherAssignedStudent({ teacherId, studentId });
+  assertDateKeyNotFuture(awardDateKey, "awardDateKey");
+
+  if (
+    targetType === TARGET_TYPE_FIXED_DAILY_MISSION ||
+    targetType === TARGET_TYPE_FIXED_ASSESSMENT
+  ) {
+    const morningContext = await loadScheduledTeacherSessionContext({
+      studentId,
+      dateKey: awardDateKey,
+      sessionType: "morning",
+    });
+    const afternoonContext = await loadScheduledTeacherSessionContext({
+      studentId,
+      dateKey: awardDateKey,
+      sessionType: "afternoon",
+    });
+    const hasScheduledSlot =
+      String(morningContext?.plannedTeacherId || "") === teacherId ||
+      String(afternoonContext?.plannedTeacherId || "") === teacherId;
+
+    if (!hasScheduledSlot) {
+      throw createError(
+        403,
+        "Teachers can only rate fixed targets on dates where they were scheduled to teach this student.",
+      );
+    }
+
+    return {
+      sessionType: "",
+      subjectId: "",
+      plannedTeacherId: "",
+    };
+  }
+
+  if (!["morning", "afternoon"].includes(String(sessionType || "").trim())) {
+    throw createError(
+      400,
+      "Teachers must save custom targets against a morning or afternoon lesson.",
+    );
+  }
+
+  if (!String(subjectId || "").trim()) {
+    throw createError(
+      400,
+      "Teachers must save custom targets against the scheduled subject for that lesson.",
+    );
+  }
+
+  const sessionContext = await loadScheduledTeacherSessionContext({
+    studentId,
+    dateKey: awardDateKey,
+    sessionType,
+  });
+
+  if (!sessionContext?.subjectId || !sessionContext?.plannedTeacherId) {
+    throw createError(
+      409,
+      "A timetable lesson must exist for that student, date, and session before a teacher can save a target.",
+    );
+  }
+
+  if (String(sessionContext.plannedTeacherId) !== teacherId) {
+    throw createError(
+      403,
+      "Teachers can only save custom targets for lesson slots they were scheduled to teach.",
+    );
+  }
+
+  if (String(sessionContext.subjectId) !== String(subjectId || "").trim()) {
+    throw createError(
+      403,
+      "Teachers can only save custom targets for the subject scheduled in that lesson slot.",
+    );
+  }
+
+  return {
+    sessionType: sessionContext.sessionType,
+    subjectId: sessionContext.subjectId,
+    plannedTeacherId: sessionContext.plannedTeacherId,
+  };
+}
+
+async function resolveMentorTargetAuditContext({
+  mentorId,
+  studentId,
+  awardDateKey,
+  sessionType,
+  subjectId,
+}) {
+  await assertMentorAssignedStudent({ mentorId, studentId });
+  assertDateKeyNotFuture(awardDateKey, "awardDateKey");
+
+  if (!["morning", "afternoon"].includes(String(sessionType || "").trim())) {
+    return {
+      sessionType: "",
+      subjectId: "",
+      plannedTeacherId: "",
+    };
+  }
+
+  const coverAssignment = await SessionCoverAssignment.findOne({
+    studentId,
+    dateKey: awardDateKey,
+    sessionType,
+    coverStaffId: mentorId,
+    coverStaffRole: "mentor",
+    isActive: true,
+  })
+    .select("subjectId plannedTeacherId")
+    .lean();
+
+  if (!coverAssignment) {
+    throw createError(
+      403,
+      "Mentors can only attach lesson-specific targets to active covered sessions.",
+    );
+  }
+
+  if (
+    String(subjectId || "").trim() &&
+    String(coverAssignment.subjectId || "") !== String(subjectId || "").trim()
+  ) {
+    throw createError(
+      403,
+      "Mentor lesson targets must match the covered subject for that session.",
+    );
+  }
+
+  return {
+    sessionType: String(sessionType || "").trim().toLowerCase(),
+    subjectId: String(coverAssignment.subjectId || ""),
+    plannedTeacherId: String(coverAssignment.plannedTeacherId || ""),
+  };
+}
+
+async function resolveTargetAuditContext({
+  staff,
+  studentId,
+  awardDateKey,
+  targetType,
+  sessionType,
+  subjectId,
+}) {
+  const normalizedRole = String(staff?.role || "").trim().toLowerCase();
+  if (normalizedRole === "teacher") {
+    return resolveTeacherTargetAuditContext({
+      teacherId: String(staff?.id || staff?._id || "").trim(),
+      studentId,
+      awardDateKey,
+      targetType,
+      sessionType,
+      subjectId,
+    });
+  }
+
+  if (normalizedRole === "mentor") {
+    return resolveMentorTargetAuditContext({
+      mentorId: String(staff?.id || staff?._id || "").trim(),
+      studentId,
+      awardDateKey,
+      sessionType,
+      subjectId,
+    });
+  }
+
+  throw createError(403, "Only teachers or mentors can manage targets.");
+}
+
+async function loadSerializedTarget(targetId) {
+  const target = await Target.findById(targetId)
+    .populate("createdByStaffId", "name role")
+    .populate("awardedByStaffId", "name role")
+    .populate("subjectId", "name")
+    .populate("plannedTeacherId", "name role")
+    .lean();
+
+  if (!target) {
+    throw createError(404, "Target not found.");
+  }
+
+  return serializeTarget(target);
 }
 
 function normalizeTargetStatus(stars, fallbackStatus = "pending") {
@@ -254,8 +599,9 @@ async function assertTargetCaps({
   }
 }
 
-async function getOverview(studentId) {
-  const dateKey = getDateKey();
+async function getOverview(studentId, options = {}) {
+  const dateKey = parseRequestedDateKey(options?.dateKey);
+  assertDateKeyNotFuture(dateKey, "dateKey");
   const student = await User.findOne({ _id: studentId, role: "student" }).lean();
 
   if (!student) {
@@ -265,6 +611,10 @@ async function getOverview(studentId) {
   await ensureWeeklyFixedTargets(studentId, dateKey);
   const weekKey = getWeekKey(dateKey);
   const targets = await Target.find({ studentId, weekKey })
+    .populate("createdByStaffId", "name role")
+    .populate("awardedByStaffId", "name role")
+    .populate("subjectId", "name")
+    .populate("plannedTeacherId", "name role")
     .sort({ targetType: 1, updatedAt: -1, createdAt: -1 })
     .lean();
   const recentSessions = await SessionLog.find({ studentId })
@@ -308,7 +658,7 @@ async function getOverview(studentId) {
       targetDailyCap: TARGET_DAILY_CAP,
       targetWeeklyCap: TARGET_WEEKLY_CAP,
     },
-    targets,
+    targets: targets.map(serializeTarget),
     recentSessions,
   };
 }
@@ -384,6 +734,7 @@ async function createCoveredSessionLog({
   if (!["morning", "afternoon"].includes(sessionType)) {
     throw createError(400, "sessionType must be morning or afternoon.");
   }
+  assertDateKeyNotFuture(dateKey, "dateKey");
 
   const coverAssignment = await SessionCoverAssignment.findOne({
     studentId,
@@ -487,8 +838,18 @@ async function createTarget(payload, staff) {
   const dateKey = String(payload.awardDateKey || getDateKey()).trim();
   const weekKey = String(payload.weekKey || getWeekKey(dateKey)).trim();
   const targetType = String(payload.targetType || TARGET_TYPE_CUSTOM).trim();
+  const sessionType = String(payload.sessionType || "").trim().toLowerCase();
+  const subjectId = String(payload.subjectId || "").trim();
   const stars = clampNumber(payload.stars || 0, 0, 3);
   const xpAwarded = calculateTargetXpFromStars(stars);
+  const auditContext = await resolveTargetAuditContext({
+    staff,
+    studentId: String(payload.studentId || "").trim(),
+    awardDateKey: dateKey,
+    targetType,
+    sessionType,
+    subjectId,
+  });
 
   if (
     targetType === TARGET_TYPE_CUSTOM &&
@@ -520,6 +881,9 @@ async function createTarget(payload, staff) {
     targetType,
     weekKey,
     awardDateKey: dateKey,
+    sessionType: auditContext.sessionType,
+    subjectId: auditContext.subjectId || null,
+    plannedTeacherId: auditContext.plannedTeacherId || null,
     stars,
     xpAwarded,
     status: normalizeTargetStatus(stars, payload.status),
@@ -534,7 +898,7 @@ async function createTarget(payload, staff) {
     });
   }
 
-  return target;
+  return loadSerializedTarget(target._id);
 }
 
 async function updateTarget(targetId, payload, staff) {
@@ -552,9 +916,28 @@ async function updateTarget(targetId, payload, staff) {
   const nextAwardDateKey = String(
     payload.awardDateKey || target.awardDateKey || getDateKey(),
   ).trim();
+  const nextTargetType = String(
+    payload.targetType || target.targetType || TARGET_TYPE_CUSTOM,
+  ).trim();
+  const nextSessionType = String(
+    payload.sessionType || target.sessionType || "",
+  )
+    .trim()
+    .toLowerCase();
+  const nextSubjectId = String(
+    payload.subjectId || target.subjectId || "",
+  ).trim();
   const nextWeekKey = String(
     payload.weekKey || target.weekKey || getWeekKey(nextAwardDateKey),
   ).trim();
+  const auditContext = await resolveTargetAuditContext({
+    staff,
+    studentId: String(target.studentId || ""),
+    awardDateKey: nextAwardDateKey,
+    targetType: nextTargetType,
+    sessionType: nextSessionType,
+    subjectId: nextSubjectId,
+  });
 
   await assertTargetCaps({
     studentId: String(target.studentId),
@@ -573,6 +956,10 @@ async function updateTarget(targetId, payload, staff) {
   target.endDate = payload.endDate === undefined ? target.endDate : payload.endDate;
   target.weekKey = nextWeekKey;
   target.awardDateKey = nextAwardDateKey;
+  target.targetType = nextTargetType;
+  target.sessionType = auditContext.sessionType;
+  target.subjectId = auditContext.subjectId || null;
+  target.plannedTeacherId = auditContext.plannedTeacherId || null;
   target.stars = nextStars;
   target.xpAwarded = nextXpAwarded;
   target.status = normalizeTargetStatus(nextStars, payload.status || target.status);
@@ -588,7 +975,7 @@ async function updateTarget(targetId, payload, staff) {
     });
   }
 
-  return target;
+  return loadSerializedTarget(target._id);
 }
 
 async function updateDifficulty(studentId, { preferredDifficulty }) {

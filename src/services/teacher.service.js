@@ -2689,6 +2689,10 @@ async function createSessionLog(payload) {
     .toLowerCase();
   parseDateKey(dateKey);
 
+  if (dateKey > getCurrentDateKey()) {
+    throw createError(400, "Session logs cannot be saved for future lesson dates.");
+  }
+
   if (!["morning", "afternoon"].includes(sessionType)) {
     throw createError(400, "sessionType must be morning or afternoon.");
   }

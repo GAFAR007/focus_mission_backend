@@ -27,6 +27,10 @@ router.get(
   "/overview/:studentId",
   [
     param("studentId").isMongoId().withMessage("Valid studentId is required."),
+    query("date")
+      .optional()
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage("date must be a valid YYYY-MM-DD date."),
     validateRequest,
   ],
   mentorController.getOverview,
@@ -99,6 +103,14 @@ router.post(
       .optional()
       .isISO8601({ strict: true, strictSeparator: true })
       .withMessage("awardDateKey must be a valid YYYY-MM-DD date."),
+    body("subjectId")
+      .optional()
+      .isMongoId()
+      .withMessage("subjectId must be a valid id."),
+    body("sessionType")
+      .optional()
+      .isIn(["morning", "afternoon"])
+      .withMessage("sessionType must be morning or afternoon."),
     validateRequest,
   ],
   mentorController.createTarget,
@@ -120,6 +132,14 @@ router.patch(
       .optional()
       .isISO8601({ strict: true, strictSeparator: true })
       .withMessage("awardDateKey must be a valid YYYY-MM-DD date."),
+    body("subjectId")
+      .optional()
+      .isMongoId()
+      .withMessage("subjectId must be a valid id."),
+    body("sessionType")
+      .optional()
+      .isIn(["morning", "afternoon"])
+      .withMessage("sessionType must be morning or afternoon."),
     validateRequest,
   ],
   mentorController.updateTarget,

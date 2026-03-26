@@ -421,6 +421,21 @@ function serializeTarget(target) {
     typeof target.createdByStaffId === "object"
       ? target.createdByStaffId
       : null;
+  const awardedByStaff =
+    target?.awardedByStaffId &&
+    typeof target.awardedByStaffId === "object"
+      ? target.awardedByStaffId
+      : null;
+  const subject =
+    target?.subjectId &&
+    typeof target.subjectId === "object"
+      ? target.subjectId
+      : null;
+  const plannedTeacher =
+    target?.plannedTeacherId &&
+    typeof target.plannedTeacherId === "object"
+      ? target.plannedTeacherId
+      : null;
 
   return {
     id: String(target?._id || ""),
@@ -433,8 +448,18 @@ function serializeTarget(target) {
     xpAwarded: Number(target?.xpAwarded || 0),
     weekKey: String(target?.weekKey || ""),
     awardDateKey: String(target?.awardDateKey || ""),
+    sessionType: String(target?.sessionType || ""),
+    subjectId: String(subject?._id || target?.subjectId || ""),
+    subjectName: String(subject?.name || ""),
+    plannedTeacherName: String(plannedTeacher?.name || ""),
+    plannedTeacherRole: String(plannedTeacher?.role || ""),
     createdByName: String(createdByStaff?.name || ""),
     createdByRole: String(createdByStaff?.role || ""),
+    awardedByName: String(awardedByStaff?.name || ""),
+    awardedByRole: String(awardedByStaff?.role || ""),
+    createdAt: target?.createdAt || null,
+    updatedAt: target?.updatedAt || null,
+    awardedAt: target?.awardedAt || null,
   };
 }
 
@@ -474,6 +499,8 @@ function serializeTargetSessionComment(sessionLog) {
     plannedTeacherRole: String(plannedTeacher?.role || ""),
     conductedByName: String(conductedBy?.name || ""),
     conductedByRole: String(conductedBy?.role || ""),
+    createdAt: sessionLog?.createdAt || null,
+    updatedAt: sessionLog?.updatedAt || null,
   };
 }
 
@@ -656,6 +683,9 @@ async function listStudentTargets({
       createdAt: -1,
     })
     .populate("createdByStaffId", "name role")
+    .populate("awardedByStaffId", "name role")
+    .populate("subjectId", "name")
+    .populate("plannedTeacherId", "name role")
     .limit(
       MANAGEMENT_TARGET_HISTORY_LIMIT,
     )
@@ -670,7 +700,7 @@ async function listStudentTargets({
         notes: { $exists: true, $ne: "" },
       })
         .select(
-          "dateKey sessionType notes subjectId createdBy plannedTeacherId conductedByStaffId coverAssignmentId",
+          "dateKey sessionType notes subjectId createdBy plannedTeacherId conductedByStaffId coverAssignmentId createdAt updatedAt",
         )
         .populate("subjectId", "name")
         .populate("createdBy", "name role")
