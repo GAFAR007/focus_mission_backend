@@ -756,7 +756,7 @@ function parseImportedEssayDraftFromText({
 
     const previewParts = sentencePreview
       .split(/(_{2,})/)
-      .filter((part) => String(part || "").isNotEmpty);
+      .filter((part) => String(part || "").length > 0);
     const placeholderCount = previewParts.filter((part) => /^_{2,}$/.test(part)).length;
 
     if (placeholderCount !== blankEntries.length) {
