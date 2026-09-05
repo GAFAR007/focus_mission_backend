@@ -230,6 +230,13 @@ const missionSchema = new mongoose.Schema(
       // WHY: Teachers need explicit task targeting (for example P1/P2) so the
       // generated mission assesses the selected qualification criteria.
     },
+    taskFocusAssignedAt: {
+      type: Date,
+      default: null,
+      index: true,
+      // WHY: New-term pathway reporting needs a reliable workflow boundary
+      // without guessing a term date or modifying historical tagged missions.
+    },
     assessmentSequenceByTaskCode: {
       type: Map,
       of: {
@@ -358,6 +365,13 @@ const missionSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    reusedFromMissionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Mission",
+      default: null,
+      // WHY: A server-owned source link makes copy actions auditable and lets
+      // persistence reject accidental double-click duplicates safely.
+    },
   },
   {
     timestamps: true,
@@ -371,5 +385,22 @@ missionSchema.index({
   status: 1,
   createdAt: -1,
 });
+
+missionSchema.index(
+  {
+    createdBy: 1,
+    studentId: 1,
+    reusedFromMissionId: 1,
+    availableOnDate: 1,
+    sessionType: 1,
+  },
+  {
+    unique: true,
+    partialFilterExpression: {
+      reusedFromMissionId: { $type: "objectId" },
+    },
+    name: "unique_reused_mission_target_slot",
+  },
+);
 
 module.exports = mongoose.model("Mission", missionSchema);

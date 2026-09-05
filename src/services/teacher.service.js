@@ -1226,6 +1226,10 @@ async function buildImportedMissionFromSource({
 
   const draftFormat = normalizeDraftFormat(payload.draftFormat);
   const normalizedTaskCodes = parseTaskCodeUploadField(payload.taskCodes);
+  assertNewBusinessTaskFocus({
+    subjectName: subject.name,
+    taskCodes: normalizedTaskCodes,
+  });
   const difficulty =
     ["easy", "medium", "hard"].includes(String(payload.difficulty || "").trim().toLowerCase())
       ? String(payload.difficulty || "").trim().toLowerCase()
@@ -1342,6 +1346,9 @@ async function buildImportedMissionFromSource({
     availableOnDay: baseMission.availableOnDay,
     difficulty: baseMission.difficulty,
     taskCodes: normalizedTaskCodes,
+    taskFocusAssignedAt: resolveTaskFocusAssignedAt({
+      taskCodes: normalizedTaskCodes,
+    }),
     assessmentSequenceByTaskCode:
       baseMission.assessmentSequenceByTaskCode,
     ...certificationSnapshot,
@@ -1546,6 +1553,34 @@ function normalizeTaskCodes(taskCodes) {
   }
 
   return [...new Set(normalized)];
+}
+
+function isBusinessSubjectName(subjectName) {
+  return String(subjectName || "").trim().toLowerCase() === "business";
+}
+
+function assertNewBusinessTaskFocus({ subjectName, taskCodes }) {
+  if (isBusinessSubjectName(subjectName) && taskCodes.length === 0) {
+    // WHY: Business pathway reporting must reflect the teacher's explicit
+    // academic intent. The server must never infer P1/P2 from mission text.
+    throw createError(
+      400,
+      "Choose at least one Task Focus for this Business mission.",
+    );
+  }
+}
+
+function resolveTaskFocusAssignedAt({
+  taskCodes,
+  existingAssignedAt = null,
+}) {
+  if (existingAssignedAt) {
+    return existingAssignedAt;
+  }
+
+  // WHY: This marker identifies missions created or deliberately tagged in
+  // the new workflow without applying a guessed calendar term to old history.
+  return taskCodes.length > 0 ? getNow() : null;
 }
 
 function countAssessmentDraftsByTaskCode(drafts) {
@@ -1946,6 +1981,106 @@ function normalizeQuestions(
       minWordCount: 0,
     };
   });
+}
+
+function copyMissionQuestion(question) {
+  return {
+    answerMode: String(question?.answerMode || "multiple_choice"),
+    learningText: String(question?.learningText || ""),
+    learningVideoUrl: String(question?.learningVideoUrl || ""),
+    learningVideoPlacement: String(
+      question?.learningVideoPlacement || DEFAULT_LEARNING_VIDEO_PLACEMENT,
+    ),
+    prompt: String(question?.prompt || ""),
+    options: Array.isArray(question?.options)
+      ? question.options.map((option) => String(option || ""))
+      : [],
+    correctIndex: Number(question?.correctIndex),
+    explanation: String(question?.explanation || ""),
+    expectedAnswer: String(question?.expectedAnswer || ""),
+    minWordCount: Number(question?.minWordCount || 0),
+  };
+}
+
+function shuffledCopy(items, random = Math.random) {
+  const shuffled = [...items];
+
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const randomValue = Number(random());
+    const boundedRandom = Number.isFinite(randomValue)
+      ? Math.min(Math.max(randomValue, 0), 0.999999999999)
+      : 0;
+    const replacementIndex = Math.floor(boundedRandom * (index + 1));
+    [shuffled[index], shuffled[replacementIndex]] = [
+      shuffled[replacementIndex],
+      shuffled[index],
+    ];
+  }
+
+  if (
+    shuffled.length > 1 &&
+    shuffled.every((item, index) => item === items[index])
+  ) {
+    // WHY: One bounded rotation guarantees a visible alternative without an
+    // unbounded retry loop when randomness happens to return the same order.
+    shuffled.push(shuffled.shift());
+  }
+
+  return shuffled;
+}
+
+function shuffleMissionQuestions(
+  questions,
+  {
+    shuffleQuestionOrder = false,
+    shuffleAnswerOptions = false,
+    random = Math.random,
+  } = {},
+) {
+  let copiedQuestions = (Array.isArray(questions) ? questions : []).map(
+    copyMissionQuestion,
+  );
+
+  if (shuffleQuestionOrder) {
+    // WHY: Each whole question object moves as one unit so its teaching text,
+    // optional video, prompt, explanation, and correct answer stay together.
+    copiedQuestions = shuffledCopy(copiedQuestions, random);
+  }
+
+  if (shuffleAnswerOptions) {
+    copiedQuestions = copiedQuestions.map((question) => {
+      if (
+        question.answerMode === "short_answer" ||
+        question.options.length < 2
+      ) {
+        return question;
+      }
+
+      const answerOptions = question.options.map((text, index) => ({
+        text,
+        isCorrect: index === question.correctIndex,
+      }));
+      const shuffledOptions = shuffledCopy(answerOptions, random);
+
+      return {
+        ...question,
+        options: shuffledOptions.map((option) => option.text),
+        // WHY: Correctness travels with the option value, then a new index is
+        // derived for the persisted A/B/C/D order used by student scoring.
+        correctIndex: shuffledOptions.findIndex((option) => option.isCorrect),
+      };
+    });
+  }
+
+  return copiedQuestions;
+}
+
+function cloneJsonValue(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  return JSON.parse(JSON.stringify(value));
 }
 
 function haveDraftOptionsChanged(previousQuestion, nextQuestion) {
@@ -3389,6 +3524,10 @@ async function generateMission(teacherId, payload) {
     questionCount,
   }).xpReward;
   const normalizedTaskCodes = normalizeTaskCodes(payload.taskCodes);
+  assertNewBusinessTaskFocus({
+    subjectName: subject.name,
+    taskCodes: normalizedTaskCodes,
+  });
   const assessmentCreationMetadata =
     await resolveAssessmentDraftCreationMetadata({
       teacherId,
@@ -3447,6 +3586,9 @@ async function generateMission(teacherId, payload) {
     availableOnDay: availability.availableOnDay,
     difficulty: payload.difficulty || "medium",
     taskCodes: normalizedTaskCodes,
+    taskFocusAssignedAt: resolveTaskFocusAssignedAt({
+      taskCodes: normalizedTaskCodes,
+    }),
     assessmentSequenceByTaskCode:
       assessmentCreationMetadata.assessmentSequenceByTaskCode,
     ...certificationSnapshot,
@@ -3503,6 +3645,10 @@ async function previewMission(teacherId, payload) {
     questionCount,
   }).xpReward;
   const normalizedTaskCodes = normalizeTaskCodes(payload.taskCodes);
+  assertNewBusinessTaskFocus({
+    subjectName: subject.name,
+    taskCodes: normalizedTaskCodes,
+  });
   const unitText = payload.unitText.trim();
   const draftBase = {
     title: payload.title.trim(),
@@ -3569,6 +3715,266 @@ async function listDraftMissions(teacherId, studentId) {
     .lean();
 
   return missions.map(serializeMission);
+}
+
+async function getStudentMissionPathway({
+  teacherId,
+  studentId,
+  subjectId = "",
+}) {
+  console.info("[teacher] mission_pathway_start", {
+    teacherId: String(teacherId || ""),
+    studentId: String(studentId || ""),
+    subjectId: String(subjectId || ""),
+  });
+
+  const teacher = await assertTeacherOwnsStudent(teacherId, studentId);
+  const teacherSubjectIds = await resolveTeacherSubjectIdsForStudent({
+    teacher,
+    teacherId,
+    studentId,
+  });
+  const normalizedSubjectId = String(subjectId || "").trim();
+
+  if (!normalizedSubjectId) {
+    throw createError(400, "A subject is required to view mission pathways.");
+  }
+
+  if (
+    !teacherSubjectIds.includes(normalizedSubjectId)
+  ) {
+    // WHY: The selected learner alone is not enough authority; pathway rows
+    // must also remain inside the teacher's owned timetable subjects.
+    throw createError(
+      403,
+      "Teachers can only view pathways for their assigned subjects.",
+    );
+  }
+
+  const scopedSubjectIds = [normalizedSubjectId];
+  const student = await User.findOne({
+    _id: studentId,
+    role: "student",
+    isArchived: { $ne: true },
+  }).lean();
+
+  if (!student) {
+    throw createError(404, "Student not found.");
+  }
+
+  const [missions, certifications] = await Promise.all([
+    Mission.find({
+      studentId,
+      subjectId: { $in: scopedSubjectIds },
+      manualResultOnly: { $ne: true },
+      taskFocusAssignedAt: { $exists: true, $ne: null },
+      "taskCodes.0": { $exists: true },
+      $or: [
+        { status: "draft", createdBy: teacherId },
+        { status: "published" },
+        { status: { $exists: false } },
+      ],
+    })
+      // WHY: The API returns a deterministic chronology; the UI applies the
+      // frozen Q5 -> Q8 -> Essay -> Theory -> Assessment learning-stage order.
+      .sort({ availableOnDate: 1, createdAt: 1, _id: 1 })
+      .populate("subjectId", "name icon color")
+      .lean(),
+    subjectCertificationService.getStudentCertificationSummaries({
+      studentId,
+      subjectId: normalizedSubjectId,
+      // WHY: Viewing a pathway must never award or alter qualification state.
+      applyAwards: false,
+    }),
+  ]);
+
+  console.info("[teacher] mission_pathway_complete", {
+    teacherId: String(teacherId || ""),
+    studentId: String(studentId || ""),
+    subjectCount: scopedSubjectIds.length,
+    missionCount: missions.length,
+  });
+
+  return {
+    student: serializeUser(student),
+    missions: missions.map(serializeMission),
+    certifications,
+  };
+}
+
+async function reuseMissionDraft(teacherId, missionId, payload) {
+  const targetStudentId = String(payload?.targetStudentId || "").trim();
+  const targetDate = String(payload?.targetDate || "").trim();
+  const sessionType = String(payload?.sessionType || "")
+    .trim()
+    .toLowerCase();
+
+  const sourceMission = await Mission.findOne({
+    _id: missionId,
+    createdBy: teacherId,
+    status: "draft",
+    manualResultOnly: { $ne: true },
+  }).lean();
+
+  if (!sourceMission) {
+    throw createError(404, "Reusable mission draft not found.");
+  }
+
+  if (!targetStudentId) {
+    throw createError(400, "A target student is required.");
+  }
+
+  if (String(sourceMission.studentId) === targetStudentId) {
+    throw createError(400, "Choose a different student for this new draft.");
+  }
+
+  if (!["morning", "afternoon"].includes(sessionType)) {
+    throw createError(400, "Session type must be morning or afternoon.");
+  }
+
+  // WHY: Reuse must never broaden roster access; both the source creator and
+  // target learner stay inside the existing teacher assignment boundary.
+  await assertTeacherOwnsStudent(teacherId, targetStudentId);
+  const targetStudent = await User.findOne({
+    _id: targetStudentId,
+    role: "student",
+    isArchived: { $ne: true },
+  }).lean();
+
+  if (!targetStudent) {
+    throw createError(404, "Target student not found.");
+  }
+
+  const subjectId = String(sourceMission.subjectId || "");
+  // WHY: Student-specific dates cannot be copied from the source mission; the
+  // target learner's own subject and teacher slot remains authoritative.
+  const availability = await assertTeacherOwnsScheduledLesson({
+    teacherId,
+    studentId: targetStudentId,
+    subjectId,
+    sessionType,
+    targetDate,
+  });
+
+  const duplicate = await Mission.findOne({
+    createdBy: teacherId,
+    studentId: targetStudentId,
+    reusedFromMissionId: sourceMission._id,
+    availableOnDate: availability.availableOnDate,
+    sessionType,
+  })
+    .select("_id")
+    .lean();
+
+  if (duplicate) {
+    // WHY: Repeated taps must not silently assign equivalent draft copies to
+    // the same learner and timetable slot.
+    throw createError(
+      409,
+      "This draft has already been reused for that student and lesson slot.",
+    );
+  }
+
+  const draftFormat = normalizeDraftFormat(sourceMission.draftFormat);
+  const sourceQuestions = Array.isArray(sourceMission.questions)
+    ? sourceMission.questions
+    : [];
+  const normalizedTaskCodes = normalizeTaskCodes(sourceMission.taskCodes);
+  const assessmentCreationMetadata =
+    await resolveAssessmentDraftCreationMetadata({
+      teacherId,
+      studentId: targetStudentId,
+      subjectId,
+      draftFormat,
+      questionCount: sourceQuestions.length,
+      taskCodes: normalizedTaskCodes,
+    });
+  const certificationSnapshot = await loadMissionCertificationSnapshot({
+    studentId: targetStudentId,
+    subjectId,
+  });
+  const questions = draftFormat === "QUESTIONS"
+    ? shuffleMissionQuestions(sourceQuestions, {
+        shuffleQuestionOrder: payload?.shuffleQuestionOrder === true,
+        shuffleAnswerOptions: payload?.shuffleAnswerOptions === true,
+    })
+    : sourceQuestions.map(copyMissionQuestion);
+  const rewardQuestionCount = draftFormat === "ESSAY_BUILDER"
+    ? Number(sourceMission?.draftJson?.targets?.targetSentenceCount || 0)
+    : sourceQuestions.length;
+  const xpReward = resolveMissionRewardPolicy({
+    draftFormat,
+    questionCount: rewardQuestionCount,
+  }).xpReward;
+
+  try {
+    const createdMission = await Mission.create({
+      studentId: targetStudentId,
+      subjectId,
+      sessionType,
+      title: assessmentCreationMetadata.title || sourceMission.title,
+      teacherNote: sourceMission.teacherNote,
+      sourceUnitText: sourceMission.sourceUnitText,
+      sourceRawText: sourceMission.sourceRawText,
+      sourceFileName: sourceMission.sourceFileName,
+      sourceFileType: sourceMission.sourceFileType,
+      draftFormat,
+      essayMode: draftFormat === "ESSAY_BUILDER"
+        ? sourceMission.essayMode
+        : null,
+      draftJson: cloneJsonValue(sourceMission.draftJson),
+      source: sourceMission.source,
+      status: "draft",
+      aiModel: sourceMission.aiModel,
+      publishedAt: null,
+      availableOnDate: availability.availableOnDate,
+      availableOnDay: availability.availableOnDay,
+      difficulty: sourceMission.difficulty,
+      taskCodes: normalizedTaskCodes,
+      taskFocusAssignedAt: resolveTaskFocusAssignedAt({
+        taskCodes: normalizedTaskCodes,
+      }),
+      assessmentSequenceByTaskCode:
+        assessmentCreationMetadata.assessmentSequenceByTaskCode,
+      ...certificationSnapshot,
+      xpReward,
+      latestScoreCorrect: 0,
+      latestScoreTotal: 0,
+      latestScorePercent: 0,
+      latestXpEarned: 0,
+      latestResultPackageId: null,
+      questions,
+      createdBy: teacherId,
+      reusedFromMissionId: sourceMission._id,
+    });
+
+    const savedMission = await Mission.findById(createdMission._id)
+      .populate("subjectId", "name icon color")
+      .lean();
+
+    console.info("[teacher] mission_draft_reused", {
+      teacherId: String(teacherId || ""),
+      sourceMissionId: String(sourceMission._id || ""),
+      targetMissionId: String(createdMission._id || ""),
+      targetStudentId,
+      targetDate: availability.availableOnDate,
+      sessionType,
+      shuffledQuestions:
+        draftFormat === "QUESTIONS" && payload?.shuffleQuestionOrder === true,
+      shuffledAnswers:
+        draftFormat === "QUESTIONS" && payload?.shuffleAnswerOptions === true,
+    });
+
+    return serializeMission(savedMission);
+  } catch (error) {
+    if (Number(error?.code) === 11000) {
+      throw createError(
+        409,
+        "This draft has already been reused for that student and lesson slot.",
+      );
+    }
+    throw error;
+  }
 }
 
 async function listRecentMissions(teacherId, studentId) {
@@ -3726,7 +4132,21 @@ async function updateMission(teacherId, missionId, payload) {
   if (payload.taskCodes !== undefined) {
     // WHY: Task targeting is teacher-authored intent, so updates should keep a
     // validated canonical list instead of raw unchecked values.
-    mission.taskCodes = normalizeTaskCodes(payload.taskCodes);
+    const normalizedTaskCodes = normalizeTaskCodes(payload.taskCodes);
+    if (mission.taskFocusAssignedAt && normalizedTaskCodes.length === 0) {
+      const subject = await Subject.findById(mission.subjectId)
+        .select("name")
+        .lean();
+      assertNewBusinessTaskFocus({
+        subjectName: subject?.name,
+        taskCodes: normalizedTaskCodes,
+      });
+    }
+    mission.taskCodes = normalizedTaskCodes;
+    mission.taskFocusAssignedAt = resolveTaskFocusAssignedAt({
+      taskCodes: normalizedTaskCodes,
+      existingAssignedAt: mission.taskFocusAssignedAt,
+    });
   }
 
   if (payload.xpReward !== undefined) {
@@ -3956,9 +4376,14 @@ module.exports = {
   generateMission,
   previewMission,
   listDraftMissions,
+  getStudentMissionPathway,
+  reuseMissionDraft,
+  shuffleMissionQuestions,
   listAssessmentDraftCounts,
   countAssessmentDraftsByTaskCode,
   resolveAssessmentDraftCreationMetadata,
+  assertNewBusinessTaskFocus,
+  resolveTaskFocusAssignedAt,
   listRecentMissions,
   updateMission,
   deleteMission,

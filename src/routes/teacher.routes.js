@@ -164,6 +164,20 @@ router.get(
   teacherController.getStudentResults,
 );
 
+router.get(
+  "/students/:id/mission-pathway",
+  [
+    param("id")
+      .isMongoId()
+      .withMessage("Valid student id is required."),
+    query("subjectId")
+      .isMongoId()
+      .withMessage("Valid subjectId is required."),
+    validateRequest,
+  ],
+  teacherController.getStudentMissionPathway,
+);
+
 router.patch(
   "/students/:id/subjects/:subjectId/certification-plan",
   [
@@ -754,6 +768,40 @@ router.post(
     validateRequest,
   ],
   teacherController.generateMission,
+);
+
+router.post(
+  "/missions/:missionId/reuse",
+  [
+    // WHY: Reuse creates a separate student-owned record, so source identity,
+    // target identity, and target timetable slot must be explicit and valid.
+    param("missionId")
+      .isMongoId()
+      .withMessage("Valid missionId is required."),
+    body("targetStudentId")
+      .isMongoId()
+      .withMessage("Valid targetStudentId is required."),
+    body("targetDate")
+      .trim()
+      .isISO8601({
+        strict: true,
+        strictSeparator: true,
+      })
+      .withMessage("targetDate must be a valid YYYY-MM-DD date."),
+    body("sessionType")
+      .isIn(["morning", "afternoon"])
+      .withMessage("Session type must be morning or afternoon."),
+    body("shuffleQuestionOrder")
+      .optional()
+      .isBoolean()
+      .withMessage("shuffleQuestionOrder must be true or false."),
+    body("shuffleAnswerOptions")
+      .optional()
+      .isBoolean()
+      .withMessage("shuffleAnswerOptions must be true or false."),
+    validateRequest,
+  ],
+  teacherController.reuseMissionDraft,
 );
 
 router.post(

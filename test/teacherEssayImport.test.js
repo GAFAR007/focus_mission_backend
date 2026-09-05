@@ -79,6 +79,7 @@ Correct Answer: A) different`;
       uploadMode: "populate_draft",
       draftFormat: "ESSAY_BUILDER",
       essayMode: "NORMAL",
+      taskCodes: '["P1"]',
       missionDraftId: "existing-draft",
       file: {
         originalname: "business-online-essay.txt",
@@ -90,6 +91,7 @@ Correct Answer: A) different`;
     assert.equal(result.draftReadiness.status, "ready");
     assert.deepEqual(result.draftReadiness.missingRequirements, []);
     assert.ok(result.prefilledMission);
+    assert.deepEqual(result.prefilledMission.taskCodes, ["P1"]);
     assert.equal(result.prefilledMission.draftJson.sentences.length, 1);
 
     const [sentence] = result.prefilledMission.draftJson.sentences;

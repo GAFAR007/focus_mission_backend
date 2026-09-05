@@ -122,6 +122,19 @@ async function getStudentResults(req, res, next) {
   }
 }
 
+async function getStudentMissionPathway(req, res, next) {
+  try {
+    const pathway = await teacherService.getStudentMissionPathway({
+      teacherId: req.user.id,
+      studentId: req.params.id,
+      subjectId: req.query.subjectId,
+    });
+    res.json(pathway);
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function createTimetable(req, res, next) {
   try {
     const timetable = await teacherService.createTimetable(req.body);
@@ -254,6 +267,19 @@ async function getAssessmentDraftCounts(req, res, next) {
       req.query.subjectId,
     );
     res.json(availability);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function reuseMissionDraft(req, res, next) {
+  try {
+    const mission = await teacherService.reuseMissionDraft(
+      req.user.id,
+      req.params.missionId,
+      req.body,
+    );
+    res.status(201).json({ mission });
   } catch (error) {
     next(error);
   }
@@ -747,6 +773,7 @@ module.exports = {
   getStudents,
   getSubjects,
   getStudentResults,
+  getStudentMissionPathway,
   getStudentCertification,
   updateStudentCertificationPlan,
   createTimetable,
@@ -760,6 +787,7 @@ module.exports = {
   previewMission,
   getDraftMissions,
   getAssessmentDraftCounts,
+  reuseMissionDraft,
   getRecentMissions,
   updateMission,
   deleteMission,
