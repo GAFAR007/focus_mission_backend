@@ -28,6 +28,21 @@ const missionQuestionSchema = new mongoose.Schema(
       // WHY: Missions teach before questioning so the student answers from
       // taught content instead of being tested on untaught knowledge.
     },
+    learningVideoUrl: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 300,
+      // WHY: Supporting media is optional and teacher-selected; an empty
+      // default keeps every existing mission document backward compatible.
+    },
+    learningVideoPlacement: {
+      type: String,
+      enum: ["beforeLearnFirst", "afterLearnFirst", "afterExplanation"],
+      default: "afterLearnFirst",
+      // WHY: Learn First remains the default anchor while still allowing the
+      // teacher to place optional support before learning or after feedback.
+    },
     prompt: {
       type: String,
       required: true,

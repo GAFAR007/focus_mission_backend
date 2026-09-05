@@ -10,6 +10,11 @@
  * mission when no saved teacher mission is available.
  */
 const { resolveMissionRewardPolicy } = require("./xpPolicy");
+const {
+  DEFAULT_LEARNING_VIDEO_PLACEMENT,
+  normalizeLearningVideoPlacement,
+  parseYouTubeVideoUrl,
+} = require("./youtubeVideo");
 
 function serializeMissionQuestion(question, index = 0, draftFormat = "QUESTIONS") {
   const options = Array.isArray(question.options) ? question.options : [];
@@ -39,10 +44,17 @@ function serializeMissionQuestion(question, index = 0, draftFormat = "QUESTIONS"
     0,
     Number(question.minWordCount || (normalizedDraftFormat === "THEORY" ? 12 : 0)) || 0,
   );
+  const learningVideo = parseYouTubeVideoUrl(question.learningVideoUrl);
+  const learningVideoPlacement = normalizeLearningVideoPlacement(
+    question.learningVideoPlacement,
+  );
   return {
     id: String(question._id || question.id || `question-${index + 1}`),
     answerMode,
     learningText: question.learningText || question.lessonText || question.explanation || "",
+    learningVideoUrl: learningVideo?.canonicalUrl || "",
+    learningVideoPlacement:
+      learningVideoPlacement || DEFAULT_LEARNING_VIDEO_PLACEMENT,
     prompt: question.prompt || question.question || "",
     options: answerMode === "short_answer" ? [] : options,
     correctIndex: answerMode === "short_answer" ? -1 : Number(question.correctIndex || 0),

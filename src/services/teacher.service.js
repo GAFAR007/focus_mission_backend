@@ -53,6 +53,11 @@ const {
   getNow,
   resolveMissionRewardPolicy,
 } = require("../utils/xpPolicy");
+const {
+  DEFAULT_LEARNING_VIDEO_PLACEMENT,
+  normalizeLearningVideoPlacement,
+  parseYouTubeVideoUrl,
+} = require("../utils/youtubeVideo");
 
 const DRAFT_MISSIONS_LIMIT = 5;
 const RECENT_MISSIONS_HISTORY_LIMIT = 50;
@@ -1635,6 +1640,45 @@ function buildTheoryQuestionsFromGenerated(questions) {
   );
 }
 
+function normalizeQuestionLearningVideo(question, index) {
+  const rawUrl = String(question?.learningVideoUrl || "").trim();
+  const placement = normalizeLearningVideoPlacement(
+    question?.learningVideoPlacement,
+  );
+
+  if (!rawUrl) {
+    return {
+      learningVideoUrl: "",
+      learningVideoPlacement:
+        placement || DEFAULT_LEARNING_VIDEO_PLACEMENT,
+    };
+  }
+
+  // WHY: Only a parsed YouTube video ID may be persisted; arbitrary iframe
+  // markup or unsupported hosts must never reach the student renderer.
+  const parsedVideo = rawUrl.length <= 300
+    ? parseYouTubeVideoUrl(rawUrl)
+    : null;
+  if (!parsedVideo) {
+    throw createError(
+      400,
+      `Question ${index + 1} needs a valid YouTube learning-video URL.`,
+    );
+  }
+
+  if (!placement) {
+    throw createError(
+      400,
+      `Question ${index + 1} has an unsupported learning-video placement.`,
+    );
+  }
+
+  return {
+    learningVideoUrl: parsedVideo.canonicalUrl,
+    learningVideoPlacement: placement,
+  };
+}
+
 function normalizeQuestions(
   questions,
   { draftFormat = "QUESTIONS" } = {},
@@ -1662,6 +1706,7 @@ function normalizeQuestions(
       const expectedAnswer = String(question?.expectedAnswer || "").trim();
       const minWordCount = Number(question?.minWordCount);
       const explanation = String(question?.explanation || "").trim();
+      const learningVideo = normalizeQuestionLearningVideo(question, index);
 
       if (!learningText) {
         throw createError(
@@ -1691,6 +1736,7 @@ function normalizeQuestions(
       return {
         answerMode: "short_answer",
         learningText,
+        ...learningVideo,
         prompt,
         options: [],
         correctIndex: -1,
@@ -1709,6 +1755,7 @@ function normalizeQuestions(
       : [];
     const correctIndex = Number(question?.correctIndex);
     const explanation = String(question?.explanation || "").trim();
+    const learningVideo = normalizeQuestionLearningVideo(question, index);
 
     if (!learningText) {
       throw createError(
@@ -1752,6 +1799,7 @@ function normalizeQuestions(
     return {
       answerMode: "multiple_choice",
       learningText,
+      ...learningVideo,
       prompt,
       options,
       correctIndex,
