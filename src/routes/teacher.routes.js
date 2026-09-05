@@ -226,6 +226,24 @@ router.get(
 );
 
 router.get(
+  "/missions/assessment-draft-counts/:studentId",
+  [
+    param("studentId")
+      .isMongoId()
+      .withMessage(
+        "Valid studentId is required.",
+      ),
+    query("subjectId")
+      .isMongoId()
+      .withMessage(
+        "Valid subjectId is required.",
+      ),
+    validateRequest,
+  ],
+  teacherController.getAssessmentDraftCounts,
+);
+
+router.get(
   "/missions/recent/:studentId",
   [
     param("studentId")

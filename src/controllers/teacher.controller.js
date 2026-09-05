@@ -246,6 +246,19 @@ async function getDraftMissions(req, res, next) {
   }
 }
 
+async function getAssessmentDraftCounts(req, res, next) {
+  try {
+    const availability = await teacherService.listAssessmentDraftCounts(
+      req.user.id,
+      req.params.studentId,
+      req.query.subjectId,
+    );
+    res.json(availability);
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function updateMission(req, res, next) {
   try {
     const mission = await teacherService.updateMission(
@@ -746,6 +759,7 @@ module.exports = {
   generateMission,
   previewMission,
   getDraftMissions,
+  getAssessmentDraftCounts,
   getRecentMissions,
   updateMission,
   deleteMission,

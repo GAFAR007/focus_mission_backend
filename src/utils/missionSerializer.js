@@ -16,6 +16,23 @@ const {
   parseYouTubeVideoUrl,
 } = require("./youtubeVideo");
 
+function serializeAssessmentSequenceByTaskCode(value) {
+  const entries = value instanceof Map
+    ? [...value.entries()]
+    : Object.entries(value && typeof value === "object" ? value : {});
+
+  return entries.reduce((sequences, [rawTaskCode, rawSequence]) => {
+    const taskCode = String(rawTaskCode || "").trim().toUpperCase();
+    const sequence = String(rawSequence || "").trim().toUpperCase();
+
+    if (/^[PMD]\d+$/.test(taskCode) && ["A", "B"].includes(sequence)) {
+      sequences[taskCode] = sequence;
+    }
+
+    return sequences;
+  }, {});
+}
+
 function serializeMissionQuestion(question, index = 0, draftFormat = "QUESTIONS") {
   const options = Array.isArray(question.options) ? question.options : [];
   const normalizedDraftFormat = String(draftFormat || "QUESTIONS")
@@ -109,6 +126,9 @@ function serializeMission(mission) {
     sessionType: mission.sessionType,
     difficulty: mission.difficulty || "medium",
     taskCodes: Array.isArray(mission.taskCodes) ? mission.taskCodes : [],
+    assessmentSequenceByTaskCode: serializeAssessmentSequenceByTaskCode(
+      mission.assessmentSequenceByTaskCode,
+    ),
     xpReward,
     xpEarned,
     scoreCorrect,

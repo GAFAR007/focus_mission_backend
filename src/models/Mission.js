@@ -230,6 +230,16 @@ const missionSchema = new mongoose.Schema(
       // WHY: Teachers need explicit task targeting (for example P1/P2) so the
       // generated mission assesses the selected qualification criteria.
     },
+    assessmentSequenceByTaskCode: {
+      type: Map,
+      of: {
+        type: String,
+        enum: ["A", "B"],
+      },
+      default: {},
+      // WHY: A/B is optional per task code, so sequence identity must remain
+      // auditable even when a teacher later edits the human-facing title.
+    },
     certificationPlanId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "StudentCertificationPlan",

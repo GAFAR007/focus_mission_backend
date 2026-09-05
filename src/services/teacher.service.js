@@ -62,6 +62,8 @@ const {
 const DRAFT_MISSIONS_LIMIT = 5;
 const RECENT_MISSIONS_HISTORY_LIMIT = 50;
 const TEACHER_RESULTS_HISTORY_LIMIT = 60;
+const ASSESSMENT_QUESTION_COUNT = 10;
+const MAX_ASSESSMENT_DRAFTS_PER_TASK_CODE = 2;
 const THEORY_QUESTION_COUNT_MIN = 2;
 const THEORY_QUESTION_COUNT_MAX = 5;
 const WEEKDAY_OPTIONS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
@@ -1236,10 +1238,6 @@ async function buildImportedMissionFromSource({
     targetDate,
   });
   const missionDraftId = String(payload.missionDraftId || "").trim();
-  const title =
-    String(payload.title || "").trim() ||
-    parsedDraft.title ||
-    `${subject.name} Mission`;
   const importedItemCount =
     draftFormat === "ESSAY_BUILDER"
       ? Number(
@@ -1259,6 +1257,21 @@ async function buildImportedMissionFromSource({
           { required: true },
         )
       : null;
+  const assessmentCreationMetadata = missionDraftId
+    ? { title: "", assessmentSequenceByTaskCode: {} }
+    : await resolveAssessmentDraftCreationMetadata({
+        teacherId,
+        studentId,
+        subjectId: String(subject._id),
+        draftFormat,
+        questionCount: importedItemCount,
+        taskCodes: normalizedTaskCodes,
+      });
+  const title =
+    assessmentCreationMetadata.title ||
+    String(payload.title || "").trim() ||
+    parsedDraft.title ||
+    `${subject.name} Mission`;
   const baseMission = {
     id: "",
     title,
@@ -1277,6 +1290,8 @@ async function buildImportedMissionFromSource({
     availableOnDay: availability.availableOnDay,
     difficulty,
     taskCodes: normalizedTaskCodes,
+    assessmentSequenceByTaskCode:
+      assessmentCreationMetadata.assessmentSequenceByTaskCode,
     sourceFileName: extractedSource.fileName,
     sourceFileType: extractedSource.mimeType,
     questions: draftFormat === "ESSAY_BUILDER" ? [] : parsedDraft.questions,
@@ -1327,6 +1342,8 @@ async function buildImportedMissionFromSource({
     availableOnDay: baseMission.availableOnDay,
     difficulty: baseMission.difficulty,
     taskCodes: normalizedTaskCodes,
+    assessmentSequenceByTaskCode:
+      baseMission.assessmentSequenceByTaskCode,
     ...certificationSnapshot,
     xpReward: resolveMissionRewardPolicy({
       draftFormat,
@@ -1529,6 +1546,127 @@ function normalizeTaskCodes(taskCodes) {
   }
 
   return [...new Set(normalized)];
+}
+
+function countAssessmentDraftsByTaskCode(drafts) {
+  const counts = {};
+
+  for (const draft of Array.isArray(drafts) ? drafts : []) {
+    const taskCodes = Array.isArray(draft?.taskCodes)
+      ? draft.taskCodes
+          .map((value) => String(value || "").trim().toUpperCase())
+          .filter((value) => /^[PMD]\d+$/.test(value))
+      : [];
+
+    // WHY: One assessment can target several codes under the existing task
+    // focus rules, but duplicate values on one record must count only once.
+    for (const taskCode of new Set(taskCodes)) {
+      counts[taskCode] = Number(counts[taskCode] || 0) + 1;
+    }
+  }
+
+  return counts;
+}
+
+async function listAssessmentDraftCounts(teacherId, studentId, subjectId) {
+  const normalizedStudentId = String(studentId || "").trim();
+  const normalizedSubjectId = String(subjectId || "").trim();
+
+  if (!normalizedStudentId || !normalizedSubjectId) {
+    throw createError(
+      400,
+      "Student and subject are required to count assessment drafts.",
+    );
+  }
+
+  const assessmentDrafts = await Mission.find({
+    createdBy: teacherId,
+    studentId: normalizedStudentId,
+    subjectId: normalizedSubjectId,
+    status: "draft",
+    draftFormat: "QUESTIONS",
+    manualResultOnly: { $ne: true },
+    "questions.9": { $exists: true },
+    "questions.10": { $exists: false },
+  })
+    .select("taskCodes")
+    .lean();
+
+  return {
+    counts: countAssessmentDraftsByTaskCode(assessmentDrafts),
+    maxDraftsPerTaskCode: MAX_ASSESSMENT_DRAFTS_PER_TASK_CODE,
+  };
+}
+
+async function resolveAssessmentDraftCreationMetadata({
+  teacherId,
+  studentId,
+  subjectId,
+  draftFormat,
+  questionCount,
+  taskCodes,
+}) {
+  const normalizedDraftFormat = normalizeDraftFormat(draftFormat);
+  const normalizedTaskCodes = normalizeTaskCodes(taskCodes);
+  const isAssessmentDraft =
+    normalizedDraftFormat === "QUESTIONS" &&
+    Number(questionCount) === ASSESSMENT_QUESTION_COUNT;
+
+  if (!isAssessmentDraft || normalizedTaskCodes.length === 0) {
+    return {
+      title: "",
+      assessmentSequenceByTaskCode: {},
+    };
+  }
+
+  const availability = await listAssessmentDraftCounts(
+    teacherId,
+    studentId,
+    subjectId,
+  );
+  const blockedTaskCodes = normalizedTaskCodes.filter(
+    (taskCode) =>
+      Number(availability.counts[taskCode] || 0) >=
+      MAX_ASSESSMENT_DRAFTS_PER_TASK_CODE,
+  );
+
+  if (blockedTaskCodes.length > 0) {
+    const existingCounts = blockedTaskCodes
+      .map(
+        (taskCode) =>
+          `${taskCode} already has ${Number(
+            availability.counts[taskCode] || 0,
+          )} assessment drafts`,
+      )
+      .join("; ");
+    // WHY: Assessment B is optional and count one is valid. Only a third (or
+    // later legacy overflow) is rejected at the server-owned creation boundary.
+    throw createError(
+      409,
+      `${existingCounts}. No additional assessment draft can be created for ${
+        blockedTaskCodes.length === 1 ? "this task focus" : "these task focuses"
+      }.`,
+    );
+  }
+
+  const assessmentSequenceByTaskCode = normalizedTaskCodes.reduce(
+    (sequences, taskCode) => ({
+      ...sequences,
+      [taskCode]: Number(availability.counts[taskCode] || 0) === 0 ? "A" : "B",
+    }),
+    {},
+  );
+  const title = normalizedTaskCodes
+    .map(
+      (taskCode) =>
+        `${taskCode} Assessment ${assessmentSequenceByTaskCode[taskCode]}`,
+    )
+    .join(" + ");
+
+  return {
+    title,
+    assessmentSequenceByTaskCode,
+  };
 }
 
 function normalizeDraftFormat(value) {
@@ -3251,9 +3389,18 @@ async function generateMission(teacherId, payload) {
     questionCount,
   }).xpReward;
   const normalizedTaskCodes = normalizeTaskCodes(payload.taskCodes);
+  const assessmentCreationMetadata =
+    await resolveAssessmentDraftCreationMetadata({
+      teacherId,
+      studentId: payload.studentId,
+      subjectId: payload.subjectId,
+      draftFormat,
+      questionCount,
+      taskCodes: normalizedTaskCodes,
+    });
   const unitText = payload.unitText.trim();
   const draftBase = {
-    title: payload.title.trim(),
+    title: assessmentCreationMetadata.title || payload.title.trim(),
     subjectName: subject.name,
     sessionType: payload.sessionType,
     studentName: student.name,
@@ -3286,7 +3433,7 @@ async function generateMission(teacherId, payload) {
     studentId: student._id,
     subjectId: subject._id,
     sessionType: payload.sessionType,
-    title: generated.title,
+    title: assessmentCreationMetadata.title || generated.title,
     teacherNote: generated.teacherNote,
     sourceUnitText: unitText,
     sourceRawText: String(payload.sourceRawText || payload.unitText || "").trim(),
@@ -3300,6 +3447,8 @@ async function generateMission(teacherId, payload) {
     availableOnDay: availability.availableOnDay,
     difficulty: payload.difficulty || "medium",
     taskCodes: normalizedTaskCodes,
+    assessmentSequenceByTaskCode:
+      assessmentCreationMetadata.assessmentSequenceByTaskCode,
     ...certificationSnapshot,
     xpReward,
     sourceFileName: String(payload.sourceFileName || "").trim(),
@@ -3807,6 +3956,9 @@ module.exports = {
   generateMission,
   previewMission,
   listDraftMissions,
+  listAssessmentDraftCounts,
+  countAssessmentDraftsByTaskCode,
+  resolveAssessmentDraftCreationMetadata,
   listRecentMissions,
   updateMission,
   deleteMission,
