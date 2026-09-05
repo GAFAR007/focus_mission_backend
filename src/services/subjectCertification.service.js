@@ -19,7 +19,6 @@ const Timetable = require("../models/Timetable");
 const User = require("../models/User");
 const {
   calculateCompletionPercentage,
-  isAssessmentQuestionCount,
 } = require("../utils/xpPolicy");
 const {
   calculateRequiredCorrectAnswers,
@@ -27,11 +26,18 @@ const {
 
 const CERTIFICATION_TASK_CODE_PATTERN = /^[PMD]\d+$/i;
 const THEORY_PASS_PERCENT = 70;
+const ASSESSMENT_QUESTION_COUNT = 10;
+const ASSESSMENT_PASS_CORRECT = calculateRequiredCorrectAnswers(
+  ASSESSMENT_QUESTION_COUNT,
+);
 const THEORY_REVIEW_PENDING = "pending_review";
 const THEORY_REVIEW_SCORED = "scored";
 const QUALIFYING_DRAFT_FORMATS = Object.freeze([
   "QUESTIONS",
   "THEORY",
+]);
+const CERTIFICATION_HISTORY_DRAFT_FORMATS = Object.freeze([
+  ...QUALIFYING_DRAFT_FORMATS,
   "ESSAY_BUILDER",
 ]);
 const PLAN_SOURCE = Object.freeze({
@@ -219,16 +225,14 @@ function isQualifyingMissionType(mission) {
     .trim()
     .toUpperCase();
 
-  if (!QUALIFYING_DRAFT_FORMATS.includes(draftFormat)) {
-    return false;
-  }
-
   if (draftFormat === "QUESTIONS") {
     const questionCount = Array.isArray(mission?.questions) ? mission.questions.length : 0;
-    return isAssessmentQuestionCount(questionCount);
+    // WHY: Only the formal 10-question assessment can occupy Assessment A or
+    // optional B. Q5, Q8, Tests, and Exams remain in their existing flows.
+    return questionCount === ASSESSMENT_QUESTION_COUNT;
   }
 
-  return true;
+  return draftFormat === "THEORY";
 }
 
 function resolveMissionCompletionTime(mission, resultPackage) {
@@ -242,6 +246,23 @@ function resolveMissionCompletionTime(mission, resultPackage) {
 
 function normalizeMissionTaskCodes(mission) {
   return normalizeTaskCodes(mission?.taskCodes);
+}
+
+function resolveAssessmentSequence(mission, taskCode) {
+  const sequenceMap = mission?.assessmentSequenceByTaskCode;
+  let value = "";
+
+  if (sequenceMap && typeof sequenceMap.get === "function") {
+    value = sequenceMap.get(taskCode) || sequenceMap.get(taskCode.toLowerCase()) || "";
+  } else if (sequenceMap && typeof sequenceMap === "object") {
+    const matchingEntry = Object.entries(sequenceMap).find(
+      ([key]) => String(key || "").trim().toUpperCase() === taskCode,
+    );
+    value = matchingEntry?.[1] || "";
+  }
+
+  const normalized = String(value || "").trim().toUpperCase();
+  return normalized === "A" || normalized === "B" ? normalized : "";
 }
 
 function missionUsesMatchingPlanContext(mission, settingsContext) {
@@ -309,6 +330,11 @@ function evaluateCertificationMission({
     .toUpperCase();
   const questionCount = Array.isArray(mission?.questions) ? mission.questions.length : 0;
   const completedAt = resolveMissionCompletionTime(mission, resultPackage);
+  const certificationTaskCode = normalizedTaskCodes.length === 1 ? normalizedTaskCodes[0] : "";
+  const assessmentSequence = draftFormat === "QUESTIONS" &&
+    questionCount === ASSESSMENT_QUESTION_COUNT && certificationTaskCode ?
+    resolveAssessmentSequence(mission, certificationTaskCode)
+  : "";
   const baseResponse = {
     certificationEnabled: settingsContext?.certificationEnabled === true,
     certificationLabel: resolveCertificationLabel(settingsContext?.certificationLabel),
@@ -317,11 +343,14 @@ function evaluateCertificationMission({
     planId: String(settingsContext?.planId || ""),
     planVersion: Number(settingsContext?.planVersion || 0),
     certificationEligible: false,
-    certificationTaskCode: normalizedTaskCodes.length === 1 ? normalizedTaskCodes[0] : "",
+    certificationTaskCode,
     certificationCounted: false,
     certificationPassStatus: CERTIFICATION_STATUS.NOT_ELIGIBLE,
     scorePercent: 0,
+    scoreCorrect: 0,
+    scoreTotal: draftFormat === "THEORY" ? 100 : questionCount,
     missionType: draftFormat,
+    assessmentSequence,
     missionId: String(mission?._id || mission?.id || ""),
     resultPackageId: String(resultPackage?._id || resultPackage?.id || ""),
     completedAt: completedAt ? new Date(completedAt).toISOString() : null,
@@ -346,9 +375,14 @@ function evaluateCertificationMission({
   }
 
   if (!isQualifyingMissionType(mission)) {
+    const progressOnlyReason = draftFormat === "ESSAY_BUILDER" ?
+      "Essay Builder completion is learning progress only and does not satisfy criterion achievement."
+    : draftFormat === "QUESTIONS" && (questionCount === 5 || questionCount === 8) ?
+      "Q5 and Q8 are learning progress only and do not satisfy criterion achievement."
+    : "This mission format does not qualify as Theory or Assessment A evidence.";
     return {
       ...baseResponse,
-      reason: "This mission format does not qualify for certification.",
+      reason: progressOnlyReason,
     };
   }
 
@@ -362,11 +396,11 @@ function evaluateCertificationMission({
     };
   }
 
-  const certificationTaskCode = normalizedTaskCodes[0];
-  if (!requiredTaskCodes.includes(certificationTaskCode)) {
+  const resolvedTaskCode = normalizedTaskCodes[0];
+  if (!requiredTaskCodes.includes(resolvedTaskCode)) {
     return {
       ...baseResponse,
-      certificationTaskCode,
+      certificationTaskCode: resolvedTaskCode,
       reason: "This task focus is not required for the active certification plan.",
     };
   }
@@ -375,21 +409,9 @@ function evaluateCertificationMission({
     return {
       ...baseResponse,
       certificationEligible: true,
-      certificationTaskCode,
+      certificationTaskCode: resolvedTaskCode,
       certificationPassStatus: CERTIFICATION_STATUS.NOT_PASSED,
       reason: "Result evidence is required before certification can be counted.",
-    };
-  }
-
-  if (draftFormat === "ESSAY_BUILDER") {
-    return {
-      ...baseResponse,
-      certificationEligible: true,
-      certificationTaskCode,
-      certificationCounted: true,
-      certificationPassStatus: CERTIFICATION_STATUS.PASSED,
-      scorePercent: 100,
-      reason: "",
     };
   }
 
@@ -409,28 +431,36 @@ function evaluateCertificationMission({
       return {
         ...baseResponse,
         certificationEligible: true,
-        certificationTaskCode,
+        certificationTaskCode: resolvedTaskCode,
         certificationPassStatus: CERTIFICATION_STATUS.PENDING_REVIEW,
         scorePercent: averageTeacherScorePercent,
+        scoreCorrect: averageTeacherScorePercent,
+        scoreTotal: 100,
         reason: "Theory missions do not count until teacher scoring is complete.",
       };
     }
 
+    // WHY: Theory is teacher-owned evidence and only satisfies its half of the
+    // criterion gate at the frozen 70 percent threshold.
     const passed = averageTeacherScorePercent >= THEORY_PASS_PERCENT;
     return {
       ...baseResponse,
       certificationEligible: true,
-      certificationTaskCode,
+      certificationTaskCode: resolvedTaskCode,
       certificationCounted: passed,
       certificationPassStatus: passed ?
         CERTIFICATION_STATUS.PASSED
       : CERTIFICATION_STATUS.NOT_PASSED,
       scorePercent: Number(averageTeacherScorePercent.toFixed(1)),
-      reason: passed ? "" : `Theory missions need at least ${THEORY_PASS_PERCENT}%.`,
+      scoreCorrect: Number(averageTeacherScorePercent.toFixed(1)),
+      scoreTotal: 100,
+      reason: passed ?
+        "Theory requirement passed; Assessment A is also required for criterion achievement."
+      : `Theory missions need at least ${THEORY_PASS_PERCENT}%.`,
     };
   }
 
-  const requiredCorrectAnswers = calculateRequiredCorrectAnswers(questionCount);
+  const requiredCorrectAnswers = ASSESSMENT_PASS_CORRECT;
   const scoreCorrect = Math.max(
     0,
     Number(
@@ -446,94 +476,190 @@ function evaluateCertificationMission({
       ),
     ),
   );
+  // WHY: Assessment A retains the frozen 7/10 formal-confirmation threshold;
+  // other question counts were excluded before this check.
   const passed = requiredCorrectAnswers > 0 && scoreCorrect >= requiredCorrectAnswers;
 
   return {
     ...baseResponse,
     certificationEligible: true,
-    certificationTaskCode,
-    certificationCounted: passed,
+    certificationTaskCode: resolvedTaskCode,
+    // WHY: Assessment B remains visible evidence but is never a required gate
+    // and therefore cannot independently count toward criterion achievement.
+    certificationCounted: passed && assessmentSequence !== "B",
     certificationPassStatus: passed ?
       CERTIFICATION_STATUS.PASSED
     : CERTIFICATION_STATUS.NOT_PASSED,
     scorePercent,
-    reason: passed ? "" : `This mission needs ${requiredCorrectAnswers} correct answers to count.`,
+    scoreCorrect,
+    scoreTotal: ASSESSMENT_QUESTION_COUNT,
+    reason: assessmentSequence === "B" ?
+      "Assessment B is optional confirmation and does not gate criterion achievement."
+    : passed ?
+      "Assessment A requirement passed; teacher-scored Theory is also required for criterion achievement."
+    :
+      `Assessment A needs at least ${requiredCorrectAnswers}/${ASSESSMENT_QUESTION_COUNT}.`,
   };
+}
+
+function sortByBestScore(left, right) {
+  const scoreDelta = Number(right?.scorePercent || 0) - Number(left?.scorePercent || 0);
+  if (scoreDelta !== 0) {
+    return scoreDelta;
+  }
+  return String(right?.completedAt || "").localeCompare(String(left?.completedAt || ""));
+}
+
+function selectBestStageEvidence(evaluations) {
+  const passed = evaluations
+    .filter((item) => item.certificationPassStatus === CERTIFICATION_STATUS.PASSED)
+    .sort(sortByBestScore);
+  if (passed.length > 0) {
+    return passed[0];
+  }
+
+  const pending = evaluations
+    .filter((item) => item.certificationPassStatus === CERTIFICATION_STATUS.PENDING_REVIEW)
+    .sort((left, right) =>
+      String(right?.completedAt || "").localeCompare(String(left?.completedAt || "")),
+    );
+  if (pending.length > 0) {
+    return pending[0];
+  }
+
+  const attempted = evaluations
+    .filter((item) => item.certificationPassStatus === CERTIFICATION_STATUS.NOT_PASSED)
+    .sort(sortByBestScore);
+  return attempted[0] || null;
+}
+
+function resolveAssessmentEvidenceSlots(taskEvaluations) {
+  const assessmentEvaluations = taskEvaluations.filter(
+    (item) => item.missionType === "QUESTIONS",
+  );
+  const assessmentA = assessmentEvaluations.filter(
+    (item) => item.assessmentSequence === "A",
+  );
+  const assessmentB = assessmentEvaluations.filter(
+    (item) => item.assessmentSequence === "B",
+  );
+  const unsequenced = assessmentEvaluations
+    .filter((item) => !item.assessmentSequence)
+    .sort((left, right) => {
+      const completedComparison = String(left?.completedAt || "")
+        .localeCompare(String(right?.completedAt || ""));
+      return completedComparison !== 0 ? completedComparison :
+        String(left?.missionId || "").localeCompare(String(right?.missionId || ""));
+    });
+
+  if (assessmentA.length === 0 && unsequenced.length > 0) {
+    // WHY: Historical 10-question assessments predate stored A/B metadata. The
+    // earliest legacy assessment is deterministically treated as A in memory;
+    // no historical record is rewritten.
+    assessmentA.push(unsequenced.shift());
+  }
+  assessmentB.push(...unsequenced);
+
+  return {
+    assessmentA: selectBestStageEvidence(assessmentA),
+    assessmentB: selectBestStageEvidence(assessmentB),
+  };
+}
+
+function evidenceStatus(evaluation) {
+  return evaluation?.certificationPassStatus || CERTIFICATION_STATUS.NOT_STARTED;
+}
+
+function evidencePassed(evaluation) {
+  return evidenceStatus(evaluation) === CERTIFICATION_STATUS.PASSED;
+}
+
+function resolveCriterionReason({ theory, assessmentA, criterionPassed }) {
+  if (criterionPassed) {
+    return "Theory and Assessment A passed. Assessment B is optional confirmation.";
+  }
+
+  const theoryStatus = evidenceStatus(theory);
+  const assessmentAStatus = evidenceStatus(assessmentA);
+  if (theoryStatus === CERTIFICATION_STATUS.PENDING_REVIEW) {
+    return assessmentAStatus === CERTIFICATION_STATUS.PASSED ?
+      "Theory is waiting for teacher scoring; Assessment A is already passed."
+    : `Theory is waiting for teacher scoring and Assessment A must reach ${ASSESSMENT_PASS_CORRECT}/${ASSESSMENT_QUESTION_COUNT}.`;
+  }
+  if (theoryStatus === CERTIFICATION_STATUS.PASSED) {
+    return `Assessment A must reach ${ASSESSMENT_PASS_CORRECT}/${ASSESSMENT_QUESTION_COUNT}; Theory is already passed.`;
+  }
+  if (assessmentAStatus === CERTIFICATION_STATUS.PASSED) {
+    return `Theory must be teacher-scored at ${THEORY_PASS_PERCENT}% or higher; Assessment A is already passed.`;
+  }
+  return `Theory at ${THEORY_PASS_PERCENT}% or higher and Assessment A at ${ASSESSMENT_PASS_CORRECT}/${ASSESSMENT_QUESTION_COUNT} are both required.`;
 }
 
 function pickBestEvidenceRow(evaluations, taskCode) {
   const taskEvaluations = evaluations.filter(
     (item) => item.certificationEligible && item.certificationTaskCode === taskCode,
   );
+  const theory = selectBestStageEvidence(
+    taskEvaluations.filter((item) => item.missionType === "THEORY"),
+  );
+  const { assessmentA, assessmentB } = resolveAssessmentEvidenceSlots(taskEvaluations);
+  const theoryPassed = evidencePassed(theory);
+  const assessmentAPassed = evidencePassed(assessmentA);
+  // WHY: A task focus is achieved only after both independent required
+  // evidence stages pass; neither learning progress nor optional B can bypass.
+  const criterionPassed = theoryPassed && assessmentAPassed;
+  const hasRequiredEvidence = Boolean(theory || assessmentA);
+  const status = criterionPassed ? CERTIFICATION_STATUS.PASSED :
+    evidenceStatus(theory) === CERTIFICATION_STATUS.PENDING_REVIEW ?
+      CERTIFICATION_STATUS.PENDING_REVIEW
+    : hasRequiredEvidence ? CERTIFICATION_STATUS.NOT_PASSED : CERTIFICATION_STATUS.NOT_STARTED;
 
-  const sortByBestScore = (left, right) => {
-    const scoreDelta = Number(right?.scorePercent || 0) - Number(left?.scorePercent || 0);
-    if (scoreDelta !== 0) {
-      return scoreDelta;
-    }
-    return String(right?.completedAt || "").localeCompare(String(left?.completedAt || ""));
-  };
-
-  const passed = taskEvaluations
-    .filter((item) => item.certificationPassStatus === CERTIFICATION_STATUS.PASSED)
-    .sort(sortByBestScore);
-  if (passed.length > 0) {
-    const best = passed[0];
-    return {
-      taskCode,
-      status: CERTIFICATION_STATUS.PASSED,
-      bestScorePercent: Number(best.scorePercent || 0),
-      bestMissionId: String(best.missionId || ""),
-      bestResultPackageId: String(best.resultPackageId || ""),
-      missionType: String(best.missionType || ""),
-      completedAt: best.completedAt,
-      reason: "",
-    };
+  let primaryEvidence = theory || assessmentA;
+  if (criterionPassed || theoryPassed) {
+    primaryEvidence = assessmentA || theory;
+  } else if (assessmentAPassed) {
+    primaryEvidence = theory || assessmentA;
   }
 
-  const pending = taskEvaluations
-    .filter((item) => item.certificationPassStatus === CERTIFICATION_STATUS.PENDING_REVIEW)
-    .sort((left, right) => String(right?.completedAt || "").localeCompare(String(left?.completedAt || "")));
-  if (pending.length > 0) {
-    const latest = pending[0];
-    return {
-      taskCode,
-      status: CERTIFICATION_STATUS.PENDING_REVIEW,
-      bestScorePercent: Number(latest.scorePercent || 0),
-      bestMissionId: String(latest.missionId || ""),
-      bestResultPackageId: String(latest.resultPackageId || ""),
-      missionType: String(latest.missionType || ""),
-      completedAt: latest.completedAt,
-      reason: String(latest.reason || ""),
-    };
-  }
-
-  const attempted = taskEvaluations
-    .filter((item) => item.certificationPassStatus === CERTIFICATION_STATUS.NOT_PASSED)
-    .sort(sortByBestScore);
-  if (attempted.length > 0) {
-    const bestAttempt = attempted[0];
-    return {
-      taskCode,
-      status: CERTIFICATION_STATUS.NOT_PASSED,
-      bestScorePercent: Number(bestAttempt.scorePercent || 0),
-      bestMissionId: String(bestAttempt.missionId || ""),
-      bestResultPackageId: String(bestAttempt.resultPackageId || ""),
-      missionType: String(bestAttempt.missionType || ""),
-      completedAt: bestAttempt.completedAt,
-      reason: String(bestAttempt.reason || ""),
-    };
-  }
+  const bestScorePercent = criterionPassed ?
+    Number(((Number(theory.scorePercent || 0) + Number(assessmentA.scorePercent || 0)) / 2).toFixed(1))
+  : Number(primaryEvidence?.scorePercent || 0);
 
   return {
     taskCode,
-    status: CERTIFICATION_STATUS.NOT_STARTED,
-    bestScorePercent: 0,
-    bestMissionId: "",
-    bestResultPackageId: "",
-    missionType: "",
-    completedAt: null,
-    reason: "",
+    status,
+    theoryPassed,
+    theoryStatus: evidenceStatus(theory),
+    theoryScorePercent: Number(theory?.scorePercent || 0),
+    theoryMissionId: String(theory?.missionId || ""),
+    theoryResultPackageId: String(theory?.resultPackageId || ""),
+    theoryCompletedAt: theory?.completedAt || null,
+    assessmentAPassed,
+    assessmentAStatus: evidenceStatus(assessmentA),
+    assessmentAScorePercent: Number(assessmentA?.scorePercent || 0),
+    assessmentACorrect: Number(assessmentA?.scoreCorrect || 0),
+    assessmentATotal: Number(assessmentA?.scoreTotal || ASSESSMENT_QUESTION_COUNT),
+    assessmentAMissionId: String(assessmentA?.missionId || ""),
+    assessmentAResultPackageId: String(assessmentA?.resultPackageId || ""),
+    assessmentACompletedAt: assessmentA?.completedAt || null,
+    assessmentBPassed: evidencePassed(assessmentB),
+    assessmentBStatus: evidenceStatus(assessmentB),
+    assessmentBScorePercent: Number(assessmentB?.scorePercent || 0),
+    assessmentBCorrect: Number(assessmentB?.scoreCorrect || 0),
+    assessmentBTotal: Number(assessmentB?.scoreTotal || ASSESSMENT_QUESTION_COUNT),
+    assessmentBMissionId: String(assessmentB?.missionId || ""),
+    assessmentBResultPackageId: String(assessmentB?.resultPackageId || ""),
+    assessmentBCompletedAt: assessmentB?.completedAt || null,
+    bestScorePercent,
+    bestMissionId: String(primaryEvidence?.missionId || ""),
+    bestResultPackageId: String(primaryEvidence?.resultPackageId || ""),
+    missionType: criterionPassed ?
+      "THEORY_AND_ASSESSMENT_A"
+    : String(primaryEvidence?.missionType || ""),
+    completedAt: criterionPassed ?
+      [theory?.completedAt, assessmentA?.completedAt].filter(Boolean).sort().at(-1) || null
+    : primaryEvidence?.completedAt || null,
+    reason: resolveCriterionReason({ theory, assessmentA, criterionPassed }),
   };
 }
 
@@ -944,6 +1070,9 @@ async function getMissionCertificationSummary({
       planId: "",
       planVersion: 0,
       scorePercent: 0,
+      scoreCorrect: 0,
+      scoreTotal: 0,
+      assessmentSequence: "",
     };
   }
 
@@ -971,6 +1100,9 @@ async function getMissionCertificationSummary({
     planId: settingsContext.planId,
     planVersion: settingsContext.planVersion,
     scorePercent: Number(evaluation.scorePercent || 0),
+    scoreCorrect: Number(evaluation.scoreCorrect || 0),
+    scoreTotal: Number(evaluation.scoreTotal || 0),
+    assessmentSequence: String(evaluation.assessmentSequence || ""),
   };
 }
 
@@ -999,7 +1131,9 @@ async function subjectHasLiveCertificationEvidence(subjectId) {
     Mission.exists({
       subjectId,
       latestResultPackageId: { $exists: true, $ne: null },
-      draftFormat: { $in: QUALIFYING_DRAFT_FORMATS },
+      // WHY: Essay is no longer achievement evidence, but its historical plan
+      // context must still stop legacy certification templates being rewritten.
+      draftFormat: { $in: CERTIFICATION_HISTORY_DRAFT_FORMATS },
       "taskCodes.0": { $exists: true },
       "taskCodes.1": { $exists: false },
       $or: [{ status: "published" }, { status: { $exists: false } }],
@@ -1052,11 +1186,14 @@ async function updateSubjectCertificationSettings({
 }
 
 module.exports = {
+  ASSESSMENT_PASS_CORRECT,
+  ASSESSMENT_QUESTION_COUNT,
   CERTIFICATION_STATUS,
   PLAN_SOURCE,
   QUALIFYING_DRAFT_FORMATS,
   THEORY_PASS_PERCENT,
   buildMissionCertificationSnapshot,
+  buildSubjectCertificationSummary,
   evaluateCertificationMission,
   getMissionCertificationSummary,
   getStudentCertificationSummaries,

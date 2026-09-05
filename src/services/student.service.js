@@ -110,6 +110,12 @@ function buildMissionHistoryStatusLabel({
   resultPackage,
   certificationSummary,
 }) {
+  if (missionType === "ESSAY_BUILDER") {
+    // WHY: Guided Essay Builder work remains completed learning progress, but
+    // it is not a standalone qualification pass under the achievement rule.
+    return "Completed";
+  }
+
   if (missionType === "THEORY") {
     const reviewStatus = String(resultPackage?.evidence?.reviewStatus || "")
       .trim()
@@ -1453,6 +1459,7 @@ async function completeSession(payload) {
 }
 
 module.exports = {
+  buildStudentMissionHistoryItem,
   getDashboard,
   getStudentResultReport,
   getSubjectReport,
