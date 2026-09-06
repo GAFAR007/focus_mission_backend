@@ -1,7 +1,7 @@
 /**
  * WHAT:
- * auth.service handles login validation, token issuance, journey-day tracking,
- * and avatar profile updates.
+ * auth.service handles login validation, protected Quick Fill lookup, token
+ * issuance, journey-day tracking, and avatar profile updates.
  * WHY:
  * Authentication is also where the app establishes the learner's ongoing
  * journey, so credential checks and login-day rules must stay centralized and
@@ -17,6 +17,7 @@ const mongoose = require("mongoose");
 
 const SessionLog = require("../models/SessionLog");
 const User = require("../models/User");
+const accessGateService = require("./accessGate.service");
 const {
   getCalendarDayDifference,
   serializeJourney,
@@ -427,10 +428,14 @@ async function login({ email, password }) {
   });
 }
 
-async function listDemoAccounts({ role }) {
+async function listDemoAccounts({ role, accessGroup }) {
+  const normalizedRole = accessGateService.assertRoleAllowed({
+    accessGroup,
+    role: normalizeRole(role),
+  });
+  // WHY: Reject cross-group enumeration before touching MongoDB, then confirm
+  // the authorised request can use the live account source.
   ensureDatabaseReady();
-
-  const normalizedRole = normalizeRole(role);
   const users = await User.find({
     role: normalizedRole,
     isArchived: { $ne: true },
@@ -440,8 +445,8 @@ async function listDemoAccounts({ role }) {
     .select("name email role subjectSpecialty subjectSpecialties isPlaceholder")
     .lean();
 
-  // WHY: The public quick-fill list should expose only the safe fields needed
-  // for login chips, never password hashes or assignment relationships.
+  // WHY: An authorised Quick Fill list exposes only the fields needed for
+  // login chips, never password hashes or assignment relationships.
   return users.map(serializeDemoAccount);
 }
 

@@ -1,7 +1,7 @@
 /**
  * WHAT:
- * auth.controller exposes login, public demo-account, and current-user profile
- * handlers.
+ * auth.controller exposes login, school-gated demo-account, and current-user
+ * profile handlers.
  * WHY:
  * Authentication, quick-fill login helpers, and profile updates need a thin
  * controller layer so request parsing stays separate from credential and
@@ -25,6 +25,7 @@ async function getDemoAccounts(req, res, next) {
   try {
     const accounts = await authService.listDemoAccounts({
       role: req.query.role,
+      accessGroup: req.schoolAccess.accessGroup,
     });
     res.json({ accounts });
   } catch (error) {

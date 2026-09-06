@@ -22,6 +22,9 @@ const {
 } = require("./middleware/error.middleware");
 
 const app = express();
+// WHY: Production runs behind one Render proxy, so req.ip must resolve the
+// visitor rather than rate-limiting every school user under the proxy address.
+app.set("trust proxy", 1);
 const configuredOrigins = String(process.env.CLIENT_ORIGIN || "")
   .split(",")
   .map((origin) => origin.trim())
@@ -67,7 +70,11 @@ app.use(
     },
     credentials: true,
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-School-Access-Token",
+    ],
   }),
 );
 app.use(helmet());

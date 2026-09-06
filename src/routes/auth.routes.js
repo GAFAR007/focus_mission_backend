@@ -1,7 +1,7 @@
 /**
  * WHAT:
- * auth.routes registers the public login, demo-account, and protected profile
- * routes.
+ * auth.routes registers public login and access verification, school-gated
+ * demo-account lookup, and protected profile routes.
  * WHY:
  * Authentication needs a small dedicated route surface so credentials and
  * profile updates stay separate from subject and progression flows.
@@ -12,11 +12,33 @@
 const express = require("express");
 const { body, query } = require("express-validator");
 
+const accessGateController = require("../controllers/accessGate.controller");
 const authController = require("../controllers/auth.controller");
+const {
+  requireSchoolAccess,
+} = require("../middleware/accessGate.middleware");
 const { protect } = require("../middleware/auth.middleware");
 const { validateRequest } = require("../middleware/validate.middleware");
 
 const router = express.Router();
+
+router.post(
+  "/access-gate/verify",
+  [
+    body("code")
+      .isString()
+      .bail()
+      .custom((value) => {
+        const code = String(value || "").trim();
+        // WHY: A bounded non-empty string rejects malformed traffic without
+        // revealing the real access-code length or format.
+        return code.length > 0 && code.length <= 256;
+      })
+      .withMessage("A valid access code is required."),
+    validateRequest,
+  ],
+  accessGateController.verify,
+);
 
 router.post(
   "/login",
@@ -57,6 +79,7 @@ router.post(
 router.get(
   "/demo-accounts",
   [
+    requireSchoolAccess,
     query("role")
       .isIn(["student", "teacher", "mentor", "management"])
       .withMessage("role must be student, teacher, mentor, or management."),
