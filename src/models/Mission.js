@@ -187,6 +187,24 @@ const missionSchema = new mongoose.Schema(
       // WHY: Teacher review must happen before a student can access AI-assisted
       // content, so missions cannot skip the draft state.
     },
+    isArchived: {
+      type: Boolean,
+      default: false,
+      index: true,
+      // WHY: Archive hides an unapproved draft without destroying its content
+      // or its assessment A/B audit metadata.
+    },
+    archivedAt: {
+      type: Date,
+      default: null,
+    },
+    archivedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      // WHY: Draft archive actions are teacher-owned and must remain
+      // attributable if recovery/audit tooling is added later.
+    },
     aiModel: {
       type: String,
       default: "",
@@ -383,6 +401,7 @@ missionSchema.index({
   subjectId: 1,
   sessionType: 1,
   status: 1,
+  isArchived: 1,
   createdAt: -1,
 });
 

@@ -817,6 +817,24 @@ router.post(
   teacherController.reextractMissionSource,
 );
 
+router.post(
+  "/missions/:missionId/archive",
+  [
+    param("missionId")
+      .isMongoId()
+      .withMessage(
+        "Valid missionId is required.",
+      ),
+    body("studentId")
+      .isMongoId()
+      .withMessage(
+        "Valid studentId is required.",
+      ),
+    validateRequest,
+  ],
+  teacherController.archiveMission,
+);
+
 router.patch(
   "/missions/:missionId",
   [
@@ -942,6 +960,11 @@ router.delete(
       .isMongoId()
       .withMessage(
         "Valid missionId is required.",
+      ),
+    query("studentId")
+      .isMongoId()
+      .withMessage(
+        "Valid studentId is required.",
       ),
     validateRequest,
   ],

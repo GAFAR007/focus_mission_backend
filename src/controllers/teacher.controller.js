@@ -302,11 +302,28 @@ async function deleteMission(req, res, next) {
   try {
     const deleted = await teacherService.deleteMission(
       req.user.id,
+      req.query.studentId,
       req.params.missionId,
     );
     res.json({
       success: true,
       missionId: deleted.missionId,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function archiveMission(req, res, next) {
+  try {
+    const archived = await teacherService.archiveMission(
+      req.user.id,
+      req.body.studentId,
+      req.params.missionId,
+    );
+    res.json({
+      success: true,
+      missionId: archived.missionId,
     });
   } catch (error) {
     next(error);
@@ -790,6 +807,7 @@ module.exports = {
   reuseMissionDraft,
   getRecentMissions,
   updateMission,
+  archiveMission,
   deleteMission,
   getStandalonePapers,
   createStandalonePaper,

@@ -59,7 +59,6 @@ const {
   parseYouTubeVideoUrl,
 } = require("../utils/youtubeVideo");
 
-const DRAFT_MISSIONS_LIMIT = 5;
 const RECENT_MISSIONS_HISTORY_LIMIT = 50;
 const TEACHER_RESULTS_HISTORY_LIMIT = 60;
 const ASSESSMENT_QUESTION_COUNT = 10;
@@ -1619,6 +1618,8 @@ async function listAssessmentDraftCounts(teacherId, studentId, subjectId) {
     studentId: normalizedStudentId,
     subjectId: normalizedSubjectId,
     status: "draft",
+    // WHY: Archived assessments intentionally remain in A/B allocation
+    // history so hiding a draft cannot silently create a replacement identity.
     draftFormat: "QUESTIONS",
     manualResultOnly: { $ne: true },
     "questions.9": { $exists: true },
@@ -3707,10 +3708,10 @@ async function listDraftMissions(teacherId, studentId) {
     createdBy: teacherId,
     studentId,
     status: "draft",
+    isArchived: { $ne: true },
     manualResultOnly: { $ne: true },
   })
     .sort({ updatedAt: -1, createdAt: -1 })
-    .limit(DRAFT_MISSIONS_LIMIT)
     .populate("subjectId", "name icon color")
     .lean();
 
@@ -3767,6 +3768,7 @@ async function getStudentMissionPathway({
       studentId,
       subjectId: { $in: scopedSubjectIds },
       manualResultOnly: { $ne: true },
+      isArchived: { $ne: true },
       taskFocusAssignedAt: { $exists: true, $ne: null },
       "taskCodes.0": { $exists: true },
       $or: [
@@ -3813,6 +3815,7 @@ async function reuseMissionDraft(teacherId, missionId, payload) {
     _id: missionId,
     createdBy: teacherId,
     status: "draft",
+    isArchived: { $ne: true },
     manualResultOnly: { $ne: true },
   }).lean();
 
@@ -4052,6 +4055,7 @@ async function updateMission(teacherId, missionId, payload) {
   const mission = await Mission.findOne({
     _id: missionId,
     createdBy: teacherId,
+    isArchived: { $ne: true },
   });
 
   if (!mission) {
@@ -4279,27 +4283,116 @@ async function updateMission(teacherId, missionId, payload) {
   return serializeMission(savedMission);
 }
 
-async function deleteMission(teacherId, missionId) {
-  const mission = await Mission.findOne({
+function assertMissionCanBeManagedAsDraft(mission, actionLabel) {
+  // WHY: A mission that was published or produced result evidence is no
+  // longer disposable draft content, even if its status was later reset.
+  const hasResultEvidence =
+    Boolean(mission?.publishedAt) ||
+    Boolean(mission?.latestResultPackageId) ||
+    Number(mission?.latestScoreTotal || 0) > 0 ||
+    Number(mission?.latestXpEarned || 0) > 0;
+
+  if (mission?.status !== "draft" || hasResultEvidence) {
+    throw createError(
+      400,
+      `Only uncompleted draft missions can be ${actionLabel}.`,
+    );
+  }
+}
+
+function buildTeacherStudentDraftRecordFilter(teacherId, studentId, missionId) {
+  // WHY: A mission id alone is not enough authority; management actions must
+  // match the signed-in creator and the student currently visible in the UI.
+  return {
     _id: missionId,
     createdBy: teacherId,
-  }).lean();
+    studentId,
+    isArchived: { $ne: true },
+    manualResultOnly: { $ne: true },
+  };
+}
+
+function buildUncompletedDraftMutationFilter(teacherId, studentId, missionId) {
+  // WHY: Recheck the evidence boundary in the atomic write/delete query so a
+  // concurrent publish or result save cannot be archived or deleted.
+  return {
+    ...buildTeacherStudentDraftRecordFilter(teacherId, studentId, missionId),
+    status: "draft",
+    publishedAt: null,
+    latestResultPackageId: null,
+    $and: [
+      {
+        $or: [
+          { latestScoreTotal: { $lte: 0 } },
+          { latestScoreTotal: { $exists: false } },
+        ],
+      },
+      {
+        $or: [
+          { latestXpEarned: { $lte: 0 } },
+          { latestXpEarned: { $exists: false } },
+        ],
+      },
+    ],
+  };
+}
+
+async function archiveMission(teacherId, studentId, missionId) {
+  console.info("[teacher] mission_draft_archive_start", {
+    teacherId: String(teacherId || ""),
+    studentId: String(studentId || ""),
+    missionId: String(missionId || ""),
+  });
+
+  const mission = await Mission.findOne(
+    buildTeacherStudentDraftRecordFilter(teacherId, studentId, missionId),
+  ).lean();
 
   if (!mission) {
     throw createError(404, "Mission not found.");
   }
 
-  // WHY: Published missions represent assigned work and audit history, so this
-  // delete path is intentionally limited to draft-only missions.
-  if (mission.status !== "draft") {
-    throw createError(400, "Only draft missions can be deleted.");
+  assertMissionCanBeManagedAsDraft(mission, "archived");
+
+  const archiveTime = getNow();
+  const archive = await Mission.updateOne(
+    buildUncompletedDraftMutationFilter(teacherId, studentId, missionId),
+    {
+      $set: {
+        isArchived: true,
+        archivedAt: archiveTime,
+        archivedBy: teacherId,
+      },
+    },
+  );
+
+  if (!archive.modifiedCount) {
+    throw createError(409, "Draft mission could not be archived.");
   }
 
-  const deletion = await Mission.deleteOne({
-    _id: missionId,
-    createdBy: teacherId,
-    status: "draft",
+  console.info("[teacher] mission_draft_archive_complete", {
+    teacherId: String(teacherId || ""),
+    studentId: String(studentId || ""),
+    missionId: String(missionId || ""),
   });
+
+  return { missionId: String(missionId) };
+}
+
+async function deleteMission(teacherId, studentId, missionId) {
+  const mission = await Mission.findOne(
+    buildTeacherStudentDraftRecordFilter(teacherId, studentId, missionId),
+  ).lean();
+
+  if (!mission) {
+    throw createError(404, "Mission not found.");
+  }
+
+  assertMissionCanBeManagedAsDraft(mission, "deleted");
+
+  const deletion = await Mission.deleteOne(
+    buildUncompletedDraftMutationFilter(teacherId, studentId, missionId),
+  );
 
   if (!deletion.deletedCount) {
     throw createError(409, "Draft mission could not be deleted.");
@@ -4386,6 +4479,7 @@ module.exports = {
   resolveTaskFocusAssignedAt,
   listRecentMissions,
   updateMission,
+  archiveMission,
   deleteMission,
   reextractMissionSource,
 };
