@@ -300,6 +300,7 @@ const WEEKDAY_LOOKUP = {
   sunday: "Sunday",
 };
 const ESSAY_SUBMISSION_MIN_WORDS = 100;
+const ESSAY_SUBMISSION_MAX_WORDS = 500;
 
 function countWords(value) {
   return String(value || "")
@@ -382,6 +383,15 @@ function validateEssayBuilderSubmission({
     throw createError(
       422,
       `Write at least ${ESSAY_SUBMISSION_MIN_WORDS} words in the final essay response before submitting.`,
+    );
+  }
+
+  if (submissionWordCount > ESSAY_SUBMISSION_MAX_WORDS) {
+    // WHY: Server authority must match the student's visible 100-500 range so
+    // direct API calls cannot submit an oversized final response.
+    throw createError(
+      422,
+      `Keep the final essay response to ${ESSAY_SUBMISSION_MAX_WORDS} words or fewer before submitting.`,
     );
   }
 }

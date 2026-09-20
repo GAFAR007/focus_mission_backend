@@ -218,7 +218,7 @@ test("final Theory submission still enforces each question minimum", () => {
   ));
 });
 
-test("final Essay submission keeps its existing 100-word minimum", () => {
+test("final Essay submission enforces the 100-500 word range", () => {
   assert.throws(
     () => studentService.validateEssayBuilderSubmission({
       missionQuestionCount: 1,
@@ -232,6 +232,19 @@ test("final Essay submission keeps its existing 100-word minimum", () => {
     correctAnswers: 1,
     finalEssayText: Array.from({ length: 100 }, () => "word").join(" "),
   }));
+  assert.doesNotThrow(() => studentService.validateEssayBuilderSubmission({
+    missionQuestionCount: 1,
+    correctAnswers: 1,
+    finalEssayText: Array.from({ length: 500 }, () => "word").join(" "),
+  }));
+  assert.throws(
+    () => studentService.validateEssayBuilderSubmission({
+      missionQuestionCount: 1,
+      correctAnswers: 1,
+      finalEssayText: Array.from({ length: 501 }, () => "word").join(" "),
+    }),
+    /500 words or fewer/,
+  );
 });
 
 test("GET draft mission lookup is scoped to authenticated student ownership", async () => {
