@@ -920,7 +920,7 @@ function buildTheoryEvidence({
   const responseByIndex = new Map();
   for (const response of Array.isArray(theoryResponses) ? theoryResponses : []) {
     const questionIndex = Number(response?.questionIndex);
-    const answerText = normalizeText(response?.answerText || "");
+    const answerText = String(response?.answerText || "");
     const suppliedWordCount = Number(response?.wordCount || 0);
     if (!Number.isInteger(questionIndex) || questionIndex < 0) {
       continue;
@@ -934,13 +934,15 @@ function buildTheoryEvidence({
   const perQuestion = Array.isArray(missionQuestions)
     ? missionQuestions.map((question, index) => {
         const response = responseByIndex.get(index);
-        const studentAnswer = normalizeText(response?.answerText || "");
+        // WHY: Written qualification evidence must preserve the learner's
+        // exact submitted spelling, spacing, capitalization, and line breaks.
+        const studentAnswer = String(response?.answerText || "");
         const studentWordCount = countWords(studentAnswer);
         const minimumWordCount = Math.max(
           1,
           Number(question?.minWordCount || 0),
         );
-        const attempted = studentAnswer.length > 0;
+        const attempted = studentAnswer.trim().length > 0;
         const meetsMinimumWords = attempted && studentWordCount >= minimumWordCount;
 
         return {
@@ -951,9 +953,9 @@ function buildTheoryEvidence({
           ).trim(),
           minimumWordCount,
           studentAnswer,
-          studentWordCount: response?.wordCount > 0
-            ? Number(response.wordCount)
-            : studentWordCount,
+          // WHY: Evidence word counts are derived from the submitted text on
+          // the server instead of trusting a client-supplied summary.
+          studentWordCount,
           meetsMinimumWords,
           attempted,
           teacherScorePercent: null,
@@ -1364,7 +1366,7 @@ function buildEssaySentenceOutput(
           part?.options,
         );
       const correctOptionLetter = String(
-        part?.correctOption || "",
+        part?.correctOption || part?.correctKey || "",
       )
         .trim()
         .toUpperCase();
@@ -1436,6 +1438,8 @@ function buildEssayEvidence({
     draftJson?.sentences,
   ) ?
       draftJson.sentences
+    : Array.isArray(draftJson?.builder?.sentences) ?
+      draftJson.builder.sentences
     : [];
 
   for (const sentence of sentences) {
@@ -1476,20 +1480,20 @@ function buildEssayEvidence({
     });
   }
 
-  const finalEssayText =
-    normalizeText(
-      essayBuilderEvidence?.finalEssayText ||
+  const submittedFinalEssayText = essayBuilderEvidence?.finalEssayText;
+  const finalEssayText = submittedFinalEssayText !== undefined &&
+      submittedFinalEssayText !== null &&
+      String(submittedFinalEssayText).trim().length > 0
+    ? String(submittedFinalEssayText)
+    : normalizeText(
         sentenceEvidence
           .map(
             (item) =>
               item.fullSentenceOutput,
           )
           .join(" "),
-    );
-  const finalWordCount = Number(
-    essayBuilderEvidence?.finalWordCount ||
-      countWords(finalEssayText),
-  );
+      );
+  const finalWordCount = countWords(finalEssayText);
   const blankCompletionCount = Number(
     essayBuilderEvidence?.blankCompletedCount ||
       sentenceEvidence.reduce(
@@ -1512,6 +1516,8 @@ function buildEssayEvidence({
   const blankTargetCount = Number(
     essayBuilderEvidence?.blankTargetCount ||
       draftJson?.targets
+        ?.targetBlankCount ||
+      draftJson?.builder
         ?.targetBlankCount ||
       0,
   );
@@ -4713,6 +4719,8 @@ async function getResultScreenshotForTeacher({
 }
 
 module.exports = {
+  buildEssayEvidence,
+  buildTheoryEvidence,
   createResultPackageForCompletion,
   ensureResultPackageForMission,
   createManualResultPackageFromUpload,

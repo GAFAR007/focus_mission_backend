@@ -18,6 +18,7 @@ const standalonePaperService = require("../services/standalonePaper.service");
 const standalonePaperSessionService = require("../services/standalonePaperSession.service");
 const subjectCertificationService = require("../services/subjectCertification.service");
 const teacherService = require("../services/teacher.service");
+const criterionReportService = require("../services/criterionReport.service");
 
 const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -130,6 +131,55 @@ async function getStudentMissionPathway(req, res, next) {
       subjectId: req.query.subjectId,
     });
     res.json(pathway);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getCriterionDraftReport(req, res, next) {
+  try {
+    const report = await criterionReportService.getCriterionDraftReport({
+      teacherId: req.user.id,
+      studentId: req.params.id,
+      subjectId: req.params.subjectId,
+      taskCode: req.params.taskCode,
+    });
+    res.json({ report });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function saveCriterionDraftReport(req, res, next) {
+  try {
+    const report = await criterionReportService.saveCriterionReportDraft({
+      teacherId: req.user.id,
+      studentId: req.params.id,
+      subjectId: req.params.subjectId,
+      taskCode: req.params.taskCode,
+      payload: req.body,
+    });
+    res.json({ report });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function exportCriterionDraftReportPdf(req, res, next) {
+  try {
+    const exported = await criterionReportService.exportCriterionDraftReportPdf({
+      teacherId: req.user.id,
+      studentId: req.params.id,
+      subjectId: req.params.subjectId,
+      taskCode: req.params.taskCode,
+    });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Length", String(exported.pdf.length));
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${exported.fileName}"`,
+    );
+    res.send(exported.pdf);
   } catch (error) {
     next(error);
   }
@@ -791,6 +841,9 @@ module.exports = {
   getSubjects,
   getStudentResults,
   getStudentMissionPathway,
+  getCriterionDraftReport,
+  saveCriterionDraftReport,
+  exportCriterionDraftReportPdf,
   getStudentCertification,
   updateStudentCertificationPlan,
   createTimetable,

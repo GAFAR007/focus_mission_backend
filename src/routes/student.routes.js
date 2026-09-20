@@ -81,6 +81,60 @@ router.get(
 );
 
 router.get(
+  "/missions/:missionId/work-draft",
+  [
+    authorizeRoles("student"),
+    param("missionId").isMongoId().withMessage("Valid missionId is required."),
+    validateRequest,
+  ],
+  studentController.getMissionWorkDraft,
+);
+
+router.put(
+  "/missions/:missionId/work-draft",
+  [
+    authorizeRoles("student"),
+    param("missionId").isMongoId().withMessage("Valid missionId is required."),
+    body("theoryResponses")
+      .optional()
+      .isArray({ max: 10 })
+      .withMessage("theoryResponses must include up to 10 entries."),
+    body("theoryResponses.*.questionIndex")
+      .optional()
+      .isInt({ min: 0, max: 9 })
+      .withMessage("questionIndex must be between 0 and 9."),
+    body("theoryResponses.*.answerText")
+      .optional()
+      .isString()
+      .withMessage("answerText must be text."),
+    body("essayBuilder")
+      .optional()
+      .isObject()
+      .withMessage("essayBuilder must be an object."),
+    body("essayBuilder.selectedAnswers")
+      .optional()
+      .isArray({ max: 240 })
+      .withMessage("selectedAnswers must include up to 240 entries."),
+    body("essayBuilder.currentSentenceIndex")
+      .optional()
+      .isInt({ min: 0, max: 60 })
+      .withMessage("currentSentenceIndex must be between 0 and 60."),
+    body("essayBuilder.finalEssayText")
+      .optional()
+      .isString()
+      .withMessage("finalEssayText must be text."),
+    body().custom((value) => {
+      if (value?.theoryResponses === undefined && value?.essayBuilder === undefined) {
+        throw new Error("Theory or Essay Builder draft work is required.");
+      }
+      return true;
+    }),
+    validateRequest,
+  ],
+  studentController.saveMissionWorkDraft,
+);
+
+router.get(
   "/standalone-papers/:studentId",
   [
     authorizeRoles("student"),

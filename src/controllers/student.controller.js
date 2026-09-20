@@ -10,6 +10,7 @@
  * start-session, and complete-session payloads.
  */
 const studentService = require("../services/student.service");
+const missionWorkDraftService = require("../services/missionWorkDraft.service");
 const standalonePaperSessionService = require("../services/standalonePaperSession.service");
 
 async function getDashboard(req, res, next) {
@@ -83,6 +84,33 @@ async function completeSession(req, res, next) {
   try {
     const result = await studentService.completeSession(req.body);
     res.status(201).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getMissionWorkDraft(req, res, next) {
+  try {
+    const workDraft = await missionWorkDraftService.getMissionWorkDraft({
+      // WHY: Draft ownership comes from the verified token. A client cannot
+      // select another learner by supplying a studentId in the request body.
+      studentId: req.user.id,
+      missionId: req.params.missionId,
+    });
+    res.json({ workDraft });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function saveMissionWorkDraft(req, res, next) {
+  try {
+    const workDraft = await missionWorkDraftService.saveMissionWorkDraft({
+      studentId: req.user.id,
+      missionId: req.params.missionId,
+      payload: req.body,
+    });
+    res.json({ workDraft });
   } catch (error) {
     next(error);
   }
@@ -188,6 +216,8 @@ module.exports = {
   listAssignedMissions,
   startSession,
   completeSession,
+  getMissionWorkDraft,
+  saveMissionWorkDraft,
   listStandalonePapers,
   startStandalonePaperSession,
   getStandalonePaperSession,

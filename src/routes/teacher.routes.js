@@ -178,6 +178,58 @@ router.get(
   teacherController.getStudentMissionPathway,
 );
 
+router.get(
+  "/students/:id/subjects/:subjectId/task-focus/:taskCode/draft-report",
+  [
+    param("id").isMongoId().withMessage("Valid student id is required."),
+    param("subjectId").isMongoId().withMessage("Valid subject id is required."),
+    param("taskCode")
+      .matches(/^[PMD]\d+$/i)
+      .withMessage("Task code must look like P1, P2, M1, or D1."),
+    validateRequest,
+  ],
+  teacherController.getCriterionDraftReport,
+);
+
+router.put(
+  "/students/:id/subjects/:subjectId/task-focus/:taskCode/draft-report",
+  [
+    param("id").isMongoId().withMessage("Valid student id is required."),
+    param("subjectId").isMongoId().withMessage("Valid subject id is required."),
+    param("taskCode")
+      .matches(/^[PMD]\d+$/i)
+      .withMessage("Task code must look like P1, P2, M1, or D1."),
+    body("essayTeacherComment")
+      .isString()
+      .withMessage("essayTeacherComment must be text."),
+    body("essayNextTime").isString().withMessage("essayNextTime must be text."),
+    body("theoryQuestionComments")
+      .isArray({ max: 10 })
+      .withMessage("theoryQuestionComments must include up to 10 entries."),
+    body("theoryQuestionComments.*.questionIndex")
+      .isInt({ min: 0, max: 9 })
+      .withMessage("Theory questionIndex must be between 0 and 9."),
+    body("theoryQuestionComments.*.comment")
+      .isString()
+      .withMessage("Theory report comment must be text."),
+    validateRequest,
+  ],
+  teacherController.saveCriterionDraftReport,
+);
+
+router.get(
+  "/students/:id/subjects/:subjectId/task-focus/:taskCode/draft-report.pdf",
+  [
+    param("id").isMongoId().withMessage("Valid student id is required."),
+    param("subjectId").isMongoId().withMessage("Valid subject id is required."),
+    param("taskCode")
+      .matches(/^[PMD]\d+$/i)
+      .withMessage("Task code must look like P1, P2, M1, or D1."),
+    validateRequest,
+  ],
+  teacherController.exportCriterionDraftReportPdf,
+);
+
 router.patch(
   "/students/:id/subjects/:subjectId/certification-plan",
   [

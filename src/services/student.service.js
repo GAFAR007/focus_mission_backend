@@ -18,6 +18,7 @@ const Target = require("../models/Target");
 const Timetable = require("../models/Timetable");
 const User = require("../models/User");
 const resultService = require("./result.service");
+const missionWorkDraftService = require("./missionWorkDraft.service");
 const standalonePaperSessionService = require("./standalonePaperSession.service");
 const subjectCertificationService = require("./subjectCertification.service");
 const {
@@ -324,6 +325,65 @@ function buildTheoryResponseMap(theoryResponses) {
     });
   }
   return responsesByIndex;
+}
+
+function validateTheorySubmission(missionQuestions, theoryResponses) {
+  const questions = Array.isArray(missionQuestions) ? missionQuestions : [];
+  const theoryResponsesByIndex = buildTheoryResponseMap(theoryResponses);
+
+  for (let index = 0; index < questions.length; index += 1) {
+    const response = theoryResponsesByIndex.get(index);
+    const answerText = String(response?.answerText || "").trim();
+    const answerWordCount = countWords(answerText);
+    const minimumWords = Math.max(
+      1,
+      Number(questions[index]?.minWordCount || 0),
+    );
+
+    if (!answerText) {
+      throw createError(
+        422,
+        `Theory question ${index + 1} needs a written answer before submission.`,
+      );
+    }
+
+    if (answerWordCount < minimumWords) {
+      // WHY: A saved partial draft is allowed, but final Theory submission must
+      // still satisfy every teacher-authored minimum-word requirement.
+      throw createError(
+        422,
+        `Theory question ${index + 1} needs at least ${minimumWords} words before submission.`,
+      );
+    }
+  }
+}
+
+function validateEssayBuilderSubmission({
+  missionQuestionCount,
+  correctAnswers,
+  finalEssayText,
+}) {
+  if (
+    missionQuestionCount > 0 &&
+    correctAnswers < missionQuestionCount
+  ) {
+    // WHY: Essay builder is a guided sequence; final submission requires all
+    // sentence checks correct before the free-write response is accepted.
+    throw createError(
+      422,
+      "Complete every guided sentence correctly before submitting your final essay response.",
+    );
+  }
+
+  const submissionWordCount = countWords(String(finalEssayText || "").trim());
+  if (submissionWordCount < ESSAY_SUBMISSION_MIN_WORDS) {
+    // WHY: Draft autosave may hold an incomplete Essay, while final submission
+    // keeps the existing minimum that proves a complete written response.
+    throw createError(
+      422,
+      `Write at least ${ESSAY_SUBMISSION_MIN_WORDS} words in the final essay response before submitting.`,
+    );
+  }
 }
 
 function normalizeWeekday(day) {
@@ -1124,38 +1184,13 @@ async function completeSession(payload) {
         resultPackageScoreCorrect = correctAnswers;
         resultPackageScoreTotal = missionQuestionCount;
       } else if (isTheory) {
-        const theoryResponsesByIndex = buildTheoryResponseMap(
+        validateTheorySubmission(
+          mission.questions,
           payload?.resultEvidence?.theoryResponses,
         );
 
         missionQuestionCount = totalQuestions;
         completedQuestions = totalQuestions;
-
-        for (let index = 0; index < totalQuestions; index += 1) {
-          const response = theoryResponsesByIndex.get(index);
-          const answerText = String(response?.answerText || "").trim();
-          const answerWordCount = countWords(answerText);
-          const minimumWords = Math.max(
-            1,
-            Number(mission?.questions?.[index]?.minWordCount || 0),
-          );
-
-          if (!answerText) {
-            throw createError(
-              422,
-              `Theory question ${index + 1} needs a written answer before submission.`,
-            );
-          }
-
-          if (answerWordCount < minimumWords) {
-            // WHY: Theory responses must hit the teacher-set minimum words so
-            // students cannot progress with placeholder fragments.
-            throw createError(
-              422,
-              `Theory question ${index + 1} needs at least ${minimumWords} words before submission.`,
-            );
-          }
-        }
 
         // WHY: Theory is a teacher-reviewed short-answer mission. Completion
         // stores evidence immediately, but XP remains pending until the
@@ -1229,18 +1264,6 @@ async function completeSession(payload) {
   }
 
   if (isEssayBuilderMission) {
-    if (
-      missionQuestionCount > 0 &&
-      correctAnswers < missionQuestionCount
-    ) {
-      // WHY: Essay builder is a guided sequence; final submission requires all
-      // sentence checks correct before the free-write response is accepted.
-      throw createError(
-        422,
-        "Complete every guided sentence correctly before submitting your final essay response.",
-      );
-    }
-
     const submissionEssayText = String(
       payload?.resultEvidence
         ?.essayBuilder
@@ -1249,20 +1272,12 @@ async function completeSession(payload) {
           ?.essayBuilder
           ?.submissionEssayText ||
         "",
-    ).trim();
-    const submissionWordCount =
-      countWords(submissionEssayText);
-    if (
-      submissionWordCount <
-      ESSAY_SUBMISSION_MIN_WORDS
-    ) {
-      // WHY: Essay submission requires a final written response to confirm
-      // understanding beyond guided option selection.
-      throw createError(
-        422,
-        `Write at least ${ESSAY_SUBMISSION_MIN_WORDS} words in the final essay response before submitting.`,
-      );
-    }
+    );
+    validateEssayBuilderSubmission({
+      missionQuestionCount,
+      correctAnswers,
+      finalEssayText: submissionEssayText,
+    });
   }
 
   if (missionToPersist) {
@@ -1403,6 +1418,26 @@ async function completeSession(payload) {
     resultEvidence: payload.resultEvidence,
   });
 
+  if (resultPackage && missionId) {
+    try {
+      await missionWorkDraftService.markMissionWorkDraftSubmitted({
+        studentId: payload.studentId,
+        missionId,
+        resultPackageId: resultPackage._id,
+      });
+    } catch (error) {
+      // WHY: ResultPackage creation is the authoritative final boundary. A
+      // secondary draft-status failure must not create a false failed-submit
+      // response after immutable evidence and mission linkage already exist.
+      console.error("[mission-draft] submit_mark_failed", {
+        studentId: String(payload.studentId || ""),
+        missionId,
+        resultPackageId: String(resultPackage._id || ""),
+        message: String(error?.message || error),
+      });
+    }
+  }
+
   // WHY: XP is applied only on explicit completion so rewards remain tied to
   // finished work and deterministic score rules.
   student.xp = Math.max(0, Number(student.xp || 0) + totalXpAwarded);
@@ -1467,4 +1502,6 @@ module.exports = {
   listAssignedMissions,
   startSession,
   completeSession,
+  validateTheorySubmission,
+  validateEssayBuilderSubmission,
 };

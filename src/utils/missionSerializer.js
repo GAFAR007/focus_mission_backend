@@ -86,7 +86,11 @@ function serializeMission(mission) {
     ? mission.subjectId
     : null;
   const essayTargetCount = mission.draftFormat === "ESSAY_BUILDER"
-    ? Number(mission?.draftJson?.targets?.targetSentenceCount || 0)
+    ? Number(
+        mission?.draftJson?.targets?.targetSentenceCount ||
+          mission?.draftJson?.builder?.targetSentenceCount ||
+          0,
+      )
     : 0;
   const questionCount =
     essayTargetCount > 0 ? essayTargetCount : (mission.questions || []).length;
