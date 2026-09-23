@@ -2,14 +2,15 @@
  * WHAT:
  * criterionReport.service assembles one live teacher-facing Task Focus report,
  * persists comment overrides, calculates the five-part weighted score, and
- * exports the same report as selectable PDF text.
+ * exports separate student and teacher copies as selectable PDF text.
  * WHY:
  * Teachers need a current report without mutating immutable ResultPackage
  * evidence or accidentally reusing an older score when a redo is pending.
  * HOW:
  * Authorize the teacher/student/subject boundary, choose the newest mission in
  * each evidence stage, load only its linked result, calculate on the backend,
- * merge separate comment overrides, and render JSON or PDF from one payload.
+ * merge separate comment overrides, and render a content-only Student Copy or
+ * full scoring Teacher Copy from one authoritative payload.
  */
 const PDFDocument = require("pdfkit");
 
@@ -25,6 +26,7 @@ const {
 } = require("../utils/missionPassPolicy");
 
 const TASK_CODE_PATTERN = /^[PMD]\d+$/;
+const REPORT_COPY_TYPES = Object.freeze(["student", "teacher"]);
 const SCORING_COMPONENTS = Object.freeze([
   Object.freeze({ key: "theory", label: "Theory", weight: 0.35 }),
   Object.freeze({ key: "assessmentA", label: "Assessment A", weight: 0.35 }),
@@ -46,6 +48,18 @@ function normalizeTaskCode(value) {
     throw createError(400, "Task code must look like P1, P2, M1, or D1.", "INVALID_TASK_CODE");
   }
   return taskCode;
+}
+
+function normalizeReportCopyType(value) {
+  const copyType = String(value || "teacher").trim().toLowerCase();
+  if (!REPORT_COPY_TYPES.includes(copyType)) {
+    throw createError(
+      400,
+      "Report copy must be student or teacher.",
+      "INVALID_REPORT_COPY",
+    );
+  }
+  return copyType;
 }
 
 function toTime(value) {
@@ -531,7 +545,7 @@ async function getCriterionDraftReport({ teacherId, studentId, subjectId, taskCo
     student: { id: String(context.student._id), name: context.student.name },
     subject: { id: String(context.subject._id), name: context.subject.name },
     taskCode: normalizedTaskCode,
-    title: `${context.student.name} — ${normalizedTaskCode} ${context.subject.name} Online Draft Report`,
+    title: `${context.student.name} - ${normalizedTaskCode} ${context.subject.name} Online Report`,
     criterionWording: criterionWording.text,
     criterionWordingAvailable: criterionWording.available,
     q5,
@@ -654,7 +668,8 @@ function objectiveLine(item) {
   return `${item.correct}/${item.total} — ${formatPercent(item.percent)} — ${item.passed ? "Passed" : "Not yet passed"}`;
 }
 
-function buildCriterionReportPdf(report) {
+function buildCriterionReportPdf(report, options = {}) {
+  const copyType = normalizeReportCopyType(options.copyType);
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: "A4", margins: { top: 44, bottom: 44, left: 48, right: 48 } });
     const chunks = [];
@@ -662,15 +677,81 @@ function buildCriterionReportPdf(report) {
     doc.on("end", () => resolve(Buffer.concat(chunks)));
     doc.on("error", reject);
 
-    const heading = (value) => {
-      doc.moveDown(0.7).font("Helvetica-Bold").fontSize(15).fillColor("#17365D").text(value);
+    const pdfText = (value, fallback = "-") => {
+      const text = String(value || "").trim();
+      return (text || fallback).replace(/[–—]/g, "-");
+    };
+    const remainingHeight = () => doc.page.height - doc.page.margins.bottom - doc.y;
+    const ensureSpace = (height) => {
+      if (remainingHeight() < height) {
+        doc.addPage();
+      }
+    };
+    const heading = (value, size = 15) => {
+      ensureSpace(size + 30);
+      doc.moveDown(0.7).font("Helvetica-Bold").fontSize(size).fillColor("#17365D").text(pdfText(value));
       doc.moveDown(0.25).font("Helvetica").fontSize(10.5).fillColor("#222222");
     };
-    const label = (value) => doc.font("Helvetica-Bold").text(value);
-    const body = (value) => doc.font("Helvetica").text(String(value || "-") || "-");
+    const label = (value) => doc.font("Helvetica-Bold").fillColor("#52698D").text(pdfText(value));
+    const body = (value) => doc.font("Helvetica").fillColor("#222222").text(pdfText(value));
+    const boxedBody = (labelText, value) => {
+      const text = pdfText(value, "Pending");
+      const width = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+      const contentWidth = width - 24;
+      doc.font("Helvetica").fontSize(10.5);
+      const textHeight = doc.heightOfString(text, { width: contentWidth });
+      const boxHeight = Math.max(62, textHeight + 43);
+      ensureSpace(boxHeight + 8);
+      const y = doc.y;
+      doc.save()
+        .rect(doc.page.margins.left, y, width, boxHeight)
+        .fillAndStroke("#F5F8FC", "#D7E1EF")
+        .restore();
+      doc.x = doc.page.margins.left + 12;
+      doc.y = y + 11;
+      doc.font("Helvetica").fontSize(9.5).fillColor("#52698D").text(pdfText(labelText), {
+        width: contentWidth,
+      });
+      doc.moveDown(0.55).font("Helvetica").fontSize(10.5).fillColor("#222222").text(text, {
+        width: contentWidth,
+      });
+      doc.x = doc.page.margins.left;
+      doc.y = y + boxHeight + 8;
+    };
+    const teacherComment = (comment, nextTime = "") => {
+      const feedback = pdfText(comment, "Pending");
+      const next = String(nextTime || "").trim();
+      return next ? `${feedback} Next time: ${pdfText(next)}` : feedback;
+    };
 
-    doc.font("Helvetica-Bold").fontSize(20).fillColor("#17365D").text(report.title);
+    const reportTitle = pdfText(report.title).replace(/\bDraft Report\b/gi, "Report");
+    doc.font("Helvetica-Bold").fontSize(20).fillColor("#17365D").text(reportTitle);
     doc.moveDown(0.5).font("Helvetica").fontSize(10.5).fillColor("#222222");
+
+    if (copyType === "student") {
+      heading("Essay Builder");
+      label("Question");
+      body(report.essay.question);
+      doc.moveDown(0.5);
+      boxedBody("Student answer - exactly as submitted", report.essay.finalEssayText);
+      boxedBody(
+        "Teacher comment",
+        teacherComment(report.essay.teacherComment, report.essay.nextTime),
+      );
+
+      heading("Theory");
+      for (const question of report.theory.questions) {
+        heading(`Theory Question ${question.questionIndex + 1}`, 13.5);
+        label("Question");
+        body(question.prompt);
+        doc.moveDown(0.5);
+        boxedBody("Student answer - exactly as submitted", question.studentAnswer);
+        boxedBody("Teacher comment", question.teacherComment);
+      }
+      doc.end();
+      return;
+    }
+
     label("Criterion wording");
     body(report.criterionWording);
 
@@ -685,34 +766,37 @@ function buildCriterionReportPdf(report) {
     label("Exact question / Teacher Note");
     body(report.essay.question);
     doc.moveDown(0.35);
-    label("Student final Essay — exactly as submitted");
+    label("Student final Essay - exactly as submitted");
     body(report.essay.finalEssayText || "Pending");
     doc.moveDown(0.35);
     label("Original score");
     body(report.essay.status === "scored"
-      ? `${report.essay.scoreCorrect}/${report.essay.scoreTotal} — ${formatPercent(report.essay.percent)}`
+      ? `${report.essay.scoreCorrect}/${report.essay.scoreTotal} - ${formatPercent(report.essay.percent)}`
       : "Pending");
-    label("Teacher Draft Comment");
+    label("Teacher Comment");
     body(report.essay.teacherComment);
     label("Next time");
     body(report.essay.nextTime);
 
     heading("Theory");
     body(report.theory.status === "scored"
-      ? `${formatPercent(report.theory.percent)} — ${report.theory.passed ? "Passed" : "Not yet passed"}`
+      ? `${formatPercent(report.theory.percent)} - ${report.theory.passed ? "Passed" : "Not yet passed"}`
       : "Pending");
     for (const question of report.theory.questions) {
+      // WHY: Keep each compact teacher-review question together instead of
+      // orphaning a score or comment label at the bottom of a PDF page.
+      ensureSpace(180);
       doc.moveDown(0.6);
       label(`Theory Question ${question.questionIndex + 1}`);
       label("Exact question asked");
       body(question.prompt);
-      label("Student answer — exactly as submitted");
+      label("Student answer - exactly as submitted");
       body(question.studentAnswer);
       label("Original teacher score");
       body(question.originalTeacherScore === null
         ? "Pending"
         : `${question.originalTeacherScore}/100`);
-      label("Teacher Draft Comment");
+      label("Teacher Comment");
       body(question.teacherComment);
     }
 
@@ -721,8 +805,8 @@ function buildCriterionReportPdf(report) {
     body(objectiveLine(report.assessmentA));
     label(report.assessmentB.label);
     body(report.assessmentB.status === "not_created"
-      ? "Optional — Not created"
-      : `Optional — ${objectiveLine(report.assessmentB)}`);
+      ? "Optional - Not created"
+      : `Optional - ${objectiveLine(report.assessmentB)}`);
 
     heading(`${report.taskCode} Overall Scoring Structure`);
     for (const row of report.scoringStructure) {
@@ -730,7 +814,7 @@ function buildCriterionReportPdf(report) {
     }
     body("Total: 100%");
 
-    heading(`${report.student.name} — ${report.taskCode} Calculation`);
+    heading(`${report.student.name} - ${report.taskCode} Calculation`);
     for (const row of report.calculation.rows) {
       body(`${row.label}: ${formatPercent(row.percent)} x ${row.weightPercent}% = ${row.contribution === null ? "Pending" : row.contribution.toFixed(2)}`);
     }
@@ -740,7 +824,7 @@ function buildCriterionReportPdf(report) {
       : formatPercent(report.calculation.overallPercent));
 
     heading(`Final ${report.taskCode} Status`);
-    body(`${report.student.name} — ${report.criterionStatus.passed ? "PASSED" : "Not yet achieved"}`);
+    body(`${report.student.name} - ${report.criterionStatus.passed ? "PASSED" : "Not yet achieved"}`);
     body(report.criterionStatus.reason);
     doc.end();
   });
@@ -748,10 +832,18 @@ function buildCriterionReportPdf(report) {
 
 async function exportCriterionDraftReportPdf(args) {
   const report = await getCriterionDraftReport(args);
+  const copyType = normalizeReportCopyType(args.copyType);
+  console.info("[criterion-report] pdf_export", {
+    teacherId: args.teacherId,
+    studentId: args.studentId,
+    subjectId: args.subjectId,
+    taskCode: report.taskCode,
+    copyType,
+  });
   return {
     report,
-    pdf: await buildCriterionReportPdf(report),
-    fileName: `${report.student.name}-${report.taskCode}-draft-report.pdf`
+    pdf: await buildCriterionReportPdf(report, { copyType }),
+    fileName: `${report.student.name}-${report.taskCode}-${copyType}-copy.pdf`
       .replace(/[^a-z0-9.-]+/gi, "-")
       .replace(/-+/g, "-"),
   };
@@ -765,6 +857,7 @@ module.exports = {
   exportCriterionDraftReportPdf,
   getCriterionDraftReport,
   missionStage,
+  normalizeReportCopyType,
   normalizeReportDraftPayload,
   objectiveEvidence,
   saveCriterionReportDraft,

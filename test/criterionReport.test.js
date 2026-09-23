@@ -10,8 +10,19 @@
  */
 const assert = require("node:assert/strict");
 const test = require("node:test");
+const { PDFParse } = require("pdf-parse");
 
 const criterionReportService = require("../src/services/criterionReport.service");
+
+async function extractPdfText(pdf) {
+  const parser = new PDFParse({ data: pdf });
+  try {
+    const result = await parser.getText();
+    return String(result.text || "").replace(/\s+/g, " ").trim();
+  } finally {
+    await parser.destroy();
+  }
+}
 
 function mission({
   id,
@@ -369,7 +380,7 @@ test("report comment normalization rejects invalid Theory indexes", () => {
   );
 });
 
-test("PDF export is a real PDF with font resources rather than image-only evidence", async () => {
+test("student and teacher PDF copies expose only their intended report detail", async () => {
   const pendingObjective = { label: "Q5 Daily", status: "pending" };
   const report = {
     title: "Sudais Dahir — P1 Business Online Draft Report",
@@ -415,9 +426,46 @@ test("PDF export is a real PDF with font resources rather than image-only eviden
     }),
     criterionStatus: { passed: false, reason: "Assessment A is pending." },
   };
-  const pdf = await criterionReportService.buildCriterionReportPdf(report);
-  assert.equal(pdf.subarray(0, 4).toString(), "%PDF");
-  const source = pdf.toString("latin1");
-  assert.match(source, /\/Font/);
-  assert.doesNotMatch(source, /\/Subtype\s*\/Image/);
+  const teacherPdf = await criterionReportService.buildCriterionReportPdf(report, {
+    copyType: "teacher",
+  });
+  const studentPdf = await criterionReportService.buildCriterionReportPdf(report, {
+    copyType: "student",
+  });
+  for (const pdf of [teacherPdf, studentPdf]) {
+    assert.equal(pdf.subarray(0, 4).toString(), "%PDF");
+    const source = pdf.toString("latin1");
+    assert.match(source, /\/Font/);
+    assert.doesNotMatch(source, /\/Subtype\s*\/Image/);
+  }
+
+  const [teacherText, studentText] = await Promise.all([
+    extractPdfText(teacherPdf),
+    extractPdfText(studentPdf),
+  ]);
+  assert.match(teacherText, /Sudais Dahir - P1 Business Online Report/);
+  assert.match(teacherText, /Criterion wording/);
+  assert.match(teacherText, /Original score/);
+  assert.match(teacherText, /P1 Calculation/);
+  assert.match(teacherText, /Teacher Comment/);
+  assert.doesNotMatch(teacherText, /Draft Report|Teacher Draft Comment/);
+
+  assert.match(studentText, /Sudais Dahir - P1 Business Online Report/);
+  assert.match(studentText, /Essay Builder/);
+  assert.match(studentText, /Student answer - exactly as submitted/);
+  assert.match(studentText, /Teacher comment/);
+  assert.match(studentText, /Clear evidence\. Next time: Develop the conclusion\./);
+  assert.doesNotMatch(
+    studentText,
+    /Criterion wording|Objective learning evidence|Original score|Overall Scoring Structure|Calculation|Draft Report/,
+  );
+});
+
+test("report copy validation defaults to teacher and rejects unknown copies", () => {
+  assert.equal(criterionReportService.normalizeReportCopyType(), "teacher");
+  assert.equal(criterionReportService.normalizeReportCopyType("student"), "student");
+  assert.throws(
+    () => criterionReportService.normalizeReportCopyType("parent"),
+    /must be student or teacher/,
+  );
 });

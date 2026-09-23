@@ -173,6 +173,7 @@ async function exportCriterionDraftReportPdf(req, res, next) {
       studentId: req.params.id,
       subjectId: req.params.subjectId,
       taskCode: req.params.taskCode,
+      copyType: req.query.copy,
     });
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Length", String(exported.pdf.length));

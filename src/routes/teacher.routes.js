@@ -225,6 +225,10 @@ router.get(
     param("taskCode")
       .matches(/^[PMD]\d+$/i)
       .withMessage("Task code must look like P1, P2, M1, or D1."),
+    query("copy")
+      .optional()
+      .isIn(["student", "teacher"])
+      .withMessage("Report copy must be student or teacher."),
     validateRequest,
   ],
   teacherController.exportCriterionDraftReportPdf,
