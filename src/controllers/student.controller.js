@@ -11,6 +11,7 @@
  */
 const studentService = require("../services/student.service");
 const missionWorkDraftService = require("../services/missionWorkDraft.service");
+const questionEvidenceService = require("../services/questionEvidence.service");
 const standalonePaperSessionService = require("../services/standalonePaperSession.service");
 
 async function getDashboard(req, res, next) {
@@ -111,6 +112,68 @@ async function saveMissionWorkDraft(req, res, next) {
       payload: req.body,
     });
     res.json({ workDraft });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function listMissionQuestionEvidence(req, res, next) {
+  try {
+    const evidenceFiles = await questionEvidenceService.listMissionQuestionEvidence({
+      actorId: req.user.id,
+      actorRole: "student",
+      missionId: req.params.missionId,
+    });
+    res.json({ evidenceFiles });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function uploadMissionQuestionEvidence(req, res, next) {
+  try {
+    const evidenceFile = await questionEvidenceService.uploadQuestionEvidence({
+      actorId: req.user.id,
+      actorRole: "student",
+      missionId: req.params.missionId,
+      questionIndex: Number(req.params.questionIndex),
+      file: req.file,
+    });
+    res.status(201).json({ evidenceFile });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function removeMissionQuestionEvidence(req, res, next) {
+  try {
+    const result = await questionEvidenceService.removeDraftQuestionEvidence({
+      actorId: req.user.id,
+      actorRole: "student",
+      missionId: req.params.missionId,
+      questionIndex: Number(req.params.questionIndex),
+    });
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function downloadQuestionEvidence(req, res, next) {
+  try {
+    const { record, stream } = await questionEvidenceService.openEvidenceDownload({
+      actorId: req.user.id,
+      actorRole: "student",
+      evidenceId: req.params.evidenceId,
+    });
+    res.setHeader("Content-Type", record.mimeType || "application/octet-stream");
+    res.setHeader("Content-Length", String(record.fileSize || 0));
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename*=UTF-8''${encodeURIComponent(record.originalFileName)}`,
+    );
+    stream.once("error", next);
+    stream.pipe(res);
   } catch (error) {
     next(error);
   }
@@ -218,6 +281,10 @@ module.exports = {
   completeSession,
   getMissionWorkDraft,
   saveMissionWorkDraft,
+  listMissionQuestionEvidence,
+  uploadMissionQuestionEvidence,
+  removeMissionQuestionEvidence,
+  downloadQuestionEvidence,
   listStandalonePapers,
   startStandalonePaperSession,
   getStandalonePaperSession,

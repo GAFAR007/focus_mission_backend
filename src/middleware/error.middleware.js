@@ -16,10 +16,16 @@ function notFoundHandler(req, _res, next) {
 }
 
 function errorHandler(error, _req, res, _next) {
-  const statusCode = error.statusCode || 500;
+  // WHY: Multer rejects oversized payloads before the controller runs. Map
+  // that trusted limit failure to a stable client response rather than a 500.
+  const isFileTooLarge = error?.name === "MulterError" &&
+    error?.code === "LIMIT_FILE_SIZE";
+  const statusCode = isFileTooLarge ? 413 : error.statusCode || 500;
 
   res.status(statusCode).json({
-    message: error.message || "Internal server error.",
+    message: isFileTooLarge
+      ? "Evidence files must be 10 MB or smaller."
+      : error.message || "Internal server error.",
     statusCode,
   });
 }

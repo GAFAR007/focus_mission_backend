@@ -16,6 +16,7 @@ const PDFDocument = require("pdfkit");
 
 const CriterionReportDraft = require("../models/CriterionReportDraft");
 const Mission = require("../models/Mission");
+const QuestionEvidenceFile = require("../models/QuestionEvidenceFile");
 const ResultPackage = require("../models/ResultPackage");
 const Subject = require("../models/Subject");
 const Timetable = require("../models/Timetable");
@@ -180,7 +181,13 @@ function resultIsLinkedAndCurrent(mission, resultPackage) {
 
 function objectiveEvidence(label, mission, resultPackage) {
   if (!mission) {
-    return { label, status: "pending", resultPackageId: "", missionId: "" };
+    return {
+      label,
+      status: "pending",
+      resultPackageId: "",
+      missionId: "",
+      questionEvidenceFiles: [],
+    };
   }
   if (!resultIsLinkedAndCurrent(mission, resultPackage)) {
     return {
@@ -188,6 +195,7 @@ function objectiveEvidence(label, mission, resultPackage) {
       status: "pending",
       missionId: String(mission._id || ""),
       resultPackageId: "",
+      questionEvidenceFiles: [],
     };
   }
   const score = resultPackage.meta?.score || {};
@@ -203,6 +211,9 @@ function objectiveEvidence(label, mission, resultPackage) {
     correct,
     total,
     percent,
+    questionEvidenceFiles: Array.isArray(
+      resultPackage?.evidence?.questionEvidenceFiles,
+    ) ? resultPackage.evidence.questionEvidenceFiles : [],
     // WHY: Result labels reuse the frozen mission policy instead of creating a
     // competing report-only pass threshold.
     passed: requiredCorrect > 0 && correct >= requiredCorrect,
@@ -283,6 +294,16 @@ function theoryEvidence(mission, resultPackage, reportDraft) {
       ? reportDraft.theoryQuestionComments
       : []).map((item) => [Number(item.questionIndex), String(item.comment || "")]),
   );
+  const evidenceFilesByQuestion = new Map();
+  for (const file of Array.isArray(evidence.questionEvidenceFiles)
+    ? evidence.questionEvidenceFiles
+    : []) {
+    const questionIndex = Number(file?.questionIndex);
+    if (!Number.isInteger(questionIndex)) continue;
+    const items = evidenceFilesByQuestion.get(questionIndex) || [];
+    items.push(file);
+    evidenceFilesByQuestion.set(questionIndex, items);
+  }
   const questions = (Array.isArray(evidence.questions) ? evidence.questions : []).map(
     (question, index) => ({
       questionIndex: index,
@@ -295,6 +316,7 @@ function theoryEvidence(mission, resultPackage, reportDraft) {
       teacherComment: overrides.has(index)
         ? overrides.get(index)
         : String(question?.teacherFeedback || ""),
+      evidenceFiles: evidenceFilesByQuestion.get(index) || [],
     }),
   );
   const percent = scored
@@ -484,7 +506,7 @@ async function getCriterionDraftReport({ teacherId, studentId, subjectId, taskCo
   const movedByIds = selectedMissions
     .map((mission) => String(mission?.evidenceMovedBy || ""))
     .filter(Boolean);
-  const [results, movedByTeachers] = await Promise.all([
+  const [results, movedByTeachers, questionEvidenceFiles] = await Promise.all([
     resultIds.length
       ? ResultPackage.find({ _id: { $in: resultIds } }).lean()
       : [],
@@ -493,8 +515,43 @@ async function getCriterionDraftReport({ teacherId, studentId, subjectId, taskCo
           .select("name")
           .lean()
       : [],
+    resultIds.length
+      ? QuestionEvidenceFile.find({
+          resultPackageId: { $in: resultIds },
+          status: "submitted",
+        }).sort({ questionIndex: 1, createdAt: 1 }).lean()
+      : [],
   ]);
-  const resultById = new Map(results.map((result) => [String(result._id), result]));
+  const filesByResultId = new Map();
+  for (const file of questionEvidenceFiles) {
+    const key = String(file.resultPackageId || "");
+    const items = filesByResultId.get(key) || [];
+    items.push({
+      id: String(file._id || ""),
+      originalFileName: String(file.originalFileName || ""),
+      detectedType: String(file.detectedType || ""),
+      fileSize: Number(file.fileSize || 0),
+      fileHash: String(file.fileHash || ""),
+      parsedType: String(file.parsedType || "unavailable"),
+      extractedContent: file.extractedContent || null,
+      previewStatus: String(file.previewStatus || "unavailable"),
+      extractionError: String(file.extractionError || ""),
+      uploadedAt: file.uploadedAt ? new Date(file.uploadedAt).toISOString() : null,
+      questionIndex: Number(file.questionIndex || 0),
+    });
+    filesByResultId.set(key, items);
+  }
+  const resultById = new Map(results.map((result) => [
+    String(result._id),
+    {
+      ...result,
+      evidence: {
+        ...(result.evidence || {}),
+        questionEvidenceFiles: filesByResultId.get(String(result._id)) ||
+          result?.evidence?.questionEvidenceFiles || [],
+      },
+    },
+  ]));
   const teacherById = new Map(
     movedByTeachers.map((teacher) => [String(teacher._id), String(teacher.name || "teacher")]),
   );
@@ -906,6 +963,63 @@ function buildCriterionReportPdf(report, options = {}) {
       const next = String(nextTime || "").trim();
       return next ? `${feedback} Next time: ${pdfText(next)}` : feedback;
     };
+    const extractedEvidenceText = (file) => {
+      const content = file?.extractedContent || {};
+      const blocks = [];
+      const addBlock = (block) => {
+        if (block?.type === "table") {
+          for (const row of Array.isArray(block.rows) ? block.rows.slice(0, 30) : []) {
+            blocks.push(row.map((cell) => String(cell ?? "")).join(" | "));
+          }
+        } else if (block?.type === "list") {
+          blocks.push(...(block.items || []).map((item) => `- ${String(item || "")}`));
+        } else if (block?.text) {
+          blocks.push(String(block.text));
+        }
+      };
+      for (const block of Array.isArray(content.blocks) ? content.blocks : []) addBlock(block);
+      for (const page of Array.isArray(content.pages) ? content.pages : []) {
+        blocks.push(`Page ${page.pageNumber}`);
+        for (const block of page.blocks || []) addBlock(block);
+      }
+      for (const slide of Array.isArray(content.slides) ? content.slides : []) {
+        blocks.push(`Slide ${slide.slideNumber}: ${slide.title || ""}`);
+        for (const block of slide.blocks || []) addBlock(block);
+      }
+      for (const sheet of Array.isArray(content.sheets) ? content.sheets : []) {
+        blocks.push(`Sheet: ${sheet.name || ""}`);
+        for (const row of (sheet.rows || []).slice(0, 30)) {
+          blocks.push((row.cells || []).map((cell) => {
+            if (cell && typeof cell === "object") {
+              const value = cell.displayedValue || cell.text || "";
+              if (cell.hyperlink) return `${value} (${cell.hyperlink})`;
+              if (cell.formula) return `${value} (=${cell.formula})`;
+              return value;
+            }
+            return String(cell ?? "");
+          }).join(" | "));
+        }
+      }
+      return blocks.join("\n").slice(0, 6000);
+    };
+    const renderEvidenceFiles = (files) => {
+      for (const file of Array.isArray(files) ? files : []) {
+        const uploaded = file.uploadedAt
+          ? new Date(file.uploadedAt).toLocaleDateString("en-GB")
+          : "Date unavailable";
+        panel(
+          "Uploaded evidence",
+          `${pdfText(file.originalFileName, "Document")} | ${String(file.detectedType || "file").toUpperCase()} | Uploaded ${uploaded} | SHA-256 ${String(file.fileHash || "").slice(0, 12) || "recorded"}`,
+          "neutral",
+        );
+        panel(
+          "Extracted evidence",
+          extractedEvidenceText(file),
+          file.previewStatus === "available" ? "blue" : "amber",
+          file.extractionError || "Preview unavailable. Review the retained original file.",
+        );
+      }
+    };
 
     titleBand();
     panel(
@@ -916,6 +1030,11 @@ function buildCriterionReportPdf(report, options = {}) {
     );
 
     if (copyType === "student") {
+      sectionHeading("Uploaded question evidence");
+      renderEvidenceFiles(report.q5.questionEvidenceFiles);
+      renderEvidenceFiles(report.q8.questionEvidenceFiles);
+      renderEvidenceFiles(report.assessmentA.questionEvidenceFiles);
+      renderEvidenceFiles(report.assessmentB.questionEvidenceFiles);
       sectionHeading("Essay Builder");
       panel("Question", report.essay.question, "neutral", "Question unavailable");
       panel("Your answer - exactly as submitted", report.essay.finalEssayText, "blue", "Pending");
@@ -938,6 +1057,7 @@ function buildCriterionReportPdf(report, options = {}) {
         sectionHeading(`Question ${question.questionIndex + 1}`);
         panel("Question", question.prompt, "neutral", "Question unavailable");
         panel("Your answer - exactly as submitted", question.studentAnswer, "blue", "Pending");
+        renderEvidenceFiles(question.evidenceFiles);
         panel("Teacher comment", question.teacherComment, "green", "No teacher comment added yet.");
       }
       finish();
@@ -949,6 +1069,8 @@ function buildCriterionReportPdf(report, options = {}) {
       { label: report.q5.label, value: objectiveLine(report.q5) },
       { label: report.q8.label, value: objectiveLine(report.q8) },
     ]);
+    renderEvidenceFiles(report.q5.questionEvidenceFiles);
+    renderEvidenceFiles(report.q8.questionEvidenceFiles);
 
     sectionHeading("Essay evidence");
     panel("Question / teacher note", report.essay.question, "neutral", "Question unavailable");
@@ -990,6 +1112,7 @@ function buildCriterionReportPdf(report, options = {}) {
       sectionHeading(`Theory question ${question.questionIndex + 1}`);
       panel("Exact question asked", question.prompt, "neutral", "Question unavailable");
       panel("Student answer - exactly as submitted", question.studentAnswer, "blue", "Pending");
+      renderEvidenceFiles(question.evidenceFiles);
       metricPair([
         {
           label: "Original teacher score",
@@ -1013,6 +1136,8 @@ function buildCriterionReportPdf(report, options = {}) {
           : objectiveLine(report.assessmentB),
       },
     ]);
+    renderEvidenceFiles(report.assessmentA.questionEvidenceFiles);
+    renderEvidenceFiles(report.assessmentB.questionEvidenceFiles);
 
     // WHY: Keep the complete weighted table and final status together so a
     // reader never has to interpret continuation rows without their headers.

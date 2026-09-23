@@ -156,11 +156,13 @@ test("Q5 and Q8 report evidence is result-only", () => {
     "missionId",
     "passed",
     "percent",
+    "questionEvidenceFiles",
     "resultPackageId",
     "status",
     "total",
   ]);
   assert.equal(evidence.percent, 100);
+  assert.deepEqual(evidence.questionEvidenceFiles, []);
 });
 
 test("Essay evidence keeps the exact question, full text, and original feedback", () => {
@@ -426,6 +428,16 @@ test("student and teacher PDF copies expose only their intended report detail", 
         studentAnswer: "An exact answer.",
         originalTeacherScore: 71,
         teacherComment: "Good.",
+        evidenceFiles: [{
+          originalFileName: "student-evidence.docx",
+          detectedType: "docx",
+          uploadedAt: "2026-09-23T10:00:00.000Z",
+          fileHash: "a".repeat(64),
+          previewStatus: "available",
+          extractedContent: {
+            blocks: [{ type: "paragraph", text: "Structured evidence text." }],
+          },
+        }],
       }],
     },
     assessmentA: { label: "P1 Assessment A", status: "pending" },
@@ -467,6 +479,8 @@ test("student and teacher PDF copies expose only their intended report detail", 
   assert.match(teacherText, /Original score/i);
   assert.match(teacherText, /P1 score calculation/i);
   assert.match(teacherText, /Teacher comment/i);
+  assert.match(teacherText, /student-evidence\.docx/);
+  assert.match(teacherText, /Structured evidence text\./);
   assert.match(teacherText, /Page 1 of/);
   assert.doesNotMatch(teacherText, /Draft Report|Teacher Draft Comment/);
 
@@ -476,6 +490,8 @@ test("student and teacher PDF copies expose only their intended report detail", 
   assert.match(studentText, /Essay Builder/);
   assert.match(studentText, /Your answer - exactly as submitted/i);
   assert.match(studentText, /Teacher comment/i);
+  assert.match(studentText, /student-evidence\.docx/);
+  assert.match(studentText, /Structured evidence text\./);
   assert.match(studentText, /Clear evidence\. Next time: Develop the conclusion\./);
   assert.doesNotMatch(
     studentText,

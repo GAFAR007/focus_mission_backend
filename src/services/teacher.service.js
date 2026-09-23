@@ -1784,7 +1784,7 @@ function resolveUploadedDraftQuestionCount({
 
 function buildTheoryQuestionsFromGenerated(questions) {
   return normalizeQuestions(
-    (Array.isArray(questions) ? questions : []).map((question) => {
+    (Array.isArray(questions) ? questions : []).map((question, index) => {
       const options = Array.isArray(question?.options)
         ? question.options.map((option) => String(option || "").trim())
         : [];
@@ -1796,6 +1796,7 @@ function buildTheoryQuestionsFromGenerated(questions) {
         : "";
 
       return {
+        id: String(question?.id || `question-${index + 1}`).trim(),
         answerMode: "short_answer",
         learningText: String(
           question?.learningText || question?.explanation || "",
@@ -1862,6 +1863,17 @@ function normalizeQuestions(
   if (!Array.isArray(questions) || questions.length < 1 || questions.length > 10) {
     throw createError(400, "Mission drafts must include between 1 and 10 questions.");
   }
+  const questionIds = questions.map((question, index) =>
+    String(question?.id || `question-${index + 1}`).trim(),
+  );
+  if (
+    questionIds.some((id) => !id || id.length > 160) ||
+    new Set(questionIds).size !== questionIds.length
+  ) {
+    // WHY: File evidence is keyed to this stable value. Duplicate or invalid
+    // ids could make one upload appear against a different authored question.
+    throw createError(400, "Mission questions must have unique stable ids.");
+  }
 
   if (normalizedDraftFormat === "THEORY") {
     if (
@@ -1908,6 +1920,7 @@ function normalizeQuestions(
       }
 
       return {
+        id: questionIds[index],
         answerMode: "short_answer",
         learningText,
         ...learningVideo,
@@ -1917,6 +1930,7 @@ function normalizeQuestions(
         explanation,
         expectedAnswer,
         minWordCount,
+        allowStudentUpload: question?.allowStudentUpload === true,
       };
     });
   }
@@ -1971,6 +1985,7 @@ function normalizeQuestions(
     }
 
     return {
+      id: questionIds[index],
       answerMode: "multiple_choice",
       learningText,
       ...learningVideo,
@@ -1980,12 +1995,15 @@ function normalizeQuestions(
       explanation,
       expectedAnswer: "",
       minWordCount: 0,
+      allowStudentUpload: question?.allowStudentUpload === true,
     };
   });
 }
 
 function copyMissionQuestion(question) {
+  const questionId = String(question?.id || "");
   return {
+    ...(questionId ? { id: questionId } : {}),
     answerMode: String(question?.answerMode || "multiple_choice"),
     learningText: String(question?.learningText || ""),
     learningVideoUrl: String(question?.learningVideoUrl || ""),
@@ -2000,6 +2018,9 @@ function copyMissionQuestion(question) {
     explanation: String(question?.explanation || ""),
     expectedAnswer: String(question?.expectedAnswer || ""),
     minWordCount: Number(question?.minWordCount || 0),
+    ...(question?.allowStudentUpload === true
+      ? { allowStudentUpload: true }
+      : {}),
   };
 }
 

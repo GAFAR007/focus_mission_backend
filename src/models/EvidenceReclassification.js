@@ -88,6 +88,13 @@ const evidenceReclassificationSchema = new mongoose.Schema(
       ref: "ResultPackage",
       default: null,
     },
+    questionEvidenceFileIds: {
+      type: [mongoose.Schema.Types.ObjectId],
+      ref: "QuestionEvidenceFile",
+      default: [],
+      // WHY: Move Evidence records the immutable attachment ids it carried so
+      // an audit can prove the original files were neither replaced nor lost.
+    },
     movedByTeacherId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

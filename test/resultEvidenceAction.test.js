@@ -96,6 +96,14 @@ function sourceResult({ stage = "THEORY" } = {}) {
         }
       : {
           finalEssayText: "Exact  final essay.\nSecond line.",
+          questionEvidenceFiles: [
+            {
+              id: "question-file-1",
+              questionIndex: 0,
+              originalFileName: "student-work.docx",
+              fileHash: "a".repeat(64),
+            },
+          ],
           teacherReviewStatus: "scored",
           teacherReview: { scorePercent: 75, teacherFeedback: "Historical" },
           perSentence: [
@@ -254,6 +262,10 @@ test("Moved target package preserves source evidence and XP snapshot without re-
   });
   assert.deepEqual(resultPackage, before);
   assert.equal(moved.evidence.finalEssayText, before.evidence.finalEssayText);
+  assert.deepEqual(
+    moved.evidence.questionEvidenceFiles,
+    before.evidence.questionEvidenceFiles,
+  );
   assert.equal(moved.meta.score.percent, 75);
   assert.equal(moved.meta.xpAwarded, 38);
   assert.deepEqual(moved.meta.taskCodes, ["P2"]);

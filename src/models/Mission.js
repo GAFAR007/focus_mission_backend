@@ -13,6 +13,14 @@ const mongoose = require("mongoose");
 
 const missionQuestionSchema = new mongoose.Schema(
   {
+    id: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 160,
+      // WHY: Question evidence must follow the authored question through
+      // draft edits instead of relying only on a changeable list position.
+    },
     answerMode: {
       type: String,
       enum: ["multiple_choice", "short_answer"],
@@ -97,6 +105,12 @@ const missionQuestionSchema = new mongoose.Schema(
       default: 0,
       // WHY: Teachers set a short-answer word expectation per theory question
       // so students know the minimum depth required before progression.
+    },
+    allowStudentUpload: {
+      type: Boolean,
+      default: false,
+      // WHY: File permission is authored per question. Historical missions
+      // remain safely disabled without requiring a data migration.
     },
   },
   { _id: false },

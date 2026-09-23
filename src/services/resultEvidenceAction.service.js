@@ -115,7 +115,9 @@ function countWords(value) {
 }
 
 function copyMissionQuestion(question) {
+  const questionId = String(question?.id || "");
   return {
+    ...(questionId ? { id: questionId } : {}),
     answerMode: String(question?.answerMode || "multiple_choice"),
     learningText: String(question?.learningText || ""),
     learningVideoUrl: String(question?.learningVideoUrl || ""),
@@ -130,6 +132,9 @@ function copyMissionQuestion(question) {
     explanation: String(question?.explanation || ""),
     expectedAnswer: String(question?.expectedAnswer || ""),
     minWordCount: Number(question?.minWordCount || 0),
+    ...(question?.allowStudentUpload === true
+      ? { allowStudentUpload: true }
+      : {}),
   };
 }
 
@@ -843,6 +848,13 @@ async function moveEvidence({
           replacedTargetMissionId: preview.targetConflictMissionId || null,
           replacedTargetResultPackageId:
             preview.targetConflictResultPackageId || null,
+          questionEvidenceFileIds: (
+            Array.isArray(resultPackage?.evidence?.questionEvidenceFiles)
+              ? resultPackage.evidence.questionEvidenceFiles
+              : []
+          )
+            .map((item) => item?.id || item?._id)
+            .filter((value) => mongoose.isValidObjectId(value)),
           movedByTeacherId: teacherId,
           movedAt,
           reason: normalizedReason,

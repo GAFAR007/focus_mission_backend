@@ -15,6 +15,7 @@ const mongoose = require("mongoose");
 const SessionLog = require("../models/SessionLog");
 const resultService = require("../services/result.service");
 const resultEvidenceActionService = require("../services/resultEvidenceAction.service");
+const questionEvidenceService = require("../services/questionEvidence.service");
 const standalonePaperService = require("../services/standalonePaper.service");
 const standalonePaperSessionService = require("../services/standalonePaperSession.service");
 const subjectCertificationService = require("../services/subjectCertification.service");
@@ -876,6 +877,68 @@ async function getResultScreenshot(req, res, next) {
   }
 }
 
+async function listMissionQuestionEvidence(req, res, next) {
+  try {
+    const evidenceFiles = await questionEvidenceService.listMissionQuestionEvidence({
+      actorId: req.user.id,
+      actorRole: "teacher",
+      missionId: req.params.missionId,
+    });
+    res.json({ evidenceFiles });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function uploadMissionQuestionEvidence(req, res, next) {
+  try {
+    const evidenceFile = await questionEvidenceService.uploadQuestionEvidence({
+      actorId: req.user.id,
+      actorRole: "teacher",
+      missionId: req.params.missionId,
+      questionIndex: Number(req.params.questionIndex),
+      file: req.file,
+    });
+    res.status(201).json({ evidenceFile });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function removeMissionQuestionEvidence(req, res, next) {
+  try {
+    const result = await questionEvidenceService.removeDraftQuestionEvidence({
+      actorId: req.user.id,
+      actorRole: "teacher",
+      missionId: req.params.missionId,
+      questionIndex: Number(req.params.questionIndex),
+    });
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function downloadQuestionEvidence(req, res, next) {
+  try {
+    const { record, stream } = await questionEvidenceService.openEvidenceDownload({
+      actorId: req.user.id,
+      actorRole: "teacher",
+      evidenceId: req.params.evidenceId,
+    });
+    res.setHeader("Content-Type", record.mimeType || "application/octet-stream");
+    res.setHeader("Content-Length", String(record.fileSize || 0));
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename*=UTF-8''${encodeURIComponent(record.originalFileName)}`,
+    );
+    stream.once("error", next);
+    stream.pipe(res);
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   createStudent,
   updateStudentYearGroup,
@@ -930,4 +993,8 @@ module.exports = {
   sendResultPackage,
   uploadResultScreenshot,
   getResultScreenshot,
+  listMissionQuestionEvidence,
+  uploadMissionQuestionEvidence,
+  removeMissionQuestionEvidence,
+  downloadQuestionEvidence,
 };

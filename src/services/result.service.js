@@ -22,6 +22,7 @@ const SendLog = require("../models/SendLog");
 const Subject = require("../models/Subject");
 const Timetable = require("../models/Timetable");
 const User = require("../models/User");
+const questionEvidenceService = require("./questionEvidence.service");
 const subjectCertificationService = require("./subjectCertification.service");
 const { serializeMission } = require("../utils/missionSerializer");
 const {
@@ -1706,6 +1707,11 @@ async function serializeResultPackageWithCertification(
   sendLogs = [],
 ) {
   let certification = null;
+  const questionEvidenceFiles = resultPackage?._id
+    ? await questionEvidenceService.questionEvidenceForResultPackage(
+        resultPackage._id,
+      )
+    : [];
   let resolvedResultKind = String(
     resultPackage?.resultKind || RESULT_KIND_MISSION,
   ).trim();
@@ -1748,6 +1754,12 @@ async function serializeResultPackageWithCertification(
       ...resultPackage,
       resultKind: resolvedResultKind || RESULT_KIND_MISSION,
       certification,
+      evidence: {
+        ...(resultPackage?.evidence || {}),
+        questionEvidenceFiles: questionEvidenceFiles.length > 0
+          ? questionEvidenceFiles
+          : resultPackage?.evidence?.questionEvidenceFiles || [],
+      },
     },
     sendLogs,
   );
@@ -1952,6 +1964,25 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function escapeHtmlWithSafeLinks(value) {
+  const text = String(value || "");
+  const links = questionEvidenceService.detectSafeLinks(text);
+  if (links.length === 0) {
+    return escapeHtml(text);
+  }
+  let cursor = 0;
+  const output = [];
+  for (const link of links) {
+    output.push(escapeHtml(text.slice(cursor, link.start)));
+    output.push(
+      `<a href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(link.text)}</a>`,
+    );
+    cursor = link.end;
+  }
+  output.push(escapeHtml(text.slice(cursor)));
+  return output.join("");
 }
 
 function buildResultSourceLabel(resultPackage) {
@@ -2453,6 +2484,71 @@ function buildResultReportPdfBuffer({
         doc.y = y + height + 4;
       };
 
+      const evidenceFilesByQuestion = new Map();
+      for (const file of Array.isArray(evidence.questionEvidenceFiles)
+        ? evidence.questionEvidenceFiles
+        : []) {
+        const questionIndex = Number(file?.questionIndex);
+        if (!Number.isInteger(questionIndex)) continue;
+        const files = evidenceFilesByQuestion.get(questionIndex) || [];
+        files.push(file);
+        evidenceFilesByQuestion.set(questionIndex, files);
+      }
+      const extractedEvidenceText = (file) => {
+        const content = file?.extractedContent || {};
+        const lines = [];
+        const addBlock = (block) => {
+          if (block?.text) lines.push(String(block.text));
+          for (const item of block?.items || []) lines.push(`- ${item}`);
+          for (const row of block?.rows || []) lines.push(row.join(" | "));
+        };
+        for (const block of content.blocks || []) addBlock(block);
+        for (const page of content.pages || []) {
+          lines.push(`Page ${page.pageNumber}`);
+          for (const block of page.blocks || []) addBlock(block);
+        }
+        for (const slide of content.slides || []) {
+          lines.push(`Slide ${slide.slideNumber}: ${slide.title || ""}`);
+          for (const block of slide.blocks || []) addBlock(block);
+        }
+        for (const sheet of content.sheets || []) {
+          lines.push(`Sheet: ${sheet.name || ""}`);
+          for (const row of (sheet.rows || []).slice(0, 30)) {
+            lines.push((row.cells || []).map((cell) =>
+              cell && typeof cell === "object"
+                ? cell.hyperlink
+                  ? `${cell.displayedValue || cell.text || ""} (${cell.hyperlink})`
+                  : cell.formula
+                    ? `${cell.displayedValue || cell.text || ""} (=${cell.formula})`
+                    : cell.displayedValue || cell.text || ""
+                : String(cell ?? ""),
+            ).join(" | "));
+          }
+        }
+        return lines.join("\n").slice(0, 6000);
+      };
+      const writeQuestionEvidence = (questionIndex) => {
+        for (const file of evidenceFilesByQuestion.get(questionIndex) || []) {
+          writeLine({
+            text: `Uploaded evidence: ${String(file.originalFileName || "Document")} (${String(file.detectedType || "file").toUpperCase()})`,
+            color: colors.heading,
+            bold: true,
+            indent: 10,
+          });
+          writeLine({
+            text: `Uploaded: ${String(file.uploadedAt || "-")} | SHA-256: ${String(file.fileHash || "-")}`,
+            color: colors.muted,
+            indent: 10,
+          });
+          writeLine({
+            text: extractedEvidenceText(file) ||
+              String(file.extractionError || "Preview unavailable; original retained."),
+            color: colors.text,
+            indent: 10,
+          });
+        }
+      };
+
       doc.on("pageAdded", () => {
         drawPageStripe();
         // WHY: New pages keep the same branded top stripe and spacing so
@@ -2681,6 +2777,7 @@ function buildResultReportPdfBuffer({
               color: colors.text,
               indent: 10,
             });
+            writeQuestionEvidence(index);
             doc.moveDown(0.5);
           },
         );
@@ -2765,6 +2862,7 @@ function buildResultReportPdfBuffer({
             `Minimum Met: ${question?.meetsMinimumWords ? "Yes" : "No"}`,
             question?.meetsMinimumWords === true,
           );
+          writeQuestionEvidence(index);
           doc.moveDown(0.5);
         });
       } else if (
@@ -2941,7 +3039,7 @@ async function sendResultEmail({
       resultPackage,
       screenshotUrl,
     });
-  const htmlContent = `<div style="font-family: Arial, Helvetica, sans-serif; white-space: pre-wrap;">${escapeHtml(fullReportText)}</div>`;
+  const htmlContent = `<div style="font-family: Arial, Helvetica, sans-serif; white-space: pre-wrap;">${escapeHtmlWithSafeLinks(fullReportText)}</div>`;
   const attachmentName =
     buildResultAttachmentName(
       resultPackage,
@@ -3147,6 +3245,20 @@ async function createResultPackageForCompletion({
         previousAttemptCount || 0,
       ) + 1,
     );
+  const questionEvidenceFiles =
+    await questionEvidenceService.draftQuestionEvidenceForMission({
+      studentId: mission.studentId,
+      missionId: mission._id,
+    });
+  const submittedQuestionEvidenceSnapshot = questionEvidenceFiles.map(
+    (file) => ({
+      ...file,
+      // WHY: The ResultPackage snapshot is created at the submission boundary.
+      // Its immutable copy must describe submitted evidence even though the
+      // mutable metadata rows are linked immediately after package creation.
+      status: "submitted",
+    }),
+  );
   const evidence = missionType === "ESSAY_BUILDER"
     ? buildEssayEvidence({
         draftJson:
@@ -3180,6 +3292,7 @@ async function createResultPackageForCompletion({
       completionAttemptNumber,
       triesToComplete:
         completionAttemptNumber,
+      questionEvidenceFiles: submittedQuestionEvidenceSnapshot,
     };
 
   const resultPackage =
@@ -3264,6 +3377,23 @@ async function createResultPackageForCompletion({
         resultPackage._id,
     },
   );
+
+  try {
+    await questionEvidenceService.finalizeMissionEvidence({
+      studentId: mission.studentId,
+      missionId: mission._id,
+      resultPackageId: resultPackage._id,
+    });
+  } catch (error) {
+    // WHY: The ResultPackage already contains immutable evidence ids. A
+    // secondary metadata-link failure is logged for repair instead of falsely
+    // telling the learner that their completed submission failed.
+    console.error("[question-evidence] finalize_failed", {
+      missionId: String(mission._id || ""),
+      resultPackageId: String(resultPackage._id || ""),
+      message: String(error?.message || error),
+    });
+  }
 
   return resultPackage;
 }
@@ -4720,11 +4850,13 @@ async function getResultScreenshotForTeacher({
 
 module.exports = {
   buildEssayEvidence,
+  buildResultReportPdfBuffer,
   buildTheoryEvidence,
   createResultPackageForCompletion,
   ensureResultPackageForMission,
   createManualResultPackageFromUpload,
   createLessonManualResultPackageFromUpload,
+  escapeHtmlWithSafeLinks,
   serializeMissionResultHistoryEntry,
   serializeStandalonePaperResultHistoryEntry,
   sortResultHistoryEntries,

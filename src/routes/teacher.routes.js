@@ -1014,6 +1014,49 @@ router.patch(
   teacherController.updateMission,
 );
 
+router.get(
+  "/missions/:missionId/question-evidence",
+  [
+    param("missionId").isMongoId().withMessage("Valid missionId is required."),
+    validateRequest,
+  ],
+  teacherController.listMissionQuestionEvidence,
+);
+
+router.post(
+  "/missions/:missionId/questions/:questionIndex/evidence-file",
+  [
+    param("missionId").isMongoId().withMessage("Valid missionId is required."),
+    param("questionIndex")
+      .isInt({ min: 0, max: 59 })
+      .withMessage("questionIndex must be between 0 and 59."),
+    validateRequest,
+  ],
+  upload.single("evidenceFile"),
+  teacherController.uploadMissionQuestionEvidence,
+);
+
+router.delete(
+  "/missions/:missionId/questions/:questionIndex/evidence-file",
+  [
+    param("missionId").isMongoId().withMessage("Valid missionId is required."),
+    param("questionIndex")
+      .isInt({ min: 0, max: 59 })
+      .withMessage("questionIndex must be between 0 and 59."),
+    validateRequest,
+  ],
+  teacherController.removeMissionQuestionEvidence,
+);
+
+router.get(
+  "/question-evidence/:evidenceId/download",
+  [
+    param("evidenceId").isMongoId().withMessage("Valid evidenceId is required."),
+    validateRequest,
+  ],
+  teacherController.downloadQuestionEvidence,
+);
+
 router.delete(
   "/missions/:missionId",
   [

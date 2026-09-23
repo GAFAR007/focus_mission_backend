@@ -78,6 +78,7 @@ function serializeMissionQuestion(question, index = 0, draftFormat = "QUESTIONS"
     explanation: question.explanation || "",
     expectedAnswer,
     minWordCount,
+    allowStudentUpload: question.allowStudentUpload === true,
   };
 }
 

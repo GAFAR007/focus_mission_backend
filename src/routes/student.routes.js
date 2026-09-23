@@ -10,6 +10,7 @@
  * logic to student.controller.
  */
 const express = require("express");
+const multer = require("multer");
 const { body, param, query } = require("express-validator");
 
 const studentController = require("../controllers/student.controller");
@@ -20,6 +21,10 @@ const {
 const { validateRequest } = require("../middleware/validate.middleware");
 
 const router = express.Router();
+const questionEvidenceUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
 
 router.use(protect);
 
@@ -132,6 +137,53 @@ router.put(
     validateRequest,
   ],
   studentController.saveMissionWorkDraft,
+);
+
+router.get(
+  "/missions/:missionId/question-evidence",
+  [
+    authorizeRoles("student"),
+    param("missionId").isMongoId().withMessage("Valid missionId is required."),
+    validateRequest,
+  ],
+  studentController.listMissionQuestionEvidence,
+);
+
+router.post(
+  "/missions/:missionId/questions/:questionIndex/evidence-file",
+  [
+    authorizeRoles("student"),
+    param("missionId").isMongoId().withMessage("Valid missionId is required."),
+    param("questionIndex")
+      .isInt({ min: 0, max: 59 })
+      .withMessage("questionIndex must be between 0 and 59."),
+    validateRequest,
+  ],
+  questionEvidenceUpload.single("evidenceFile"),
+  studentController.uploadMissionQuestionEvidence,
+);
+
+router.delete(
+  "/missions/:missionId/questions/:questionIndex/evidence-file",
+  [
+    authorizeRoles("student"),
+    param("missionId").isMongoId().withMessage("Valid missionId is required."),
+    param("questionIndex")
+      .isInt({ min: 0, max: 59 })
+      .withMessage("questionIndex must be between 0 and 59."),
+    validateRequest,
+  ],
+  studentController.removeMissionQuestionEvidence,
+);
+
+router.get(
+  "/question-evidence/:evidenceId/download",
+  [
+    authorizeRoles("student"),
+    param("evidenceId").isMongoId().withMessage("Valid evidenceId is required."),
+    validateRequest,
+  ],
+  studentController.downloadQuestionEvidence,
 );
 
 router.get(
