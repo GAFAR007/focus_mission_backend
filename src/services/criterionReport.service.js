@@ -376,7 +376,11 @@ async function assertTeacherSubjectAccess({ teacherId, studentId, subjectId }) {
   return { teacher, student, subject };
 }
 
-function resolveCriterionWording(selected, taskCode, subjectName) {
+function resolveCriterionWording(selected, taskCode, subjectName, override) {
+  const savedOverride = String(override || "").trim();
+  if (savedOverride) {
+    return { text: savedOverride, available: true };
+  }
   for (const mission of Object.values(selected)) {
     const candidates = [
       mission?.criterionWording,
@@ -539,6 +543,7 @@ async function getCriterionDraftReport({ teacherId, studentId, subjectId, taskCo
     selected,
     normalizedTaskCode,
     context.subject.name,
+    reportDraft?.criterionWording,
   );
 
   const report = {
@@ -586,8 +591,20 @@ async function getCriterionDraftReport({ teacherId, studentId, subjectId, taskCo
 }
 
 function normalizeReportDraftPayload(payload) {
+  const hasCriterionWording = Object.prototype.hasOwnProperty.call(
+    payload || {},
+    "criterionWording",
+  );
+  const criterionWording = String(payload?.criterionWording || "").trim();
   const essayTeacherComment = String(payload?.essayTeacherComment || "");
   const essayNextTime = String(payload?.essayNextTime || "");
+  if (criterionWording.length > 5000) {
+    throw createError(
+      400,
+      "Criterion wording must be 5000 characters or fewer.",
+      "INVALID_REPORT_DRAFT",
+    );
+  }
   if (essayTeacherComment.length > 20000 || essayNextTime.length > 20000) {
     throw createError(400, "Essay report comments are too long.", "INVALID_REPORT_DRAFT");
   }
@@ -610,13 +627,19 @@ function normalizeReportDraftPayload(payload) {
     }
     comments.set(questionIndex, { questionIndex, comment });
   }
-  return {
+  const normalized = {
     essayTeacherComment,
     essayNextTime,
     theoryQuestionComments: [...comments.values()].sort(
       (left, right) => left.questionIndex - right.questionIndex,
     ),
   };
+  if (hasCriterionWording) {
+    // WHY: Clients deployed before the editable objective must be able to save
+    // comments without silently clearing a newer saved objective.
+    normalized.criterionWording = criterionWording;
+  }
+  return normalized;
 }
 
 async function saveCriterionReportDraft({
@@ -640,7 +663,7 @@ async function saveCriterionReportDraft({
     },
     { upsert: true, new: true, runValidators: true },
   );
-  console.info("[criterion-report] comments_saved", {
+  console.info("[criterion-report] wording_and_comments_saved", {
     teacherId,
     studentId,
     subjectId,
@@ -671,162 +694,356 @@ function objectiveLine(item) {
 function buildCriterionReportPdf(report, options = {}) {
   const copyType = normalizeReportCopyType(options.copyType);
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: "A4", margins: { top: 44, bottom: 44, left: 48, right: 48 } });
+    const reportTitle = String(report.title || "Report")
+      .trim()
+      .replace(/\bDraft Report\b/gi, "Report");
+    const copyLabel = copyType === "student" ? "Student copy" : "Teacher copy";
+    const doc = new PDFDocument({
+      size: "A4",
+      bufferPages: true,
+      margins: { top: 44, bottom: 58, left: 44, right: 44 },
+      info: {
+        Title: `${reportTitle} - ${copyLabel}`,
+        Author: "Focus Mission",
+        Subject: `${report.taskCode} ${copyLabel}`,
+      },
+    });
     const chunks = [];
     doc.on("data", (chunk) => chunks.push(chunk));
     doc.on("end", () => resolve(Buffer.concat(chunks)));
     doc.on("error", reject);
 
+    const colors = {
+      navy: "#17365D",
+      blue: "#3B82F6",
+      blueSoft: "#EEF5FF",
+      ink: "#17243A",
+      muted: "#607493",
+      border: "#D7E2F0",
+      surface: "#F7F9FC",
+      green: "#16826C",
+      greenSoft: "#ECF8F4",
+      amber: "#A96B16",
+      amberSoft: "#FFF6E8",
+      white: "#FFFFFF",
+    };
     const pdfText = (value, fallback = "-") => {
       const text = String(value || "").trim();
       return (text || fallback).replace(/[–—]/g, "-");
     };
+    const left = doc.page.margins.left;
+    const contentWidth = doc.page.width - left - doc.page.margins.right;
     const remainingHeight = () => doc.page.height - doc.page.margins.bottom - doc.y;
     const ensureSpace = (height) => {
       if (remainingHeight() < height) {
         doc.addPage();
       }
     };
-    const heading = (value, size = 15) => {
-      ensureSpace(size + 30);
-      doc.moveDown(0.7).font("Helvetica-Bold").fontSize(size).fillColor("#17365D").text(pdfText(value));
-      doc.moveDown(0.25).font("Helvetica").fontSize(10.5).fillColor("#222222");
+    const finish = () => {
+      const range = doc.bufferedPageRange();
+      for (let pageIndex = range.start; pageIndex < range.start + range.count; pageIndex += 1) {
+        doc.switchToPage(pageIndex);
+        const footerY = doc.page.height - 35;
+        const reservedBottomMargin = doc.page.margins.bottom;
+        // WHY: The footer sits inside the reserved margin. Temporarily lowering
+        // PDFKit's flow margin prevents footer text from creating blank pages.
+        doc.page.margins.bottom = 18;
+        doc.save()
+          .moveTo(left, footerY - 7)
+          .lineTo(doc.page.width - doc.page.margins.right, footerY - 7)
+          .lineWidth(0.6)
+          .strokeColor(colors.border)
+          .stroke();
+        doc.font("Helvetica").fontSize(8).fillColor(colors.muted)
+          .text(`Focus Mission | ${copyLabel}`, left, footerY, {
+            width: contentWidth / 2,
+            lineBreak: false,
+          })
+          .text(`Page ${pageIndex + 1} of ${range.count}`, left + contentWidth / 2, footerY, {
+            width: contentWidth / 2,
+            align: "right",
+            lineBreak: false,
+          });
+        doc.restore();
+        doc.page.margins.bottom = reservedBottomMargin;
+      }
+      doc.end();
     };
-    const label = (value) => doc.font("Helvetica-Bold").fillColor("#52698D").text(pdfText(value));
-    const body = (value) => doc.font("Helvetica").fillColor("#222222").text(pdfText(value));
-    const boxedBody = (labelText, value) => {
-      const text = pdfText(value, "Pending");
-      const width = doc.page.width - doc.page.margins.left - doc.page.margins.right;
-      const contentWidth = width - 24;
+    const titleBand = () => {
+      const y = doc.y;
+      const height = 88;
+      doc.save()
+        .roundedRect(left, y, contentWidth, height, 12)
+        .fill(colors.navy)
+        .restore();
+      doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#AFCBFA")
+        .text("FOCUS MISSION", left + 16, y + 13, {
+          width: contentWidth - 32,
+          characterSpacing: 1.2,
+          lineBreak: false,
+        });
+      doc.font("Helvetica-Bold").fontSize(17).fillColor(colors.white)
+        .text(pdfText(reportTitle), left + 16, y + 31, {
+          width: contentWidth - 32,
+          height: 25,
+          ellipsis: true,
+        });
+      doc.font("Helvetica").fontSize(9.5).fillColor("#DCE9FA")
+        .text(
+          `${copyLabel} | ${pdfText(report.subject?.name, "Subject")} | ${pdfText(report.taskCode, "Task")}`,
+          left + 16,
+          y + 65,
+          { width: contentWidth - 32, lineBreak: false },
+        );
+      doc.x = left;
+      doc.y = y + height + 14;
+    };
+    const sectionHeading = (value) => {
+      ensureSpace(34);
+      const y = doc.y;
+      doc.save().roundedRect(left, y + 2, 4, 19, 2).fill(colors.blue).restore();
+      doc.font("Helvetica-Bold").fontSize(15).fillColor(colors.navy)
+        .text(pdfText(value), left + 12, y, { width: contentWidth - 12 });
+      doc.x = left;
+      doc.y = Math.max(doc.y, y + 25);
+    };
+    const panelHeight = (value, fallback = "Not added") => {
+      const text = pdfText(value, fallback);
+      const innerWidth = contentWidth - 28;
       doc.font("Helvetica").fontSize(10.5);
-      const textHeight = doc.heightOfString(text, { width: contentWidth });
-      const boxHeight = Math.max(62, textHeight + 43);
-      ensureSpace(boxHeight + 8);
+      const textHeight = doc.heightOfString(text, { width: innerWidth, lineGap: 1.5 });
+      return Math.max(61, textHeight + 43) + 9;
+    };
+    const panel = (labelText, value, tone = "neutral", fallback = "Not added") => {
+      const tones = {
+        neutral: { fill: colors.surface, stroke: colors.border, label: colors.muted },
+        blue: { fill: colors.blueSoft, stroke: "#C9DCF7", label: colors.blue },
+        green: { fill: colors.greenSoft, stroke: "#C5E8DD", label: colors.green },
+        amber: { fill: colors.amberSoft, stroke: "#F0D9B5", label: colors.amber },
+      };
+      const selectedTone = tones[tone] || tones.neutral;
+      const text = pdfText(value, fallback);
+      const innerWidth = contentWidth - 28;
+      const totalHeight = panelHeight(value, fallback);
+      const height = totalHeight - 9;
+      ensureSpace(totalHeight);
       const y = doc.y;
       doc.save()
-        .rect(doc.page.margins.left, y, width, boxHeight)
-        .fillAndStroke("#F5F8FC", "#D7E1EF")
+        .roundedRect(left, y, contentWidth, height, 9)
+        .fillAndStroke(selectedTone.fill, selectedTone.stroke)
         .restore();
-      doc.x = doc.page.margins.left + 12;
-      doc.y = y + 11;
-      doc.font("Helvetica").fontSize(9.5).fillColor("#52698D").text(pdfText(labelText), {
-        width: contentWidth,
+      doc.font("Helvetica-Bold").fontSize(8.7).fillColor(selectedTone.label)
+        .text(pdfText(labelText).toUpperCase(), left + 14, y + 11, {
+          width: innerWidth,
+          characterSpacing: 0.35,
+          height: 12,
+          ellipsis: true,
+        });
+      doc.font("Helvetica").fontSize(10.5).fillColor(colors.ink)
+        .text(text, left + 14, y + 29, {
+          width: innerWidth,
+          lineGap: 1.5,
+        });
+      doc.x = left;
+      doc.y = y + height + 9;
+    };
+    const metricPair = (items) => {
+      const gap = 10;
+      const width = (contentWidth - gap) / 2;
+      const height = 61;
+      ensureSpace(height + 10);
+      const y = doc.y;
+      items.forEach((item, index) => {
+        const x = left + index * (width + gap);
+        doc.save()
+          .roundedRect(x, y, width, height, 9)
+          .fillAndStroke(colors.surface, colors.border)
+          .restore();
+        doc.font("Helvetica-Bold").fontSize(8.5).fillColor(colors.muted)
+          .text(pdfText(item.label).toUpperCase(), x + 12, y + 11, {
+            width: width - 24,
+            lineBreak: false,
+          });
+        doc.font("Helvetica-Bold").fontSize(11.5).fillColor(colors.navy)
+          .text(pdfText(item.value, "Pending"), x + 12, y + 31, {
+            width: width - 24,
+            height: 18,
+            ellipsis: true,
+          });
       });
-      doc.moveDown(0.55).font("Helvetica").fontSize(10.5).fillColor("#222222").text(text, {
-        width: contentWidth,
+      doc.x = left;
+      doc.y = y + height + 10;
+    };
+    const tableRow = (cells, widths, isHeader = false) => {
+      const padding = 8;
+      doc.font(isHeader ? "Helvetica-Bold" : "Helvetica").fontSize(isHeader ? 8.5 : 9.3);
+      const heights = cells.map((cell, index) => doc.heightOfString(pdfText(cell), {
+        width: widths[index] - padding * 2,
+      }));
+      const height = Math.max(isHeader ? 30 : 34, Math.max(...heights) + padding * 2);
+      ensureSpace(height + 1);
+      const y = doc.y;
+      doc.save()
+        .rect(left, y, contentWidth, height)
+        .fillAndStroke(isHeader ? colors.navy : colors.surface, colors.border)
+        .restore();
+      let x = left;
+      cells.forEach((cell, index) => {
+        doc.font(isHeader ? "Helvetica-Bold" : "Helvetica")
+          .fontSize(isHeader ? 8.5 : 9.3)
+          .fillColor(isHeader ? colors.white : colors.ink)
+          .text(pdfText(cell), x + padding, y + padding, {
+            width: widths[index] - padding * 2,
+            align: index === 0 ? "left" : "right",
+          });
+        x += widths[index];
       });
-      doc.x = doc.page.margins.left;
-      doc.y = y + boxHeight + 8;
+      doc.x = left;
+      doc.y = y + height;
     };
     const teacherComment = (comment, nextTime = "") => {
-      const feedback = pdfText(comment, "Pending");
+      const feedback = pdfText(comment, "No teacher comment added yet.");
       const next = String(nextTime || "").trim();
       return next ? `${feedback} Next time: ${pdfText(next)}` : feedback;
     };
 
-    const reportTitle = pdfText(report.title).replace(/\bDraft Report\b/gi, "Report");
-    doc.font("Helvetica-Bold").fontSize(20).fillColor("#17365D").text(reportTitle);
-    doc.moveDown(0.5).font("Helvetica").fontSize(10.5).fillColor("#222222");
+    titleBand();
+    panel(
+      "Learning objective",
+      report.criterionWording,
+      report.criterionWordingAvailable ? "blue" : "amber",
+      "Learning objective not added yet.",
+    );
 
     if (copyType === "student") {
-      heading("Essay Builder");
-      label("Question");
-      body(report.essay.question);
-      doc.moveDown(0.5);
-      boxedBody("Student answer - exactly as submitted", report.essay.finalEssayText);
-      boxedBody(
+      sectionHeading("Essay Builder");
+      panel("Question", report.essay.question, "neutral", "Question unavailable");
+      panel("Your answer - exactly as submitted", report.essay.finalEssayText, "blue", "Pending");
+      panel(
         "Teacher comment",
         teacherComment(report.essay.teacherComment, report.essay.nextTime),
+        "green",
       );
 
-      heading("Theory");
+      const studentQuestionHeight = (question) => 25 +
+        panelHeight(question.prompt, "Question unavailable") +
+        panelHeight(question.studentAnswer, "Pending") +
+        panelHeight(question.teacherComment, "No teacher comment added yet.");
+      // WHY: Start the student Theory section on a page that can keep the
+      // heading with at least one complete question and its feedback.
+      ensureSpace(25 + studentQuestionHeight(report.theory.questions[0] || {}));
+      sectionHeading("Theory");
       for (const question of report.theory.questions) {
-        heading(`Theory Question ${question.questionIndex + 1}`, 13.5);
-        label("Question");
-        body(question.prompt);
-        doc.moveDown(0.5);
-        boxedBody("Student answer - exactly as submitted", question.studentAnswer);
-        boxedBody("Teacher comment", question.teacherComment);
+        ensureSpace(studentQuestionHeight(question));
+        sectionHeading(`Question ${question.questionIndex + 1}`);
+        panel("Question", question.prompt, "neutral", "Question unavailable");
+        panel("Your answer - exactly as submitted", question.studentAnswer, "blue", "Pending");
+        panel("Teacher comment", question.teacherComment, "green", "No teacher comment added yet.");
       }
-      doc.end();
+      finish();
       return;
     }
 
-    label("Criterion wording");
-    body(report.criterionWording);
+    sectionHeading("Results overview");
+    metricPair([
+      { label: report.q5.label, value: objectiveLine(report.q5) },
+      { label: report.q8.label, value: objectiveLine(report.q8) },
+    ]);
 
-    heading("Objective learning evidence");
-    label(report.q5.label);
-    body(objectiveLine(report.q5));
-    doc.moveDown(0.35);
-    label(report.q8.label);
-    body(objectiveLine(report.q8));
+    sectionHeading("Essay evidence");
+    panel("Question / teacher note", report.essay.question, "neutral", "Question unavailable");
+    panel("Student essay - exactly as submitted", report.essay.finalEssayText, "blue", "Pending");
+    metricPair([
+      {
+        label: "Original score",
+        value: report.essay.status === "scored"
+          ? `${report.essay.scoreCorrect}/${report.essay.scoreTotal} - ${formatPercent(report.essay.percent)}`
+          : "Pending",
+      },
+      { label: "Evidence state", value: report.essay.status === "scored" ? "Scored" : "Pending" },
+    ]);
+    panel(
+      "Teacher feedback",
+      teacherComment(report.essay.teacherComment, report.essay.nextTime),
+      "green",
+      "No teacher feedback added yet.",
+    );
 
-    heading("Essay Builder");
-    label("Exact question / Teacher Note");
-    body(report.essay.question);
-    doc.moveDown(0.35);
-    label("Student final Essay - exactly as submitted");
-    body(report.essay.finalEssayText || "Pending");
-    doc.moveDown(0.35);
-    label("Original score");
-    body(report.essay.status === "scored"
-      ? `${report.essay.scoreCorrect}/${report.essay.scoreTotal} - ${formatPercent(report.essay.percent)}`
-      : "Pending");
-    label("Teacher Comment");
-    body(report.essay.teacherComment);
-    label("Next time");
-    body(report.essay.nextTime);
-
-    heading("Theory");
-    body(report.theory.status === "scored"
-      ? `${formatPercent(report.theory.percent)} - ${report.theory.passed ? "Passed" : "Not yet passed"}`
-      : "Pending");
+    sectionHeading("Theory evidence");
+    panel(
+      "Theory result",
+      report.theory.status === "scored"
+        ? `${formatPercent(report.theory.percent)} - ${report.theory.passed ? "Passed" : "Not yet passed"}`
+        : "Pending",
+      report.theory.passed ? "green" : "amber",
+    );
     for (const question of report.theory.questions) {
-      // WHY: Keep each compact teacher-review question together instead of
-      // orphaning a score or comment label at the bottom of a PDF page.
-      ensureSpace(180);
-      doc.moveDown(0.6);
-      label(`Theory Question ${question.questionIndex + 1}`);
-      label("Exact question asked");
-      body(question.prompt);
-      label("Student answer - exactly as submitted");
-      body(question.studentAnswer);
-      label("Original teacher score");
-      body(question.originalTeacherScore === null
-        ? "Pending"
-        : `${question.originalTeacherScore}/100`);
-      label("Teacher Comment");
-      body(question.teacherComment);
+      // WHY: A teacher should review one question, answer, score, and comment
+      // as a single evidence block rather than chase feedback onto a new page.
+      ensureSpace(
+        25 +
+        panelHeight(question.prompt, "Question unavailable") +
+        panelHeight(question.studentAnswer, "Pending") +
+        71 +
+        panelHeight(question.teacherComment, "No teacher comment added yet."),
+      );
+      sectionHeading(`Theory question ${question.questionIndex + 1}`);
+      panel("Exact question asked", question.prompt, "neutral", "Question unavailable");
+      panel("Student answer - exactly as submitted", question.studentAnswer, "blue", "Pending");
+      metricPair([
+        {
+          label: "Original teacher score",
+          value: question.originalTeacherScore === null
+            ? "Pending"
+            : `${question.originalTeacherScore}/100`,
+        },
+        { label: "Question", value: `${question.questionIndex + 1} of ${report.theory.questions.length}` },
+      ]);
+      panel("Teacher comment", question.teacherComment, "green", "No teacher comment added yet.");
     }
 
-    heading("Assessment evidence");
-    label(report.assessmentA.label);
-    body(objectiveLine(report.assessmentA));
-    label(report.assessmentB.label);
-    body(report.assessmentB.status === "not_created"
-      ? "Optional - Not created"
-      : `Optional - ${objectiveLine(report.assessmentB)}`);
+    ensureSpace(96);
+    sectionHeading("Assessment evidence");
+    metricPair([
+      { label: report.assessmentA.label, value: objectiveLine(report.assessmentA) },
+      {
+        label: `${report.assessmentB.label} (optional)`,
+        value: report.assessmentB.status === "not_created"
+          ? "Not created"
+          : objectiveLine(report.assessmentB),
+      },
+    ]);
 
-    heading(`${report.taskCode} Overall Scoring Structure`);
-    for (const row of report.scoringStructure) {
-      body(`${row.label}: ${row.weightPercent}%`);
-    }
-    body("Total: 100%");
-
-    heading(`${report.student.name} - ${report.taskCode} Calculation`);
+    // WHY: Keep the complete weighted table and final status together so a
+    // reader never has to interpret continuation rows without their headers.
+    ensureSpace(430);
+    sectionHeading(`${report.taskCode} score calculation`);
+    const columnWidths = [contentWidth * 0.39, contentWidth * 0.19, contentWidth * 0.18, contentWidth * 0.24];
+    tableRow(["Evidence", "Result", "Weight", "Contribution"], columnWidths, true);
     for (const row of report.calculation.rows) {
-      body(`${row.label}: ${formatPercent(row.percent)} x ${row.weightPercent}% = ${row.contribution === null ? "Pending" : row.contribution.toFixed(2)}`);
+      tableRow([
+        row.label,
+        formatPercent(row.percent),
+        `${row.weightPercent}%`,
+        row.contribution === null ? "Pending" : row.contribution.toFixed(2),
+      ], columnWidths);
     }
-    label(`Overall ${report.taskCode} Score`);
-    body(report.calculation.status === "pending"
-      ? `Pending (current secured contribution: ${report.calculation.securedContribution.toFixed(2)} / 100)`
-      : formatPercent(report.calculation.overallPercent));
+    panel(
+      `Overall ${report.taskCode} score`,
+      report.calculation.status === "pending"
+        ? `Pending - current secured contribution: ${report.calculation.securedContribution.toFixed(2)} / 100`
+        : formatPercent(report.calculation.overallPercent),
+      report.calculation.status === "pending" ? "amber" : "blue",
+    );
 
-    heading(`Final ${report.taskCode} Status`);
-    body(`${report.student.name} - ${report.criterionStatus.passed ? "PASSED" : "Not yet achieved"}`);
-    body(report.criterionStatus.reason);
-    doc.end();
+    sectionHeading(`Final ${report.taskCode} status`);
+    panel(
+      report.criterionStatus.passed ? "Passed" : "Not yet achieved",
+      report.criterionStatus.reason,
+      report.criterionStatus.passed ? "green" : "amber",
+      "Status detail unavailable.",
+    );
+    finish();
   });
 }
 

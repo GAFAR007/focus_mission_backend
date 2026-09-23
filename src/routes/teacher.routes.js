@@ -199,6 +199,11 @@ router.put(
     param("taskCode")
       .matches(/^[PMD]\d+$/i)
       .withMessage("Task code must look like P1, P2, M1, or D1."),
+    body("criterionWording")
+      .optional()
+      .isString()
+      .isLength({ max: 5000 })
+      .withMessage("criterionWording must be text up to 5000 characters."),
     body("essayTeacherComment")
       .isString()
       .withMessage("essayTeacherComment must be text."),

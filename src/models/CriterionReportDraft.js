@@ -1,7 +1,7 @@
 /**
  * WHAT:
- * CriterionReportDraft stores teacher-editable wording for one live Task Focus
- * report without changing the original submitted evidence.
+ * CriterionReportDraft stores a teacher-editable learning objective and report
+ * comments for one live Task Focus without changing submitted evidence.
  * WHY:
  * Qualification evidence must remain auditable while teachers refine the
  * wording used in a draft report and its PDF export.
@@ -41,6 +41,7 @@ const criterionReportDraftSchema = new mongoose.Schema(
       match: /^[PMD]\d+$/,
       index: true,
     },
+    criterionWording: { type: String, default: "", maxlength: 5000 },
     essayTeacherComment: { type: String, default: "", maxlength: 20000 },
     essayNextTime: { type: String, default: "", maxlength: 20000 },
     theoryQuestionComments: {

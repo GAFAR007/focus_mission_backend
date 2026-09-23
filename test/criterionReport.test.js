@@ -355,6 +355,7 @@ test("legacy unsequenced assessments use stable A then B chronology", () => {
 
 test("report comment normalization keeps explicit empty overrides", () => {
   const normalized = criterionReportService.normalizeReportDraftPayload({
+    criterionWording: "  Explain online business operations.  ",
     essayTeacherComment: "",
     essayNextTime: "Try a stronger conclusion.",
     theoryQuestionComments: [
@@ -362,6 +363,7 @@ test("report comment normalization keeps explicit empty overrides", () => {
       { questionIndex: 0, comment: "" },
     ],
   });
+  assert.equal(normalized.criterionWording, "Explain online business operations.");
   assert.equal(normalized.essayTeacherComment, "");
   assert.deepEqual(normalized.theoryQuestionComments, [
     { questionIndex: 0, comment: "" },
@@ -372,6 +374,7 @@ test("report comment normalization keeps explicit empty overrides", () => {
 test("report comment normalization rejects invalid Theory indexes", () => {
   assert.throws(
     () => criterionReportService.normalizeReportDraftPayload({
+      criterionWording: "",
       essayTeacherComment: "",
       essayNextTime: "",
       theoryQuestionComments: [{ questionIndex: 10, comment: "No" }],
@@ -380,13 +383,27 @@ test("report comment normalization rejects invalid Theory indexes", () => {
   );
 });
 
+test("legacy report saves do not clear a newer learning objective", () => {
+  const normalized = criterionReportService.normalizeReportDraftPayload({
+    essayTeacherComment: "Updated comment",
+    essayNextTime: "",
+    theoryQuestionComments: [],
+  });
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(normalized, "criterionWording"),
+    false,
+  );
+});
+
 test("student and teacher PDF copies expose only their intended report detail", async () => {
   const pendingObjective = { label: "Q5 Daily", status: "pending" };
   const report = {
     title: "Sudais Dahir — P1 Business Online Draft Report",
     criterionWording: "Use business evidence to explain online operations.",
+    criterionWordingAvailable: true,
     taskCode: "P1",
     student: { name: "Sudais Dahir" },
+    subject: { name: "Business" },
     q5: pendingObjective,
     q8: { ...pendingObjective, label: "Q8 Revision" },
     essay: {
@@ -444,20 +461,37 @@ test("student and teacher PDF copies expose only their intended report detail", 
     extractPdfText(studentPdf),
   ]);
   assert.match(teacherText, /Sudais Dahir - P1 Business Online Report/);
-  assert.match(teacherText, /Criterion wording/);
-  assert.match(teacherText, /Original score/);
-  assert.match(teacherText, /P1 Calculation/);
-  assert.match(teacherText, /Teacher Comment/);
+  assert.match(teacherText, /Teacher copy/);
+  assert.match(teacherText, /LEARNING OBJECTIVE/);
+  assert.match(teacherText, /Use business evidence to explain online operations\./);
+  assert.match(teacherText, /Original score/i);
+  assert.match(teacherText, /P1 score calculation/i);
+  assert.match(teacherText, /Teacher comment/i);
+  assert.match(teacherText, /Page 1 of/);
   assert.doesNotMatch(teacherText, /Draft Report|Teacher Draft Comment/);
 
   assert.match(studentText, /Sudais Dahir - P1 Business Online Report/);
+  assert.match(studentText, /Student copy/);
+  assert.match(studentText, /LEARNING OBJECTIVE/);
   assert.match(studentText, /Essay Builder/);
-  assert.match(studentText, /Student answer - exactly as submitted/);
-  assert.match(studentText, /Teacher comment/);
+  assert.match(studentText, /Your answer - exactly as submitted/i);
+  assert.match(studentText, /Teacher comment/i);
   assert.match(studentText, /Clear evidence\. Next time: Develop the conclusion\./);
   assert.doesNotMatch(
     studentText,
-    /Criterion wording|Objective learning evidence|Original score|Overall Scoring Structure|Calculation|Draft Report/,
+    /Original score|Result overview|Assessment evidence|Contribution|Draft Report/,
+  );
+});
+
+test("report learning objective rejects values over the saved limit", () => {
+  assert.throws(
+    () => criterionReportService.normalizeReportDraftPayload({
+      criterionWording: "x".repeat(5001),
+      essayTeacherComment: "",
+      essayNextTime: "",
+      theoryQuestionComments: [],
+    }),
+    /5000 characters or fewer/,
   );
 });
 
