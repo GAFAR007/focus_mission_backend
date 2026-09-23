@@ -141,6 +141,20 @@ function serializeMission(mission) {
     latestResultPackageId: mission.latestResultPackageId
       ? String(mission.latestResultPackageId)
       : "",
+    redoOfMissionId: mission.redoOfMissionId
+      ? String(mission.redoOfMissionId)
+      : "",
+    redoOfResultPackageId: mission.redoOfResultPackageId
+      ? String(mission.redoOfResultPackageId)
+      : "",
+    evidenceCurrentExcluded: mission.evidenceCurrentExcluded === true,
+    evidenceMovedFromTaskCode: String(
+      mission.evidenceMovedFromTaskCode || "",
+    ),
+    evidenceMovedToTaskCode: String(mission.evidenceMovedToTaskCode || ""),
+    evidenceMovedAt: mission.evidenceMovedAt
+      ? new Date(mission.evidenceMovedAt).toISOString()
+      : null,
     createdAt: mission.createdAt
       ? new Date(mission.createdAt).toISOString()
       : null,
@@ -196,6 +210,12 @@ function buildQuestionBankMission({
     scoreTotal: questions.length,
     scorePercent: 0,
     latestResultPackageId: "",
+    redoOfMissionId: "",
+    redoOfResultPackageId: "",
+    evidenceCurrentExcluded: false,
+    evidenceMovedFromTaskCode: "",
+    evidenceMovedToTaskCode: "",
+    evidenceMovedAt: null,
     createdAt: null,
     publishedAt: null,
     availableOnDate: "",

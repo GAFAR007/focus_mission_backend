@@ -1296,6 +1296,54 @@ router.get(
 );
 
 router.post(
+  "/results/:resultPackageId/redo",
+  [
+    param("resultPackageId")
+      .isMongoId()
+      .withMessage("Valid resultPackageId is required."),
+    validateRequest,
+  ],
+  teacherController.createResultRedo,
+);
+
+router.post(
+  "/results/:resultPackageId/move-preview",
+  [
+    param("resultPackageId")
+      .isMongoId()
+      .withMessage("Valid resultPackageId is required."),
+    body("targetTaskCode")
+      .isIn(["P1", "P2", "P3", "P4", "P5", "P6", "P7", "M1", "M2", "M3", "D1", "D2"])
+      .withMessage("targetTaskCode must be P1-P7, M1-M3, or D1-D2."),
+    validateRequest,
+  ],
+  teacherController.previewResultMove,
+);
+
+router.post(
+  "/results/:resultPackageId/move-task-focus",
+  [
+    param("resultPackageId")
+      .isMongoId()
+      .withMessage("Valid resultPackageId is required."),
+    body("targetTaskCode")
+      .isIn(["P1", "P2", "P3", "P4", "P5", "P6", "P7", "M1", "M2", "M3", "D1", "D2"])
+      .withMessage("targetTaskCode must be P1-P7, M1-M3, or D1-D2."),
+    body("replaceTargetEvidence")
+      .optional()
+      .isBoolean()
+      .withMessage("replaceTargetEvidence must be true or false."),
+    body("reason")
+      .optional()
+      .isString()
+      .isLength({ max: 2000 })
+      .withMessage("reason must be 2000 characters or fewer."),
+    validateRequest,
+  ],
+  teacherController.moveResultTaskFocus,
+);
+
+router.post(
   "/missions/:missionId/manual-result",
   upload.single("resultFile"),
   [

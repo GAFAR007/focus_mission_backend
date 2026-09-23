@@ -117,6 +117,11 @@ function selectCurrentEvidenceMissions(missions, taskCode) {
   const unsequencedAssessments = [];
 
   for (const mission of sorted) {
+    if (mission?.evidenceCurrentExcluded === true) {
+      // WHY: Move Evidence keeps the source mission and ResultPackage in
+      // history, but that old task focus must no longer use it as current.
+      continue;
+    }
     const stage = missionStage(mission);
     if (["q5", "q8", "essay", "theory"].includes(stage) && !selected[stage]) {
       selected[stage] = mission;
@@ -377,6 +382,45 @@ function resolveCriterionWording(selected, taskCode, subjectName) {
   };
 }
 
+function stageHistory(mission, resultById, teacherById) {
+  if (!mission) {
+    return null;
+  }
+  const movedFromTaskCode = String(
+    mission.evidenceMovedFromTaskCode || "",
+  ).trim();
+  if (movedFromTaskCode) {
+    const teacherId = String(mission.evidenceMovedBy || "");
+    const movedToTaskCode = Array.isArray(mission.taskCodes)
+      ? String(mission.taskCodes[0] || "").trim().toUpperCase()
+      : "";
+    return {
+      kind: "move",
+      title: movedToTaskCode
+        ? `Moved from ${movedFromTaskCode} to ${movedToTaskCode}`
+        : `Moved evidence from ${movedFromTaskCode}`,
+      detail: `Moved by ${teacherById.get(teacherId) || "teacher"}`,
+      at: mission.evidenceMovedAt
+        ? new Date(mission.evidenceMovedAt).toISOString()
+        : null,
+    };
+  }
+  const previousResultId = String(mission.redoOfResultPackageId || "");
+  if (previousResultId) {
+    const previousResult = resultById.get(previousResultId) || null;
+    const previousPercent = Number(previousResult?.meta?.score?.percent);
+    return {
+      kind: "redo",
+      title: "Redo attempt",
+      detail: Number.isFinite(previousPercent)
+        ? `Previous result: ${previousPercent}% · Current: Pending`
+        : "Previous result retained · Current: Pending",
+      at: mission.createdAt ? new Date(mission.createdAt).toISOString() : null,
+    };
+  }
+  return null;
+}
+
 async function getCriterionDraftReport({ teacherId, studentId, subjectId, taskCode }) {
   const normalizedTaskCode = normalizeTaskCode(taskCode);
   console.info("[criterion-report] build_start", {
@@ -412,13 +456,30 @@ async function getCriterionDraftReport({ teacherId, studentId, subjectId, taskCo
     }),
   ]);
   const selected = selectCurrentEvidenceMissions(missions, normalizedTaskCode);
-  const resultIds = Object.values(selected)
-    .map((mission) => String(mission?.latestResultPackageId || ""))
+  const selectedMissions = Object.values(selected).filter(Boolean);
+  const resultIds = selectedMissions
+    .flatMap((mission) => [
+      String(mission?.latestResultPackageId || ""),
+      String(mission?.redoOfResultPackageId || ""),
+    ])
     .filter(Boolean);
-  const results = resultIds.length
-    ? await ResultPackage.find({ _id: { $in: resultIds } }).lean()
-    : [];
+  const movedByIds = selectedMissions
+    .map((mission) => String(mission?.evidenceMovedBy || ""))
+    .filter(Boolean);
+  const [results, movedByTeachers] = await Promise.all([
+    resultIds.length
+      ? ResultPackage.find({ _id: { $in: resultIds } }).lean()
+      : [],
+    movedByIds.length
+      ? User.find({ _id: { $in: movedByIds }, role: "teacher" })
+          .select("name")
+          .lean()
+      : [],
+  ]);
   const resultById = new Map(results.map((result) => [String(result._id), result]));
+  const teacherById = new Map(
+    movedByTeachers.map((teacher) => [String(teacher._id), String(teacher.name || "teacher")]),
+  );
   const resultFor = (mission) =>
     mission ? resultById.get(String(mission.latestResultPackageId || "")) || null : null;
 
@@ -442,8 +503,14 @@ async function getCriterionDraftReport({ teacherId, studentId, subjectId, taskCo
         missionId: "",
         resultPackageId: "",
       };
-  const essay = essayEvidence(selected.essay, resultFor(selected.essay), reportDraft);
-  const theory = theoryEvidence(selected.theory, resultFor(selected.theory), reportDraft);
+  const essay = {
+    ...essayEvidence(selected.essay, resultFor(selected.essay), reportDraft),
+    history: stageHistory(selected.essay, resultById, teacherById),
+  };
+  const theory = {
+    ...theoryEvidence(selected.theory, resultFor(selected.theory), reportDraft),
+    history: stageHistory(selected.theory, resultById, teacherById),
+  };
   const calculation = calculateWeightedScore({
     theory: theory.percent,
     assessmentA: assessmentA.status === "scored" ? assessmentA.percent : null,

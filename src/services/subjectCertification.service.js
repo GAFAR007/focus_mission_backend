@@ -357,6 +357,16 @@ function evaluateCertificationMission({
     reason: "",
   };
 
+  if (mission?.evidenceCurrentExcluded === true) {
+    // WHY: Move Evidence preserves this mission/result for history, but the
+    // source task must not continue counting the same evidence after it has
+    // become current under a different task focus.
+    return {
+      ...baseResponse,
+      reason: "This evidence was moved to another task focus and is historical here.",
+    };
+  }
+
   if (settingsContext?.certificationEnabled !== true) {
     return {
       ...baseResponse,
@@ -764,6 +774,7 @@ async function loadStudentCertificationContext({
       studentId,
       subjectId: { $in: missionSubjectIds },
       latestResultPackageId: { $exists: true, $ne: null },
+      evidenceCurrentExcluded: { $ne: true },
       $or: [{ status: "published" }, { status: { $exists: false } }],
     }).lean()
   : [];

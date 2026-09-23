@@ -305,6 +305,31 @@ test("each report stage selects its newest current mission independently", () =>
   assert.equal(selected.theory._id, "theory");
 });
 
+test("moved-out newest evidence restores the older same-stage mission", () => {
+  const movedOut = {
+    ...mission({
+      id: "moved-out-theory",
+      format: "THEORY",
+      count: 3,
+      date: "2026-02-01T09:00:00.000Z",
+      resultPackageId: "moved-result",
+    }),
+    evidenceCurrentExcluded: true,
+  };
+  const older = mission({
+    id: "older-theory",
+    format: "THEORY",
+    count: 3,
+    date: "2026-01-01T09:00:00.000Z",
+    resultPackageId: "older-result",
+  });
+  const selected = criterionReportService.selectCurrentEvidenceMissions(
+    [movedOut, older],
+    "P1",
+  );
+  assert.equal(selected.theory._id, "older-theory");
+});
+
 test("legacy unsequenced assessments use stable A then B chronology", () => {
   const selected = criterionReportService.selectCurrentEvidenceMissions(
     [

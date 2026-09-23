@@ -390,6 +390,57 @@ const missionSchema = new mongoose.Schema(
       // WHY: A server-owned source link makes copy actions auditable and lets
       // persistence reject accidental double-click duplicates safely.
     },
+    redoOfMissionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Mission",
+      default: null,
+      index: true,
+      // WHY: Redo attempts must retain an auditable link to the completed
+      // mission whose content was copied without changing that old mission.
+    },
+    redoOfResultPackageId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ResultPackage",
+      default: null,
+      // WHY: The exact submitted evidence that seeded editable redo work must
+      // remain identifiable while its score and feedback stay historical.
+    },
+    evidenceCurrentExcluded: {
+      type: Boolean,
+      default: false,
+      index: true,
+      // WHY: A moved-out mission remains in history but must not continue to
+      // win current-stage report selection under its incorrect task focus.
+    },
+    evidenceMovedFromTaskCode: {
+      type: String,
+      default: "",
+      uppercase: true,
+      trim: true,
+      match: /^$|^[PMD]\d+$/,
+    },
+    evidenceMovedToTaskCode: {
+      type: String,
+      default: "",
+      uppercase: true,
+      trim: true,
+      match: /^$|^[PMD]\d+$/,
+    },
+    evidenceMovedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    evidenceMovedAt: {
+      type: Date,
+      default: null,
+    },
+    evidenceReclassificationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "EvidenceReclassification",
+      default: null,
+      index: true,
+    },
   },
   {
     timestamps: true,
@@ -419,6 +470,17 @@ missionSchema.index(
       reusedFromMissionId: { $type: "objectId" },
     },
     name: "unique_reused_mission_target_slot",
+  },
+);
+
+missionSchema.index(
+  { redoOfResultPackageId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      redoOfResultPackageId: { $type: "objectId" },
+    },
+    name: "unique_redo_source_result",
   },
 );
 

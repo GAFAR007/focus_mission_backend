@@ -14,6 +14,7 @@
 const mongoose = require("mongoose");
 const SessionLog = require("../models/SessionLog");
 const resultService = require("../services/result.service");
+const resultEvidenceActionService = require("../services/resultEvidenceAction.service");
 const standalonePaperService = require("../services/standalonePaper.service");
 const standalonePaperSessionService = require("../services/standalonePaperSession.service");
 const subjectCertificationService = require("../services/subjectCertification.service");
@@ -721,6 +722,46 @@ async function getResultPackage(req, res, next) {
   }
 }
 
+async function createResultRedo(req, res, next) {
+  try {
+    const redo = await resultEvidenceActionService.createRedo({
+      teacherId: req.user.id,
+      resultPackageId: req.params.resultPackageId,
+    });
+    res.status(201).json({ success: true, redo });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function previewResultMove(req, res, next) {
+  try {
+    const { preview } = await resultEvidenceActionService.buildMovePreview({
+      teacherId: req.user.id,
+      resultPackageId: req.params.resultPackageId,
+      targetTaskCode: req.body.targetTaskCode,
+    });
+    res.status(200).json({ success: true, preview });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function moveResultTaskFocus(req, res, next) {
+  try {
+    const move = await resultEvidenceActionService.moveEvidence({
+      teacherId: req.user.id,
+      resultPackageId: req.params.resultPackageId,
+      targetTaskCode: req.body.targetTaskCode,
+      replaceTargetEvidence: req.body.replaceTargetEvidence === true,
+      reason: req.body.reason,
+    });
+    res.status(201).json({ success: true, move });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function createManualResultPackage(req, res, next) {
   try {
     const created =
@@ -878,6 +919,9 @@ module.exports = {
   getStudentSubjectAnalytics,
   getStudentBehaviourTrend,
   getResultPackage,
+  createResultRedo,
+  previewResultMove,
+  moveResultTaskFocus,
   createManualResultPackage,
   createLessonManualResultPackage,
   scoreTheoryResultPackage,

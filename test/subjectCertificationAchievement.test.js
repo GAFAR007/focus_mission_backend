@@ -353,3 +353,19 @@ test("legacy unsequenced assessments derive A then optional B without mutation",
   assert.equal(row.assessmentBMissionId, legacyB.missionId);
   assert.equal(row.status, CERTIFICATION_STATUS.PASSED);
 });
+
+test("19. moved-out source evidence is historical and cannot count twice", () => {
+  const movedSourceMission = {
+    ...missionFixture({ draftFormat: "THEORY", taskCode: "P1" }),
+    evidenceCurrentExcluded: true,
+  };
+  const evaluation = evaluateCertificationMission({
+    mission: movedSourceMission,
+    resultPackage: resultFixture({ theoryScore: 90 }),
+    settingsContext: settingsContext(["P1", "P2"]),
+  });
+
+  assert.equal(evaluation.certificationEligible, false);
+  assert.equal(evaluation.certificationCounted, false);
+  assert.match(evaluation.reason, /historical here/);
+});
