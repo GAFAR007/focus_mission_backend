@@ -139,6 +139,52 @@ test("migrated staff verification does not invoke bcrypt", async () => {
   }
 });
 
+test("migrated student verification does not invoke bcrypt", async () => {
+  const originalCompare = bcrypt.compare;
+  bcrypt.compare = async () => {
+    throw new Error("bcrypt should not run for a migrated student code");
+  };
+
+  try {
+    const result = await accessGateService.verifyAccessCode({
+      code: SYNTHETIC_CODES.student,
+      clientKey: "keyed-student-client",
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.accessGroup, "student");
+  } finally {
+    bcrypt.compare = originalCompare;
+  }
+});
+
+test("student verification keeps bcrypt fallback without keyed configuration", async () => {
+  delete process.env.FOCUS_MISSION_ACCESS_CODE_HMAC_SECRET;
+  for (const group of Object.keys(SYNTHETIC_CODES)) {
+    delete process.env[`FOCUS_MISSION_${group.toUpperCase()}_ACCESS_CODE_HMAC`];
+  }
+
+  const result = await accessGateService.verifyAccessCode({
+    code: SYNTHETIC_CODES.student,
+    clientKey: "legacy-student-client",
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.accessGroup, "student");
+});
+
+test("a student digest without its HMAC secret fails closed", async () => {
+  delete process.env.FOCUS_MISSION_ACCESS_CODE_HMAC_SECRET;
+
+  await assert.rejects(
+    accessGateService.verifyAccessCode({
+      code: SYNTHETIC_CODES.student,
+      clientKey: "missing-student-secret-client",
+    }),
+    { statusCode: 503, code: "ACCESS_GATE_NOT_CONFIGURED" },
+  );
+});
+
 test("a group without a keyed digest keeps the bcrypt migration fallback", async () => {
   delete process.env.FOCUS_MISSION_MANAGEMENT_ACCESS_CODE_HMAC;
 
