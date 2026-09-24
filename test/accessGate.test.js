@@ -10,6 +10,7 @@
  * service limits, and temporarily stub only database-dependent happy paths.
  */
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const { after, afterEach, before, test } = require("node:test");
 
 const bcrypt = require("bcryptjs");
@@ -23,6 +24,8 @@ const SYNTHETIC_CODES = Object.freeze({
   staff: "TEST-STAFF-CODE",
   management: "TEST-MANAGEMENT-CODE",
 });
+const SYNTHETIC_HMAC_SECRET =
+  "synthetic-access-code-hmac-secret-with-at-least-32-characters";
 
 let server;
 let baseUrl;
@@ -49,6 +52,21 @@ async function verify(group) {
   });
 }
 
+function keyedDigest(code) {
+  return crypto
+    .createHmac("sha256", SYNTHETIC_HMAC_SECRET)
+    .update(code, "utf8")
+    .digest("hex");
+}
+
+function configureAllKeyedDigests() {
+  process.env.FOCUS_MISSION_ACCESS_CODE_HMAC_SECRET = SYNTHETIC_HMAC_SECRET;
+  for (const group of Object.keys(SYNTHETIC_CODES)) {
+    process.env[`FOCUS_MISSION_${group.toUpperCase()}_ACCESS_CODE_HMAC`] =
+      keyedDigest(SYNTHETIC_CODES[group]);
+  }
+}
+
 before(async () => {
   process.env.JWT_SECRET = "synthetic-access-gate-test-secret";
   process.env.FOCUS_MISSION_STUDENT_ACCESS_CODE_HASH = await bcrypt.hash(
@@ -63,6 +81,7 @@ before(async () => {
     SYNTHETIC_CODES.management,
     4,
   );
+  configureAllKeyedDigests();
   server = app.listen(0);
   await new Promise((resolve) => server.once("listening", resolve));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -70,6 +89,7 @@ before(async () => {
 
 afterEach(() => {
   accessGateService.resetRateLimitForTests();
+  configureAllKeyedDigests();
 });
 
 after(async () => {
@@ -93,8 +113,55 @@ for (const group of ["student", "staff", "management"]) {
     assert.equal(responseText.includes(process.env[
       `FOCUS_MISSION_${group.toUpperCase()}_ACCESS_CODE_HASH`
     ]), false);
+    assert.equal(responseText.includes(process.env[
+      `FOCUS_MISSION_${group.toUpperCase()}_ACCESS_CODE_HMAC`
+    ]), false);
+    assert.equal(responseText.includes(SYNTHETIC_HMAC_SECRET), false);
   });
 }
+
+test("migrated staff verification does not invoke bcrypt", async () => {
+  const originalCompare = bcrypt.compare;
+  bcrypt.compare = async () => {
+    throw new Error("bcrypt should not run for a migrated staff code");
+  };
+
+  try {
+    const result = await accessGateService.verifyAccessCode({
+      code: SYNTHETIC_CODES.staff,
+      clientKey: "keyed-staff-client",
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.accessGroup, "staff");
+  } finally {
+    bcrypt.compare = originalCompare;
+  }
+});
+
+test("a group without a keyed digest keeps the bcrypt migration fallback", async () => {
+  delete process.env.FOCUS_MISSION_MANAGEMENT_ACCESS_CODE_HMAC;
+
+  const result = await accessGateService.verifyAccessCode({
+    code: SYNTHETIC_CODES.management,
+    clientKey: "legacy-management-client",
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.accessGroup, "management");
+});
+
+test("malformed keyed verifier configuration fails closed", async () => {
+  process.env.FOCUS_MISSION_STAFF_ACCESS_CODE_HMAC = "not-a-valid-digest";
+
+  await assert.rejects(
+    accessGateService.verifyAccessCode({
+      code: SYNTHETIC_CODES.staff,
+      clientKey: "malformed-keyed-config-client",
+    }),
+    { statusCode: 503, code: "ACCESS_GATE_NOT_CONFIGURED" },
+  );
+});
 
 test("wrong code is rejected with one generic response", async () => {
   const { response, json } = await request("/api/auth/access-gate/verify", {

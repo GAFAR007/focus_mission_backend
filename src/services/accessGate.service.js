@@ -6,9 +6,11 @@
  * Anonymous visitors must prove school-group access before account metadata is
  * returned, without treating the gate token as a real user login.
  * HOW:
- * Compare submitted codes with backend bcrypt hashes, sign an eight-hour JWT,
- * validate its narrow scope, and track failed attempts per client in memory.
+ * Prefer constant-time HMAC digest lookup for migrated groups, retain bcrypt as
+ * a safe per-group migration fallback, sign an eight-hour JWT, and track failed
+ * attempts per client in memory.
  */
+const crypto = require("node:crypto");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
@@ -23,6 +25,14 @@ const ACCESS_CODE_HASH_ENV_BY_GROUP = Object.freeze({
   staff: "FOCUS_MISSION_STAFF_ACCESS_CODE_HASH",
   management: "FOCUS_MISSION_MANAGEMENT_ACCESS_CODE_HASH",
 });
+const ACCESS_CODE_HMAC_ENV_BY_GROUP = Object.freeze({
+  student: "FOCUS_MISSION_STUDENT_ACCESS_CODE_HMAC",
+  staff: "FOCUS_MISSION_STAFF_ACCESS_CODE_HMAC",
+  management: "FOCUS_MISSION_MANAGEMENT_ACCESS_CODE_HMAC",
+});
+const ACCESS_CODE_HMAC_SECRET_ENV = "FOCUS_MISSION_ACCESS_CODE_HMAC_SECRET";
+const HMAC_DIGEST_HEX_LENGTH = 64;
+const MIN_HMAC_SECRET_LENGTH = 32;
 const GATE_TOKEN_TTL_SECONDS = 8 * 60 * 60;
 const FAILED_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
 const MAX_FAILED_ATTEMPTS = 5;
@@ -70,6 +80,78 @@ function configuredHashes() {
   }
 
   return entries;
+}
+
+function configuredKeyedDigests() {
+  const entries = ACCESS_GROUPS.map((accessGroup) => ({
+    accessGroup,
+    digestHex: String(
+      process.env[ACCESS_CODE_HMAC_ENV_BY_GROUP[accessGroup]] || "",
+    ).trim(),
+  })).filter((entry) => entry.digestHex.length > 0);
+
+  if (entries.length === 0) {
+    // WHY: Empty keyed configuration means the deployment has not started the
+    // additive migration yet, so the existing bcrypt path remains authoritative.
+    return { entries: [], secret: null };
+  }
+
+  const secret = String(process.env[ACCESS_CODE_HMAC_SECRET_ENV] || "").trim();
+  if (secret.length < MIN_HMAC_SECRET_LENGTH) {
+    // WHY: A missing or weak server-only key must fail closed instead of
+    // silently downgrading a group that operators intended to migrate.
+    throw createError(
+      503,
+      "School access is not configured right now.",
+      "ACCESS_GATE_NOT_CONFIGURED",
+    );
+  }
+
+  const invalidDigest = entries.some(
+    ({ digestHex }) =>
+      digestHex.length !== HMAC_DIGEST_HEX_LENGTH ||
+      !/^[0-9a-f]+$/i.test(digestHex),
+  );
+  if (invalidDigest) {
+    // WHY: Strict digest validation prevents malformed secret configuration
+    // from producing ambiguous comparisons or an accidental authorization path.
+    throw createError(
+      503,
+      "School access is not configured right now.",
+      "ACCESS_GATE_NOT_CONFIGURED",
+    );
+  }
+
+  return {
+    secret,
+    entries: entries.map(({ accessGroup, digestHex }) => ({
+      accessGroup,
+      digest: Buffer.from(digestHex, "hex"),
+    })),
+  };
+}
+
+function findKeyedAccessGroup(submittedCode, keyedConfiguration) {
+  if (keyedConfiguration.entries.length === 0) {
+    return null;
+  }
+
+  const submittedDigest = crypto
+    .createHmac("sha256", keyedConfiguration.secret)
+    .update(submittedCode, "utf8")
+    .digest();
+  let matchingAccessGroup = null;
+
+  for (const entry of keyedConfiguration.entries) {
+    // WHY: Every configured digest is compared even after a match so lookup
+    // work does not reveal the configured group order through early exit.
+    const matches = crypto.timingSafeEqual(submittedDigest, entry.digest);
+    if (matches && matchingAccessGroup === null) {
+      matchingAccessGroup = entry.accessGroup;
+    }
+  }
+
+  return matchingAccessGroup;
 }
 
 function normalizedClientKey(value) {
@@ -130,19 +212,32 @@ async function verifyAccessCode({ code, clientKey, now = new Date() }) {
   assertAttemptAllowed(clientKey, nowMs);
 
   const hashes = configuredHashes();
-  const matches = await Promise.all(
-    hashes.map(({ hash }) => bcrypt.compare(submittedCode, hash)),
-  );
-  const matchingIndex = matches.findIndex(Boolean);
+  const keyedConfiguration = configuredKeyedDigests();
+  let accessGroup = findKeyedAccessGroup(submittedCode, keyedConfiguration);
 
-  if (matchingIndex < 0) {
+  if (accessGroup === null) {
+    const migratedGroups = new Set(
+      keyedConfiguration.entries.map((entry) => entry.accessGroup),
+    );
+    const legacyHashes = hashes.filter(
+      ({ accessGroup: legacyGroup }) => !migratedGroups.has(legacyGroup),
+    );
+    const matches = await Promise.all(
+      legacyHashes.map(({ hash }) => bcrypt.compare(submittedCode, hash)),
+    );
+    const matchingIndex = matches.findIndex(Boolean);
+    accessGroup = matchingIndex < 0
+      ? null
+      : legacyHashes[matchingIndex].accessGroup;
+  }
+
+  if (accessGroup === null) {
     // WHY: Failed attempts share one generic outcome and never log the supplied
     // value, its length, comparison details, or a nearly matching group.
     recordFailedAttempt(clientKey, nowMs);
     throw createError(401, GENERIC_REJECTION_MESSAGE, "ACCESS_GATE_REJECTED");
   }
 
-  const accessGroup = hashes[matchingIndex].accessGroup;
   clearFailedAttempts(clientKey);
   const gateToken = jwt.sign(
     {
