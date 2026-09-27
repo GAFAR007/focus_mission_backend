@@ -312,3 +312,19 @@ test("invalid or same task codes are rejected before move writes", () => {
     /exactly one Task Focus/,
   );
 });
+
+
+test("Question redo preserves multi-focus assessment sequence and starts a separate attempt", () => {
+  const source = { ...sourceMission({ stage: "QUESTIONS" }), taskCodes: ["P3", "M1"],
+    assessmentSequenceByTaskCode: { P3: "A", M1: "B" }, assignmentAttempt: 2, assignmentRootId: "root" };
+  const result = sourceResult({ stage: "QUESTIONS" });
+  const snapshot = JSON.stringify({ source, result });
+  const redo = resultEvidenceActionService.buildRedoMissionData({ sourceMission: source,
+    sourceResultPackage: result, teacherId: "teacher-1", now: new Date("2026-09-26T10:00:00Z") });
+  assert.deepEqual(redo.taskCodes, ["P3", "M1"]);
+  assert.deepEqual(redo.assessmentSequenceByTaskCode, { P3: "A", M1: "B" });
+  assert.equal(redo.assignmentRootId, "root");
+  assert.equal(redo.assignmentAttempt, 3);
+  assert.equal(redo.latestResultPackageId, null);
+  assert.equal(JSON.stringify({ source, result }), snapshot);
+});

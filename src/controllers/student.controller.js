@@ -16,6 +16,9 @@ const standalonePaperSessionService = require("../services/standalonePaperSessio
 
 async function getDashboard(req, res, next) {
   try {
+    if (req.user.role === "student" && String(req.user.id) !== String(req.params.studentId)) {
+      return res.status(403).json({ success: false, message: "You can only view your own missions.", code: "STUDENT_ACCESS_DENIED" });
+    }
     const dashboard = await studentService.getDashboard(req.params.studentId);
     res.json(dashboard);
   } catch (error) {
@@ -74,7 +77,7 @@ async function listAssignedMissions(req, res, next) {
 
 async function startSession(req, res, next) {
   try {
-    const session = await studentService.startSession(req.body);
+    const session = await studentService.startSession({ ...req.body, requesterId: req.user.id, requesterRole: req.user.role });
     res.status(201).json(session);
   } catch (error) {
     next(error);
@@ -83,7 +86,7 @@ async function startSession(req, res, next) {
 
 async function completeSession(req, res, next) {
   try {
-    const result = await studentService.completeSession(req.body);
+    const result = await studentService.completeSession({ ...req.body, requesterId: req.user.id, requesterRole: req.user.role });
     res.status(201).json(result);
   } catch (error) {
     next(error);

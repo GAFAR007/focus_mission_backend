@@ -76,8 +76,9 @@ router.get(
   [
     authorizeRoles("student", "teacher", "mentor"),
     param("studentId").isMongoId().withMessage("Valid studentId is required."),
-    query("subjectId").isMongoId().withMessage("Valid subjectId is required."),
+    query("subjectId").optional().isMongoId().withMessage("Valid subjectId is required."),
     query("sessionType")
+      .optional()
       .isIn(["morning", "afternoon"])
       .withMessage("Session type must be morning or afternoon."),
     validateRequest,

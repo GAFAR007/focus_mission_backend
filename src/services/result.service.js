@@ -3193,6 +3193,7 @@ async function createResultPackageForCompletion({
   startTime,
   submitTime,
   resultEvidence,
+  session = null,
 }) {
   if (!mission) {
     return null;
@@ -3237,10 +3238,10 @@ async function createResultPackageForCompletion({
     await ResultPackage.countDocuments({
       missionId: mission._id,
       studentId: mission.studentId,
-    });
+    }).session(session);
   const completionAttemptNumber =
     Math.max(
-      1,
+      Number(mission.assignmentAttempt || 1),
       Number(
         previousAttemptCount || 0,
       ) + 1,
@@ -3295,9 +3296,9 @@ async function createResultPackageForCompletion({
       questionEvidenceFiles: submittedQuestionEvidenceSnapshot,
     };
 
-  const resultPackage =
+  const [resultPackage] =
     await ResultPackage.create(
-      {
+      [{
         studentId: mission.studentId,
         teacherId:
           mission.createdBy || null,
@@ -3366,7 +3367,8 @@ async function createResultPackageForCompletion({
           evidenceWithAttempt,
         latestSendStatus:
           "not_sent",
-      },
+      }],
+      { session },
     );
 
   // WHY: Mission summary cards need one quick lookup id for the latest result.
@@ -3376,23 +3378,26 @@ async function createResultPackageForCompletion({
       latestResultPackageId:
         resultPackage._id,
     },
+    { session },
   );
 
-  try {
-    await questionEvidenceService.finalizeMissionEvidence({
-      studentId: mission.studentId,
-      missionId: mission._id,
-      resultPackageId: resultPackage._id,
-    });
-  } catch (error) {
-    // WHY: The ResultPackage already contains immutable evidence ids. A
-    // secondary metadata-link failure is logged for repair instead of falsely
-    // telling the learner that their completed submission failed.
-    console.error("[question-evidence] finalize_failed", {
-      missionId: String(mission._id || ""),
-      resultPackageId: String(resultPackage._id || ""),
-      message: String(error?.message || error),
-    });
+  if (!session) {
+    try {
+      await questionEvidenceService.finalizeMissionEvidence({
+        studentId: mission.studentId,
+        missionId: mission._id,
+        resultPackageId: resultPackage._id,
+      });
+    } catch (error) {
+      // WHY: The ResultPackage already contains immutable evidence ids. A
+      // secondary metadata-link failure is logged for repair instead of falsely
+      // telling the learner that their completed submission failed.
+      console.error("[question-evidence] finalize_failed", {
+        missionId: String(mission._id || ""),
+        resultPackageId: String(resultPackage._id || ""),
+        message: String(error?.message || error),
+      });
+    }
   }
 
   return resultPackage;

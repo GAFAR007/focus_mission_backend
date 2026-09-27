@@ -233,8 +233,7 @@ const missionSchema = new mongoose.Schema(
       default: "",
       trim: true,
       index: true,
-      // WHY: A mission should only surface on the exact lesson date it was
-      // prepared for, even if the teacher drafted it earlier.
+      // WHY: Preserve original lesson context without expiring unfinished work.
     },
     availableOnDay: {
       type: String,
@@ -364,6 +363,11 @@ const missionSchema = new mongoose.Schema(
       // WHY: XP for assigned missions is score-based, so each mission must
       // keep the last earned XP value for panel and card progress rendering.
     },
+    // Assignment lifecycle is independent of the original lesson date.
+    startedAt: { type: Date, default: null },
+    completedAt: { type: Date, default: null },
+    assignmentRootId: { type: mongoose.Schema.Types.ObjectId, ref: "Mission", default: null },
+    assignmentAttempt: { type: Number, min: 1, default: 1 },
     latestResultPackageId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "ResultPackage",

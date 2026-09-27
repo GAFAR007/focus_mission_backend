@@ -116,6 +116,12 @@ function serializeMission(mission) {
 
   return {
     id: String(mission._id || mission.id || ""),
+    assignmentId: String(mission.assignmentRootId || mission._id || mission.id || ""),
+    assignmentAttempt: Number(mission.assignmentAttempt || 1),
+    assignmentStatus: mission.completedAt || mission.latestResultPackageId || Number(mission.latestScoreTotal || 0) > 0
+      ? "completed"
+      : mission.startedAt ? "in_progress" : mission.redoOfMissionId ? "redo_requested" : "available",
+    completedAt: mission.completedAt ? new Date(mission.completedAt).toISOString() : null,
     title: mission.title,
     teacherNote: mission.teacherNote || "",
     sourceUnitText: mission.sourceUnitText || "",

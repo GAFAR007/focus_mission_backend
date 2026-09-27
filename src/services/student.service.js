@@ -3,12 +3,13 @@
  * student.service assembles dashboard and timetable data, starts subject
  * missions, and records completed mission sessions.
  * WHY:
- * Student lesson access must be tied to the timetable and XP rules so learners
- * only see subject work that is valid for the current lesson slot.
+ * Published assignments remain available across calendar days, while saved
+ * results lock each attempt and the timetable retains its lesson context.
  * HOW:
  * Load the active student and timetable context, resolve the correct mission
  * for the scheduled slot, and persist completed session outcomes.
  */
+const mongoose = require("mongoose");
 const Mission = require("../models/Mission");
 const Question = require("../models/Question");
 const ResultPackage = require("../models/ResultPackage");
@@ -19,6 +20,7 @@ const Timetable = require("../models/Timetable");
 const User = require("../models/User");
 const resultService = require("./result.service");
 const missionWorkDraftService = require("./missionWorkDraft.service");
+const questionEvidenceService = require("./questionEvidence.service");
 const standalonePaperSessionService = require("./standalonePaperSession.service");
 const subjectCertificationService = require("./subjectCertification.service");
 const {
@@ -687,13 +689,14 @@ async function getTargetXpSummary(studentId, dateKey) {
   };
 }
 
-async function getSubjectProgressData(studentId) {
+async function getSubjectProgressData(studentId, session = null) {
   const missions = await Mission.find({
     studentId,
     manualResultOnly: { $ne: true },
     $or: [{ status: "published" }, { status: { $exists: false } }],
   })
     .populate("subjectId", "name icon color")
+    .session(session)
     .lean();
   const subjectMap = new Map();
 
@@ -974,6 +977,7 @@ async function getDashboard(studentId) {
       student,
     ),
     subjectCertification,
+    assignedMissions: await listAssignedMissions({ studentId }),
     today: timetable ? serializeTimetableEntry(timetable) : null,
     todayStandalonePapers,
     recentSessions,
@@ -996,143 +1000,133 @@ async function getTimetable(studentId) {
     .map(serializeTimetableEntry);
 }
 
-async function startSession({ studentId, subjectId, sessionType, missionId }) {
-  const currentDay = getCurrentDayForStudent(studentId);
-  const currentDateKey = getCurrentDateKeyForStudent(studentId);
-  const [student, subject, timetable] = await Promise.all([
-    User.findOne({ _id: studentId, role: "student" }).lean(),
-    Subject.findById(subjectId).lean(),
-    findTimetableForDay({ studentId, day: currentDay }),
-  ]);
-
-  if (!student) {
-    throw createError(404, "Student not found.");
-  }
-
-  if (!subject) {
-    throw createError(404, "Subject not found.");
-  }
-
-  if (!timetable) {
-    // WHY: Students should only start subject work when a real lesson is
-    // scheduled, otherwise the timetable loses its control over daily access.
-    throw createError(403, "No lesson is scheduled for this student today.");
-  }
-
-  const scheduledSubjectId =
-    sessionType === "morning" ? timetable.morningSubject : timetable.afternoonSubject;
-
-  if (!scheduledSubjectId || String(scheduledSubjectId) !== String(subjectId)) {
-    // WHY: Mission availability is locked to the real lesson slot so subject
-    // teachers control when their work becomes visible to the learner.
-    throw createError(
-      403,
-      "This mission can only be started on the day and lesson slot when that subject is scheduled.",
-    );
-  }
-
-  const missionFilter = {
+function assignedMissionFilter({ studentId, subjectId, sessionType, missionId }) {
+  return {
     studentId,
-    subjectId,
-    sessionType,
-    availableOnDate: currentDateKey,
+    ...(subjectId ? { subjectId } : {}),
+    ...(sessionType ? { sessionType } : {}),
+    ...(missionId ? { _id: missionId } : {}),
+    isArchived: { $ne: true },
     manualResultOnly: { $ne: true },
     $or: [{ status: "published" }, { status: { $exists: false } }],
-  };
-  const requestedMissionId = String(missionId || "").trim();
-  if (requestedMissionId) {
-    missionFilter._id = requestedMissionId;
-  }
-
-  const [savedMission, bankQuestions] = await Promise.all([
-    Mission.findOne(missionFilter)
-      .sort({ publishedAt: -1, createdAt: -1 })
-      .populate("subjectId", "name icon color")
-      .lean(),
-    Question.find({ subjectId }).sort({ createdAt: -1 }).limit(5).lean(),
-  ]);
-
-  const mission = savedMission
-    ? serializeMission(savedMission)
-    : buildQuestionBankMission({
-        subject,
-        sessionType,
-        difficulty: student.preferredDifficulty || "medium",
-        questions: bankQuestions,
-      });
-
-  return {
-    startedAt: new Date().toISOString(),
-    studentId,
-    subjectId,
-    sessionType,
-    maxQuestions: mission.questionCount,
-    mission,
   };
 }
 
-async function listAssignedMissions({
-  requesterId,
-  requesterRole,
-  studentId,
-  subjectId,
-  sessionType,
-}) {
-  if (
-    requesterRole === "student" &&
-    String(requesterId) !== String(studentId)
-  ) {
-    throw createError(403, "You can only view your own assigned missions.");
+async function assertMissionOpen(mission, session = null) {
+  if (!mission) throw createError(404, "Assigned mission not found.");
+  // WHY: Older submissions may predate the latest-result pointer. Never let
+  // missing summary metadata reopen their immutable evidence.
+  if (mission.completedAt || mission.latestResultPackageId || Number(mission.latestScoreTotal || 0) > 0 ||
+      await ResultPackage.exists({ missionId: mission._id }).session(session) ||
+      await SessionLog.exists({ missionId: mission._id }).session(session)) {
+    throw createError(409, "This mission is completed and locked. Your teacher can request a redo.");
   }
+}
 
-  const currentDay = getCurrentDayForStudent(studentId);
-  const currentDateKey = getCurrentDateKeyForStudent(studentId);
-  const [student, subject, timetable] = await Promise.all([
+async function startSession({ studentId, subjectId, sessionType, missionId, requesterId, requesterRole }) {
+  if (requesterRole === "student") assertStudentSelfAccess({ requesterId, studentId });
+  const [student, subject] = await Promise.all([
     User.findOne({ _id: studentId, role: "student" }).lean(),
     Subject.findById(subjectId).lean(),
-    findTimetableForDay({ studentId, day: currentDay }),
   ]);
+  if (!student) throw createError(404, "Student not found.");
+  if (!subject) throw createError(404, "Subject not found.");
 
-  if (!student) {
-    throw createError(404, "Student not found.");
+  // WHY: An explicit assignment is authorized by ownership and publication,
+  // never by today's weekday. Question-bank practice still uses its timetable.
+  let savedMission = null;
+  if (missionId) {
+    savedMission = await Mission.findOne(assignedMissionFilter({ studentId, subjectId, sessionType, missionId }))
+      .populate("subjectId", "name icon color").lean();
+    await assertMissionOpen(savedMission);
+  } else {
+    const timetable = await findTimetableForDay({ studentId, day: getCurrentDayForStudent(studentId) });
+    const scheduled = sessionType === "morning" ? timetable?.morningSubject : timetable?.afternoonSubject;
+    if (!scheduled || String(scheduled) !== String(subjectId)) {
+      throw createError(403, "No lesson is scheduled for this subject today.");
+    }
+    const missions = await listAssignedMissions({ studentId, subjectId, sessionType });
+    const available = missions.find((item) => item.assignmentStatus !== "completed");
+    if (available) return startSession({ studentId, subjectId, sessionType, missionId: available.id });
   }
-
-  if (!subject) {
-    throw createError(404, "Subject not found.");
-  }
-
-  if (!timetable) {
-    throw createError(403, "No lesson is scheduled for this student today.");
-  }
-
-  const scheduledSubjectId =
-    sessionType === "morning" ? timetable.morningSubject : timetable.afternoonSubject;
-
-  if (!scheduledSubjectId || String(scheduledSubjectId) !== String(subjectId)) {
-    throw createError(
-      403,
-      "This mission can only be started on the day and lesson slot when that subject is scheduled.",
+  if (savedMission) {
+    await Mission.updateOne(
+      { _id: savedMission._id, startedAt: null, completedAt: null, latestResultPackageId: null },
+      { $set: { startedAt: new Date() } },
     );
+    savedMission.startedAt ||= new Date();
   }
+  const mission = savedMission ? serializeMission(savedMission) : buildQuestionBankMission({
+    subject, sessionType, difficulty: student.preferredDifficulty || "medium",
+    questions: await Question.find({ subjectId }).sort({ createdAt: -1 }).limit(5).lean(),
+  });
+  return { startedAt: new Date().toISOString(), studentId, subjectId, sessionType, maxQuestions: mission.questionCount, mission };
+}
 
-  const missions = await Mission.find({
-    studentId,
-    subjectId,
-    sessionType,
-    availableOnDate: currentDateKey,
-    manualResultOnly: { $ne: true },
-    $or: [{ status: "published" }, { status: { $exists: false } }],
-  })
-    .sort({ publishedAt: -1, createdAt: -1 })
-    .populate("subjectId", "name icon color")
-    .lean();
-
-  return missions.map((mission) => serializeMission(mission));
+async function listAssignedMissions({ requesterId, requesterRole, studentId, subjectId, sessionType }) {
+  if (requesterRole === "student") assertStudentSelfAccess({ requesterId, studentId });
+  const missions = await Mission.find(assignedMissionFilter({ studentId, subjectId, sessionType }))
+    .sort({ publishedAt: 1, createdAt: 1 })
+    .populate("subjectId", "name icon color").lean();
+  const missingIds = missions.filter((mission) => !mission.latestResultPackageId).map((mission) => mission._id);
+  // Read-only legacy reconciliation: display old results without rewriting them.
+  const results = missingIds.length ? await ResultPackage.find({ studentId, missionId: { $in: missingIds } })
+    .select("missionId createdAt").sort({ createdAt: -1 }).lean() : [];
+  const legacyLogs = missingIds.length ? await SessionLog.find({ studentId, missionId: { $in: missingIds } })
+    .select("missionId createdAt").sort({ createdAt: -1 }).lean() : [];
+  const completedDates = new Map(legacyLogs.map((log) => [String(log.missionId), log.createdAt]));
+  const byMission = new Map();
+  for (const result of results) if (!byMission.has(String(result.missionId))) byMission.set(String(result.missionId), result);
+  return missions.map((mission) => {
+    const result = byMission.get(String(mission._id));
+    return serializeMission({ ...mission,
+      latestResultPackageId: mission.latestResultPackageId || result?._id,
+      completedAt: mission.completedAt || result?.createdAt || completedDates.get(String(mission._id)),
+    });
+  });
 }
 
 async function completeSession(payload) {
+  if (payload.requesterRole === "student") assertStudentSelfAccess({ requesterId: payload.requesterId, studentId: payload.studentId });
+  await ensureWeeklyFixedTargets(payload.studentId, getCurrentDateKeyForStudent(payload.studentId));
+  const session = await mongoose.startSession();
+  let result;
+  try {
+    // WHY: The mission lock, result, session log and XP must commit together.
+    // Concurrent submissions conflict on the mission write and retry as locked.
+    await session.withTransaction(async () => { result = await completeSessionInTransaction(payload, session); });
+  } finally {
+    await session.endSession();
+  }
+  if (result.resultPackageId && payload.missionId) {
+    try {
+      await missionWorkDraftService.markMissionWorkDraftSubmitted({ studentId: payload.studentId, missionId: payload.missionId, resultPackageId: result.resultPackageId });
+      await questionEvidenceService.finalizeMissionEvidence({ studentId: payload.studentId, missionId: payload.missionId, resultPackageId: result.resultPackageId });
+    } catch (error) {
+      console.error("[mission] submitted_metadata_failed", { missionId: payload.missionId, message: error.message });
+    }
+  }
+  // Summaries and their existing award policy run only after durable completion.
+  const [targetSummary, subjectProgressResult, subjectCertification] = await Promise.all([
+    getTargetXpSummary(payload.studentId, result.dailyXp.dateKey),
+    getSubjectProgressData(payload.studentId),
+    subjectCertificationService.getStudentCertificationSummaries({ studentId: payload.studentId, applyAwards: true }),
+  ]);
+  const updatedStudent = await User.findById(payload.studentId).lean();
+  console.info("[mission] completion_committed", { missionId: payload.missionId, resultPackageId: result.resultPackageId });
+  return {
+    ...result,
+    student: serializeStudent(updatedStudent),
+    dailyXp: { ...result.dailyXp, targetXp: targetSummary.dailyTargetXp,
+      weeklyTargetXp: targetSummary.weeklyTargetXp, weekKey: targetSummary.weekKey,
+      totalXp: clampNumber(result.dailyXp.performanceXp + targetSummary.dailyTargetXp, 0, PERFORMANCE_DAILY_CAP + TARGET_DAILY_CAP) },
+    subjectProgress: applySubjectAwardFlags(subjectProgressResult.subjectProgress, updatedStudent),
+    subjectCertification,
+  };
+}
+
+async function completeSessionInTransaction(payload, session) {
   const dateKey = getCurrentDateKeyForStudent(payload.studentId);
-  await ensureWeeklyFixedTargets(payload.studentId, dateKey);
 
   let xpAwarded = 0;
   let completedQuestions = Number.isFinite(Number(payload.completedQuestions))
@@ -1156,14 +1150,9 @@ async function completeSession(payload) {
   let resultPackageScoreTotal = 0;
 
   if (missionId) {
-    const mission = await Mission.findOne({
-      _id: missionId,
-      studentId: payload.studentId,
-      subjectId: payload.subjectId,
-      sessionType: payload.sessionType,
-      manualResultOnly: { $ne: true },
-      $or: [{ status: "published" }, { status: { $exists: false } }],
-    }).populate("subjectId", "name");
+    const mission = await Mission.findOne(assignedMissionFilter({ ...payload, missionId }))
+      .session(session).populate("subjectId", "name");
+    await assertMissionOpen(mission, session);
 
     if (mission) {
       completedMission = mission;
@@ -1305,13 +1294,12 @@ async function completeSession(payload) {
       missionToPersist.latestScorePercent = scorePercent;
       missionToPersist.latestXpEarned = xpAwarded;
     }
-    await missionToPersist.save();
+    missionToPersist.completedAt = new Date();
+    await missionToPersist.save({ session });
   }
 
-  const [student, todaySessionLogs] = await Promise.all([
-    User.findOne({ _id: payload.studentId, role: "student" }),
-    SessionLog.find({ studentId: payload.studentId, dateKey }).lean(),
-  ]);
+  const student = await User.findOne({ _id: payload.studentId, role: "student" }).session(session);
+  const todaySessionLogs = await SessionLog.find({ studentId: payload.studentId, dateKey }).session(session).lean();
 
   if (!student) {
     throw createError(404, "Student not found.");
@@ -1359,7 +1347,7 @@ async function completeSession(payload) {
   let subjectCompletionBonusXp = 0;
   const subjectIdForBonus = String(missionSubjectId || "").trim();
   if (subjectIdForBonus && isAssessmentQuestionCount(missionQuestionCount)) {
-    const { subjectProgressById } = await getSubjectProgressData(payload.studentId);
+    const { subjectProgressById } = await getSubjectProgressData(payload.studentId, session);
     const subjectProgress = subjectProgressById.get(subjectIdForBonus);
     if (!Array.isArray(student.subjectCompletionAwards)) {
       student.subjectCompletionAwards = [];
@@ -1386,7 +1374,7 @@ async function completeSession(payload) {
 
   const totalXpAwarded = performanceXpAwarded + subjectCompletionBonusXp;
 
-  const sessionLog = await SessionLog.create({
+  const [sessionLog] = await SessionLog.create([{
     studentId: payload.studentId,
     subjectId: payload.subjectId,
     missionId: missionId || null,
@@ -1412,8 +1400,8 @@ async function completeSession(payload) {
     behaviourStatus: payload.behaviourStatus || "steady",
     notes: payload.notes || "",
     xpAwarded: totalXpAwarded,
-    createdBy: payload.createdBy || payload.studentId,
-  });
+    createdBy: payload.requesterId || payload.studentId,
+  }], { session });
 
   const resultPackage = await resultService.createResultPackageForCompletion({
     student,
@@ -1426,27 +1414,8 @@ async function completeSession(payload) {
     startTime: payload.startTime,
     submitTime: payload.submitTime,
     resultEvidence: payload.resultEvidence,
+    session,
   });
-
-  if (resultPackage && missionId) {
-    try {
-      await missionWorkDraftService.markMissionWorkDraftSubmitted({
-        studentId: payload.studentId,
-        missionId,
-        resultPackageId: resultPackage._id,
-      });
-    } catch (error) {
-      // WHY: ResultPackage creation is the authoritative final boundary. A
-      // secondary draft-status failure must not create a false failed-submit
-      // response after immutable evidence and mission linkage already exist.
-      console.error("[mission-draft] submit_mark_failed", {
-        studentId: String(payload.studentId || ""),
-        missionId,
-        resultPackageId: String(resultPackage._id || ""),
-        message: String(error?.message || error),
-      });
-    }
-  }
 
   // WHY: XP is applied only on explicit completion so rewards remain tied to
   // finished work and deterministic score rules.
@@ -1454,16 +1423,7 @@ async function completeSession(payload) {
   student.streak = streakState.nextStreak;
   student.lastPerformanceDateKey = streakState.nextLastPerformanceDateKey;
   student.streakBadgeUnlocked = streakState.streakBadgeUnlocked;
-  await student.save();
-
-  const [targetSummary, subjectProgressResult, subjectCertification] = await Promise.all([
-    getTargetXpSummary(payload.studentId, dateKey),
-    getSubjectProgressData(payload.studentId),
-    subjectCertificationService.getStudentCertificationSummaries({
-      studentId: payload.studentId,
-      applyAwards: true,
-    }),
-  ]);
+  await student.save({ session });
 
   return {
     sessionLog,
@@ -1475,25 +1435,20 @@ async function completeSession(payload) {
       assessmentXp: nextAssessmentXp,
       performanceXp: nextPerformanceXpCumulative,
       performanceXpCap: PERFORMANCE_DAILY_CAP,
-      targetXp: targetSummary.dailyTargetXp,
+      targetXp: 0,
       targetXpCap: TARGET_DAILY_CAP,
-      weeklyTargetXp: targetSummary.weeklyTargetXp,
+      weeklyTargetXp: 0,
       weeklyTargetXpCap: TARGET_WEEKLY_CAP,
       totalXp: clampNumber(
-        nextPerformanceXpCumulative + targetSummary.dailyTargetXp,
+        nextPerformanceXpCumulative,
         0,
         PERFORMANCE_DAILY_CAP + TARGET_DAILY_CAP,
       ),
       totalXpCap: PERFORMANCE_DAILY_CAP + TARGET_DAILY_CAP,
-      weekKey: targetSummary.weekKey,
+      weekKey: getWeekKey(dateKey),
       performanceXpAwarded,
       subjectCompletionBonusXp,
     },
-    subjectProgress: applySubjectAwardFlags(
-      subjectProgressResult.subjectProgress,
-      student,
-    ),
-    subjectCertification,
     student: {
       ...serializeStudent(student),
     },

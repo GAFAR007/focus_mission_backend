@@ -1,7 +1,7 @@
 /**
  * WHAT:
  * resultEvidenceAction.service owns teacher-controlled Redo and Move Evidence
- * workflows for completed Theory and Essay Builder results.
+ * workflows for completed results (Move remains Theory/Essay only).
  * WHY:
  * Teachers need to correct current qualification evidence without deleting or
  * rewriting the learner's original submitted ResultPackage.
@@ -173,14 +173,10 @@ function commonMissionCopy(sourceMission) {
 }
 
 function buildRedoMissionData({ sourceMission, sourceResultPackage, teacherId, now }) {
-  const sourceTaskCode = sourceTaskCodeForMission(sourceMission);
+  // Redo preserves all original task focuses; Move retains its one-focus rule.
   const stageType = missionStage(sourceMission);
-  if (!ELIGIBLE_STAGES.has(stageType)) {
-    throw createError(
-      400,
-      "Redo is only available for Theory and Essay Builder evidence.",
-      "REDO_NOT_SUPPORTED",
-    );
+  if (!["THEORY", "ESSAY_BUILDER", "QUESTIONS"].includes(stageType)) {
+    throw createError(400, "This mission format does not support redo.", "REDO_NOT_SUPPORTED");
   }
   const currentDate = getDateKey(now);
   const availableOnDay = new Intl.DateTimeFormat("en-US", {
@@ -195,9 +191,12 @@ function buildRedoMissionData({ sourceMission, sourceResultPackage, teacherId, n
     publishedAt: now,
     availableOnDate: currentDate,
     availableOnDay,
-    taskCodes: [sourceTaskCode],
+    taskCodes: [...(sourceMission.taskCodes || [])],
     taskFocusAssignedAt: now,
-    assessmentSequenceByTaskCode: {},
+    assessmentSequenceByTaskCode: sourceMission.assessmentSequenceByTaskCode || {},
+    assignmentRootId: sourceMission.assignmentRootId || sourceMission._id,
+    assignmentAttempt: Math.max(Number(sourceMission.assignmentAttempt || 1),
+      Number(sourceResultPackage.evidence?.completionAttemptNumber || 1)) + 1,
     latestScoreCorrect: 0,
     latestScoreTotal: 0,
     latestScorePercent: 0,
@@ -454,7 +453,7 @@ async function assertTeacherCanManageResult({
   }
 }
 
-async function loadActionContext({ teacherId, resultPackageId, session = null }) {
+async function loadActionContext({ teacherId, resultPackageId, session = null, forRedo = false }) {
   let resultQuery = ResultPackage.findById(resultPackageId).lean();
   if (session) {
     resultQuery = resultQuery.session(session);
@@ -473,7 +472,7 @@ async function loadActionContext({ teacherId, resultPackageId, session = null })
   }
   const stageType = missionStage(mission);
   const resultStage = String(resultPackage.missionType || "").trim().toUpperCase();
-  if (!ELIGIBLE_STAGES.has(stageType) || stageType !== resultStage) {
+  if (!(forRedo ? ["THEORY", "ESSAY_BUILDER", "QUESTIONS"].includes(stageType) : ELIGIBLE_STAGES.has(stageType)) || stageType !== resultStage) {
     throw createError(
       400,
       "Redo and Move are only available for Theory and Essay Builder evidence.",
@@ -492,7 +491,7 @@ async function loadActionContext({ teacherId, resultPackageId, session = null })
       "RESULT_NOT_CURRENT",
     );
   }
-  sourceTaskCodeForMission(mission);
+  if (!forRedo) sourceTaskCodeForMission(mission);
   await assertTeacherCanManageResult({
     teacherId,
     resultPackage,
@@ -523,6 +522,7 @@ async function createRedo({ teacherId, resultPackageId }) {
         teacherId,
         resultPackageId,
         session,
+        forRedo: true,
       });
       const now = new Date();
       const [redoMission] = await Mission.create(
@@ -534,7 +534,7 @@ async function createRedo({ teacherId, resultPackageId }) {
         })],
         { session },
       );
-      const [draft] = await MissionWorkDraft.create(
+      const [draft] = missionStage(mission) === "QUESTIONS" ? [] : await MissionWorkDraft.create(
         [buildRedoDraftData({
           sourceMission: mission,
           sourceResultPackage: resultPackage,
@@ -544,10 +544,10 @@ async function createRedo({ teacherId, resultPackageId }) {
       );
       return {
         missionId: String(redoMission._id),
-        draftId: String(draft._id),
+        draftId: draft ? String(draft._id) : "",
         sourceResultPackageId: String(resultPackage._id),
         stage: missionStage(mission),
-        taskCode: sourceTaskCodeForMission(mission),
+        taskCode: (mission.taskCodes || []).join(", "),
       };
     });
     console.info("[result-action] redo_complete", output);
