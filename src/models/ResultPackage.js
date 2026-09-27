@@ -155,4 +155,6 @@ resultPackageSchema.index({
   createdAt: -1,
 });
 
+require("../utils/schoolScope").schoolScopedSchema(resultPackageSchema);
+
 module.exports = mongoose.model("ResultPackage", resultPackageSchema);

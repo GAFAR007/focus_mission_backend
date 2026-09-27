@@ -11,6 +11,7 @@
  * persist approved learning content and blocks when the teacher explicitly
  * approves the draft.
  */
+const xpJourneyService = require("./xpJourney.service");
 const bcrypt = require("bcryptjs");
 const Block = require("../models/Block");
 const Criterion = require("../models/Criterion");
@@ -3041,6 +3042,15 @@ async function createSessionLog(payload) {
   }
 
   const teacher = await assertTeacherOwnsStudent(teacherId, studentId);
+  const requestKey = require('../utils/xpRequestKey').xpRequestKey(payload.requestKey, teacherId);
+  if (requestKey) {
+    const prior = await SessionLog.findOne({ requestKey }).lean();
+    if (prior) {
+      if (String(prior.studentId) !== studentId) throw createError(409, "This request key belongs to another session.");
+      return { sessionLog: prior, student: serializeUser(await User.findById(prior.studentId).lean()) };
+    }
+  }
+
   const timetable = await Timetable.findOne({
     studentId,
     day: getWeekdayFromDateKey(dateKey),
@@ -3101,6 +3111,7 @@ async function createSessionLog(payload) {
 
   const sessionLog = await SessionLog.create({
     ...payload,
+    requestKey,
     studentId,
     subjectId,
     sessionType,
@@ -3123,15 +3134,8 @@ async function createSessionLog(payload) {
     xpAwarded: totalXpAwarded,
   });
 
-  const student = await User.findByIdAndUpdate(
-    payload.studentId,
-    {
-      $inc: {
-        xp: totalXpAwarded,
-      },
-    },
-    { new: true },
-  ).lean();
+  const student = await xpJourneyService.applyXp({ studentId, sourceType: "manual_session", sourceId: String(sessionLog._id), total: totalXpAwarded });
+
 
   return {
     sessionLog,
@@ -4482,7 +4486,7 @@ module.exports = {
   listStudentResults,
   createTimetable,
   updateTimetableSlot,
-  createSessionLog,
+  createSessionLog: xpJourneyService.transactional(createSessionLog),
   generateLearningAndBlocksDraft,
   approveLearningAndBlocks,
   extractSourcePlan,

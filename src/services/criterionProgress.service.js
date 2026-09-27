@@ -11,6 +11,7 @@
  * Load criterion context, validate access, create default progress records when
  * needed, and gate block access until learning has been completed.
  */
+const xpJourneyService = require("./xpJourney.service");
 const Block = require("../models/Block");
 const AuditLog = require("../models/AuditLog");
 const Criterion = require("../models/Criterion");
@@ -1031,9 +1032,7 @@ async function submitCriterion({
   await progress.save();
 
   if (xpToAward > 0) {
-    await User.findByIdAndUpdate(studentId, {
-      $inc: { xp: xpToAward },
-    });
+    await xpJourneyService.applyXp({ studentId, sourceType: "criterion", sourceId: String(progress._id), total: xpToAward });
   }
 
   const teacherRecipientIds = await resolveTeacherRecipients({
@@ -1042,9 +1041,8 @@ async function submitCriterion({
     subjectName: context.subject?.name,
   });
 
-  await Promise.all([
-    ...teacherRecipientIds.map((recipientId) =>
-      Notification.create({
+  for (const recipientId of teacherRecipientIds) {
+    await Notification.create({
         recipientId,
         studentId,
         criterionId,
@@ -1052,9 +1050,9 @@ async function submitCriterion({
         title: `${student.name} submitted a criterion`,
         message: `${student.name} submitted "${context.criterion.title}" for teacher review.`,
         createdBy: studentId,
-      }),
-    ),
-    AuditLog.create({
+    });
+  }
+  await AuditLog.create({
       actorId: studentId,
       studentId,
       criterionId,
@@ -1065,8 +1063,7 @@ async function submitCriterion({
         xpAwarded: xpToAward,
         requiredWordCount: context.criterion.requiredWordCount,
       },
-    }),
-  ]);
+  });
 
   return {
     progress: serializeProgress(progress),
@@ -1177,6 +1174,6 @@ module.exports = {
   resetLearningCheck,
   getEssayBuilderBlocks,
   appendEssayBuilderBlock,
-  submitCriterion,
+  submitCriterion: xpJourneyService.transactional(submitCriterion),
   reviewCriterion,
 };

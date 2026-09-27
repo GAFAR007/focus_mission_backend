@@ -70,4 +70,6 @@ const notificationSchema = new mongoose.Schema(
 
 notificationSchema.index({ recipientId: 1, isRead: 1, createdAt: -1 });
 
+require("../utils/schoolScope").schoolScopedSchema(notificationSchema);
+
 module.exports = mongoose.model("Notification", notificationSchema);

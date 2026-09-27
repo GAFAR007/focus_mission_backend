@@ -9,6 +9,7 @@
  * Load the active student and timetable context, resolve the correct mission
  * for the scheduled slot, and persist completed session outcomes.
  */
+const xpJourneyService = require("./xpJourney.service");
 const mongoose = require("mongoose");
 const Mission = require("../models/Mission");
 const Question = require("../models/Question");
@@ -977,6 +978,7 @@ async function getDashboard(studentId) {
       student,
     ),
     subjectCertification,
+    xpAchievements: (await xpJourneyService.journey(studentId)).achievements,
     assignedMissions: await listAssignedMissions({ studentId }),
     today: timetable ? serializeTimetableEntry(timetable) : null,
     todayStandalonePapers,
@@ -1419,7 +1421,8 @@ async function completeSessionInTransaction(payload, session) {
 
   // WHY: XP is applied only on explicit completion so rewards remain tied to
   // finished work and deterministic score rules.
-  student.xp = Math.max(0, Number(student.xp || 0) + totalXpAwarded);
+  const awarded = await xpJourneyService.applyXp({ studentId: student._id, sourceType: "result", sourceId: String(resultPackage?._id || sessionLog._id), total: totalXpAwarded, session });
+  student.xp = awarded.xp;
   student.streak = streakState.nextStreak;
   student.lastPerformanceDateKey = streakState.nextLastPerformanceDateKey;
   student.streakBadgeUnlocked = streakState.streakBadgeUnlocked;

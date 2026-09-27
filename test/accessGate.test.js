@@ -15,6 +15,11 @@ const { after, afterEach, before, test } = require("node:test");
 
 const bcrypt = require("bcryptjs");
 
+// The route suite stubs persistence; real school resolution is covered by the
+// replica-set isolation suite, while these assertions exercise gate permissions.
+const schoolService = require("../src/services/school.service");
+schoolService.currentSchool = async () => ({ _id: "000000000000000000000001", active: true });
+schoolService.resolveIdentitySchool = schoolService.currentSchool;
 const app = require("../src/app");
 const accessGateService = require("../src/services/accessGate.service");
 const authService = require("../src/services/auth.service");

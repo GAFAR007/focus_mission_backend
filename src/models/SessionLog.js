@@ -12,6 +12,7 @@ const mongoose = require("mongoose");
 
 const sessionLogSchema = new mongoose.Schema(
   {
+    requestKey: { type: String, immutable: true },
     studentId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -187,5 +188,9 @@ const sessionLogSchema = new mongoose.Schema(
 
 sessionLogSchema.index({ studentId: 1, dateKey: 1 });
 sessionLogSchema.index({ studentId: 1, subjectId: 1 });
+
+sessionLogSchema.index({ schoolId: 1, requestKey: 1 }, { unique: true, partialFilterExpression: { requestKey: { $type: "string" } } });
+
+require("../utils/schoolScope").schoolScopedSchema(sessionLogSchema);
 
 module.exports = mongoose.model("SessionLog", sessionLogSchema);

@@ -75,6 +75,8 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    xpOpeningBalance: { type: Number, default: 0 },
+    xpTrackingStartedAt: { type: Date, default: Date.now },
     xp: {
       type: Number,
       default: 0,
@@ -248,5 +250,7 @@ const userSchema = new mongoose.Schema(
     timestamps: true,
   },
 );
+
+require("../utils/schoolScope").schoolScopedSchema(userSchema);
 
 module.exports = mongoose.model("User", userSchema);

@@ -502,4 +502,6 @@ missionSchema.index(
   },
 );
 
+require("../utils/schoolScope").schoolScopedSchema(missionSchema);
+
 module.exports = mongoose.model("Mission", missionSchema);

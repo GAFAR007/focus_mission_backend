@@ -47,4 +47,6 @@ const unitSchema = new mongoose.Schema(
 
 unitSchema.index({ subjectId: 1, baseOrder: 1, title: 1 }, { unique: true });
 
+require("../utils/schoolScope").schoolScopedSchema(unitSchema);
+
 module.exports = mongoose.model("Unit", unitSchema);

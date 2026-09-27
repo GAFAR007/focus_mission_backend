@@ -21,6 +21,9 @@ test('Monday assignment survives Tuesday/Saturday, locks atomically, and preserv
   assert.match(uri, /^mongodb:\/\/(127\.0\.0\.1|localhost):\d+\//);
   await mongoose.connect(uri, { dbName: `assignment_lifecycle_test_${Date.now()}` });
   try {
+    await require('../src/services/school.service').migrateCurrentSchool();
+    const school = await require('../src/services/school.service').currentSchool();
+    await require('../src/utils/schoolScope').runInSchool(school._id, async () => {
     const teacher = await User.create({ name: 'Teacher fixture', email: 'teacher@example.invalid', passwordHash: 'fixture', role: 'teacher' });
     const student = await User.create({ name: 'Student fixture', email: 'student@example.invalid', passwordHash: 'fixture', role: 'student' });
     const subject = await Subject.create({ name: 'Business', icon: 'business' });
@@ -118,6 +121,7 @@ test('Monday assignment survives Tuesday/Saturday, locks atomically, and preserv
     await Mission.create({ ...mission.toObject(), _id: new mongoose.Types.ObjectId(), status: 'draft' });
     await Mission.create({ ...mission.toObject(), _id: new mongoose.Types.ObjectId(), manualResultOnly: true });
     assert.equal((await studentService.listAssignedMissions({ studentId: String(student._id) })).length, 5);
+    });
   } finally {
     delete process.env.FOCUS_TEST_DATE_OVERRIDE_ENABLED;
     delete process.env.FOCUS_TEST_DATE_OVERRIDE_STUDENT_ID;

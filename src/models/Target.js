@@ -13,6 +13,7 @@ const { getDateKey, getWeekKey } = require("../utils/xpPolicy");
 
 const targetSchema = new mongoose.Schema(
   {
+    requestKey: { type: String, immutable: true },
     studentId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -122,5 +123,9 @@ const targetSchema = new mongoose.Schema(
     timestamps: true,
   },
 );
+
+targetSchema.index({ schoolId: 1, requestKey: 1 }, { unique: true, partialFilterExpression: { requestKey: { $type: "string" } } });
+
+require("../utils/schoolScope").schoolScopedSchema(targetSchema);
 
 module.exports = mongoose.model("Target", targetSchema);

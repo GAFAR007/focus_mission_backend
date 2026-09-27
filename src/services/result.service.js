@@ -12,6 +12,7 @@
  * attempt in-app/email delivery, and retry pending email sends on an interval.
  */
 
+const xpJourneyService = require("./xpJourney.service");
 const path = require("path");
 const Mission = require("../models/Mission");
 const PDFDocument = require("pdfkit");
@@ -4246,15 +4247,7 @@ async function scoreTheoryResultPackage({
     );
   }
 
-  if (xpDelta !== 0) {
-    const student = await User.findById(resultPackage.studentId);
-    if (student) {
-      // WHY: Theory XP is delayed until teacher review, so rescoring must
-      // adjust the student's cumulative XP by the delta only.
-      student.xp = Math.max(0, Number(student.xp || 0) + xpDelta);
-      await student.save();
-    }
-  }
+  await xpJourneyService.applyXp({ studentId: resultPackage.studentId, sourceType: "result", sourceId: String(resultPackage._id), total: scoreOutcome.earnedXp, previousTotal: scoreOutcome.earnedXp - xpDelta });
 
   await subjectCertificationService.getStudentCertificationSummaries({
     studentId: String(resultPackage.studentId || ""),
@@ -4401,15 +4394,7 @@ async function scoreManualResultPackage({
     });
   }
 
-  if (xpDelta !== 0) {
-    const student = await User.findById(resultPackage.studentId);
-    if (student) {
-      // WHY: Teacher manual review must only apply the score delta so the
-      // student's cumulative XP stays consistent across rescoring.
-      student.xp = Math.max(0, Number(student.xp || 0) + xpDelta);
-      await student.save();
-    }
-  }
+  await xpJourneyService.applyXp({ studentId: resultPackage.studentId, sourceType: "result", sourceId: String(resultPackage._id), total: earnedXp, previousTotal: earnedXp - xpDelta });
 
   await subjectCertificationService.getStudentCertificationSummaries({
     studentId: String(resultPackage.studentId || ""),
@@ -4748,7 +4733,7 @@ function startResultEmailRetryWorker() {
   );
   retryWorkerHandle = setInterval(
     () => {
-      processPendingEmailRetries().catch(
+      require("./school.service").forEachActiveSchool(processPendingEmailRetries).catch(
         (error) => {
           console.error(
             "[result] email retry worker failed",
@@ -4868,8 +4853,8 @@ module.exports = {
   getResultPackageForStudent,
   getResultPackageForManagement,
   getResultPackageForTeacher,
-  scoreTheoryResultPackage,
-  scoreManualResultPackage,
+  scoreTheoryResultPackage: xpJourneyService.transactional(scoreTheoryResultPackage),
+  scoreManualResultPackage: xpJourneyService.transactional(scoreManualResultPackage),
   sendResultPackage,
   processPendingEmailRetries,
   startResultEmailRetryWorker,

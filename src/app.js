@@ -74,6 +74,7 @@ app.use(
       "Content-Type",
       "Authorization",
       "X-School-Access-Token",
+      "Idempotency-Key",
     ],
   }),
 );
@@ -82,7 +83,7 @@ app.use(morgan("dev"));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-app.use("/api", routes);
+app.use("/api", require("./middleware/school.middleware").publicSchool, routes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

@@ -10,6 +10,7 @@
  * Validate credentials against stored hashes, issue JWT tokens, update the
  * first-login and journey fields, then serialize user-safe profile data.
  */
+const xpJourneyService = require("./xpJourney.service");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
@@ -346,6 +347,12 @@ async function login({ email, password }) {
     );
   }
 
+  return completeSuccessfulLogin(user._id);
+}
+
+const completeSuccessfulLogin = xpJourneyService.transactional(async function(userId) {
+  const user = await User.findById(userId).select("+passwordHash +passwordResetCodeHash +passwordResetCodeExpiresAt");
+  if (!user || user.isArchived) throw createError(403, "This account is not active.");
   const now = new Date();
   const dateKey = getDateKey(now);
   let shouldSave = false;
@@ -408,7 +415,8 @@ async function login({ email, password }) {
     // grant the daily bonus so the dashboard reflects today's progress before
     // any mission is started.
     if (!legacyAttendanceRewardExists) {
-      user.xp = Math.max(0, Number(user.xp || 0) + DAILY_LOGIN_XP);
+      const awarded = await xpJourneyService.applyXp({ studentId: user._id, sourceType: "daily_bonus", sourceId: dateKey, total: DAILY_LOGIN_XP });
+      user.xp = awarded.xp;
       dailyLoginRewardGranted = true;
       dailyLoginXpAwarded = DAILY_LOGIN_XP;
       user.lastDailyLoginXpAwardedAt = now;
@@ -426,7 +434,7 @@ async function login({ email, password }) {
     dailyLoginXpAwarded,
     dateKey,
   });
-}
+});
 
 async function listDemoAccounts({ role, accessGroup }) {
   const normalizedRole = accessGateService.assertRoleAllowed({

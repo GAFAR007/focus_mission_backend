@@ -99,6 +99,8 @@ studentCertificationPlanSchema.index(
   },
 );
 
+require("../utils/schoolScope").schoolScopedSchema(studentCertificationPlanSchema);
+
 module.exports = mongoose.model(
   "StudentCertificationPlan",
   studentCertificationPlanSchema,

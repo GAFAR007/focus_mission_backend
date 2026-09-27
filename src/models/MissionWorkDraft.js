@@ -91,4 +91,6 @@ missionWorkDraftSchema.index(
   { unique: true, name: "unique_student_mission_work_draft" },
 );
 
+require("../utils/schoolScope").schoolScopedSchema(missionWorkDraftSchema);
+
 module.exports = mongoose.model("MissionWorkDraft", missionWorkDraftSchema);

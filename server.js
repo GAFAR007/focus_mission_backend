@@ -18,6 +18,9 @@ const PORT = Number(process.env.PORT) || 4000;
 
 async function startServer() {
   await connectDB();
+  if (require("mongoose").connection.readyState === 1) {
+    await require("./src/services/school.service").migrateCurrentSchool();
+  }
   startResultEmailRetryWorker();
 
   app.listen(PORT, () => {

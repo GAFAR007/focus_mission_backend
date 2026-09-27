@@ -61,4 +61,6 @@ const timetableSchema = new mongoose.Schema(
   },
 );
 
+require("../utils/schoolScope").schoolScopedSchema(timetableSchema);
+
 module.exports = mongoose.model("Timetable", timetableSchema);

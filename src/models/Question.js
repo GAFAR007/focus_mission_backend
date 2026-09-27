@@ -57,4 +57,6 @@ const questionSchema = new mongoose.Schema(
   },
 );
 
+require("../utils/schoolScope").schoolScopedSchema(questionSchema);
+
 module.exports = mongoose.model("Question", questionSchema);

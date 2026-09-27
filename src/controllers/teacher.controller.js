@@ -214,6 +214,7 @@ async function createSessionLog(req, res, next) {
   try {
     const result = await teacherService.createSessionLog({
       ...req.body,
+      requestKey: req.get("Idempotency-Key") || req.body.requestKey,
       createdBy: req.user.id,
     });
     res.status(201).json(result);

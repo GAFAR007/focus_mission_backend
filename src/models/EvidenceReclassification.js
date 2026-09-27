@@ -139,6 +139,8 @@ evidenceReclassificationSchema.index({
   movedAt: -1,
 });
 
+require("../utils/schoolScope").schoolScopedSchema(evidenceReclassificationSchema);
+
 module.exports = mongoose.model(
   "EvidenceReclassification",
   evidenceReclassificationSchema,

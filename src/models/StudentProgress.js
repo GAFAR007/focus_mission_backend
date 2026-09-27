@@ -147,4 +147,6 @@ studentProgressSchema.index(
   { unique: true },
 );
 
+require("../utils/schoolScope").schoolScopedSchema(studentProgressSchema);
+
 module.exports = mongoose.model("StudentProgress", studentProgressSchema);

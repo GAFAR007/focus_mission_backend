@@ -100,4 +100,6 @@ const learningContentSchema = new mongoose.Schema(
 
 learningContentSchema.index({ criterionId: 1, status: 1, updatedAt: -1 });
 
+require("../utils/schoolScope").schoolScopedSchema(learningContentSchema);
+
 module.exports = mongoose.model("LearningContent", learningContentSchema);

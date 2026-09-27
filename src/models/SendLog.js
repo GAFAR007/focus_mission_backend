@@ -119,4 +119,6 @@ sendLogSchema.index({
   sentAt: -1,
 });
 
+require("../utils/schoolScope").schoolScopedSchema(sendLogSchema);
+
 module.exports = mongoose.model("SendLog", sendLogSchema);

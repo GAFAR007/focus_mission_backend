@@ -99,4 +99,6 @@ const blockSchema = new mongoose.Schema(
 
 blockSchema.index({ criterionId: 1, phase: 1, baseOrder: 1 }, { unique: true });
 
+require("../utils/schoolScope").schoolScopedSchema(blockSchema);
+
 module.exports = mongoose.model("Block", blockSchema);

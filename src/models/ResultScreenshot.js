@@ -68,4 +68,6 @@ resultScreenshotSchema.index({
   createdAt: -1,
 });
 
+require("../utils/schoolScope").schoolScopedSchema(resultScreenshotSchema);
+
 module.exports = mongoose.model("ResultScreenshot", resultScreenshotSchema);

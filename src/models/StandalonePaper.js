@@ -226,4 +226,6 @@ standalonePaperSchema.index({
   updatedAt: -1,
 });
 
+require("../utils/schoolScope").schoolScopedSchema(standalonePaperSchema);
+
 module.exports = mongoose.model("StandalonePaper", standalonePaperSchema);

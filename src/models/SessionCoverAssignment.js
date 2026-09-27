@@ -95,6 +95,8 @@ sessionCoverAssignmentSchema.index(
   },
 );
 
+require("../utils/schoolScope").schoolScopedSchema(sessionCoverAssignmentSchema);
+
 module.exports = mongoose.model(
   "SessionCoverAssignment",
   sessionCoverAssignmentSchema,

@@ -69,4 +69,6 @@ const subjectSchema = new mongoose.Schema(
   },
 );
 
+require("../utils/schoolScope").schoolScopedSchema(subjectSchema);
+
 module.exports = mongoose.model("Subject", subjectSchema);

@@ -270,6 +270,8 @@ standalonePaperSessionSchema.index({
   createdAt: -1,
 });
 
+require("../utils/schoolScope").schoolScopedSchema(standalonePaperSessionSchema);
+
 module.exports = mongoose.model(
   "StandalonePaperSession",
   standalonePaperSessionSchema,

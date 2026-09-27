@@ -191,6 +191,8 @@ questionEvidenceFileSchema.index(
   },
 );
 
+require("../utils/schoolScope").schoolScopedSchema(questionEvidenceFileSchema);
+
 module.exports = mongoose.model(
   "QuestionEvidenceFile",
   questionEvidenceFileSchema,

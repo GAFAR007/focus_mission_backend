@@ -48,7 +48,7 @@ async function createCoveredSessionLog(req, res, next) {
 
 async function createTarget(req, res, next) {
   try {
-    const target = await mentorService.createTarget(req.body, req.user);
+    const target = await mentorService.createTarget({ ...req.body, requestKey: req.get("Idempotency-Key") || req.body.requestKey }, req.user);
     res.status(201).json({ target });
   } catch (error) {
     next(error);

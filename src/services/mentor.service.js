@@ -9,6 +9,7 @@
  * Load the student, aggregate recent targets and session metrics, then expose
  * helpers for target and difficulty updates.
  */
+const xpJourneyService = require("./xpJourney.service");
 const SessionLog = require("../models/SessionLog");
 const SessionCoverAssignment = require("../models/SessionCoverAssignment");
 const Timetable = require("../models/Timetable");
@@ -768,7 +769,6 @@ async function createCoveredSessionLog({
   })
     .select("xpAwarded")
     .lean();
-  const xpDelta = totalXpAwarded - Number(existingLog?.xpAwarded || 0);
 
   const sessionLog = await SessionLog.findOneAndUpdate(
     {
@@ -819,22 +819,19 @@ async function createCoveredSessionLog({
     .populate("coverAssignmentId")
     .lean();
 
-  if (xpDelta !== 0) {
-    await User.findByIdAndUpdate(studentId, {
-      $inc: { xp: xpDelta },
-    });
-  }
+  const awarded = await xpJourneyService.applyXp({ studentId, sourceType: "cover_session", sourceId: String(coverAssignment._id), total: totalXpAwarded, previousTotal: Number(existingLog?.xpAwarded || 0) });
 
   return {
     student: serializeStudent({
       ...student,
-      xp: Number(student.xp || 0) + xpDelta,
+      xp: awarded.xp,
     }),
     session: serializeCoveredSession(coverAssignment, sessionLog),
   };
 }
 
 async function createTarget(payload, staff) {
+  const requestKey = require('../utils/xpRequestKey').xpRequestKey(payload.requestKey, staff?.id || staff?._id);
   const dateKey = String(payload.awardDateKey || getDateKey()).trim();
   const weekKey = String(payload.weekKey || getWeekKey(dateKey)).trim();
   const targetType = String(payload.targetType || TARGET_TYPE_CUSTOM).trim();
@@ -850,6 +847,14 @@ async function createTarget(payload, staff) {
     sessionType,
     subjectId,
   });
+
+  if (requestKey) {
+    const prior = await Target.findOne({ requestKey });
+    if (prior) {
+      if (String(prior.studentId) !== String(payload.studentId)) throw createError(409, "This request key belongs to another target.");
+      return loadSerializedTarget(prior._id);
+    }
+  }
 
   if (
     targetType === TARGET_TYPE_CUSTOM &&
@@ -878,6 +883,7 @@ async function createTarget(payload, staff) {
 
   const target = await Target.create({
     ...payload,
+    requestKey,
     targetType,
     weekKey,
     awardDateKey: dateKey,
@@ -892,11 +898,7 @@ async function createTarget(payload, staff) {
     awardedAt: xpAwarded > 0 ? new Date() : null,
   });
 
-  if (xpAwarded > 0) {
-    await User.findByIdAndUpdate(payload.studentId, {
-      $inc: { xp: xpAwarded },
-    });
-  }
+  await xpJourneyService.applyXp({ studentId: payload.studentId, sourceType: "target", sourceId: String(target._id), total: xpAwarded });
 
   return loadSerializedTarget(target._id);
 }
@@ -968,12 +970,7 @@ async function updateTarget(targetId, payload, staff) {
 
   await target.save();
 
-  const deltaXp = nextXpAwarded - previousXpAwarded;
-  if (deltaXp !== 0) {
-    await User.findByIdAndUpdate(target.studentId, {
-      $inc: { xp: deltaXp },
-    });
-  }
+  await xpJourneyService.applyXp({ studentId: target.studentId, sourceType: "target", sourceId: String(target._id), total: nextXpAwarded, previousTotal: previousXpAwarded });
 
   return loadSerializedTarget(target._id);
 }
@@ -999,8 +996,8 @@ async function updateDifficulty(studentId, { preferredDifficulty }) {
 module.exports = {
   getOverview,
   listCoveredSessions,
-  createCoveredSessionLog,
-  createTarget,
-  updateTarget,
+  createCoveredSessionLog: xpJourneyService.transactional(createCoveredSessionLog),
+  createTarget: xpJourneyService.transactional(createTarget),
+  updateTarget: xpJourneyService.transactional(updateTarget),
   updateDifficulty,
 };

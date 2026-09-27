@@ -63,4 +63,6 @@ const auditLogSchema = new mongoose.Schema(
 
 auditLogSchema.index({ studentId: 1, criterionId: 1, createdAt: -1 });
 
+require("../utils/schoolScope").schoolScopedSchema(auditLogSchema);
+
 module.exports = mongoose.model("AuditLog", auditLogSchema);

@@ -62,6 +62,8 @@ criterionReportDraftSchema.index(
   { unique: true, name: "unique_student_subject_task_report_draft" },
 );
 
+require("../utils/schoolScope").schoolScopedSchema(criterionReportDraftSchema);
+
 module.exports = mongoose.model(
   "CriterionReportDraft",
   criterionReportDraftSchema,

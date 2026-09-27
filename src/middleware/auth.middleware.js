@@ -45,7 +45,10 @@ async function protect(req, _res, next) {
 
     const token = authorization.replace("Bearer ", "").trim();
     const payload = jwt.verify(token, process.env.JWT_SECRET || "development-secret");
-    const user = await User.findById(payload.sub).lean();
+    const { resolveIdentitySchool } = require("../services/school.service");
+    const { runInSchool } = require("../utils/schoolScope");
+    const school = await resolveIdentitySchool({ _id: new (require("mongoose").Types.ObjectId)(payload.sub) });
+    const user = await runInSchool(school._id, () => User.findById(payload.sub).lean());
 
     if (!user) {
       throw createError(401, "User not found for this token.");
@@ -60,6 +63,7 @@ async function protect(req, _res, next) {
 
     req.user = {
       id: String(user._id),
+      schoolId: String(school._id),
       role: resolveAccessRole(
         user.role,
       ),
@@ -69,7 +73,7 @@ async function protect(req, _res, next) {
       name: user.name,
     };
 
-    next();
+    runInSchool(school._id, next);
   } catch (error) {
     next(createError(error.statusCode || 401, error.message || "Invalid token."));
   }

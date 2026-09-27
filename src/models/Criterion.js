@@ -73,4 +73,6 @@ criterionSchema.index(
   { unique: true },
 );
 
+require("../utils/schoolScope").schoolScopedSchema(criterionSchema);
+
 module.exports = mongoose.model("Criterion", criterionSchema);

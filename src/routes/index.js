@@ -22,6 +22,7 @@ const router = express.Router();
 
 router.use("/", systemRoutes);
 router.use("/auth", authRoutes);
+router.use("/xp", require("./xpJourney.routes"));
 router.use("/criterion", criterionRoutes);
 router.use("/management", managementRoutes);
 router.use("/notifications", notificationRoutes);
