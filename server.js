@@ -27,6 +27,7 @@ async function startServer() {
   await connectDB();
   if (require("mongoose").connection.readyState === 1) {
     await require("./src/services/school.service").migrateCurrentSchool();
+    await require("./src/services/pong.service").migrateProfiles();
   }
   startResultEmailRetryWorker();
 
