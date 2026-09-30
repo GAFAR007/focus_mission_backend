@@ -1,6 +1,6 @@
 {
   "name": "focus_mission_backend",
-  "version": "1.0.0",
+  "version": "2.1.0",
   "description": "Focus Mission backend API",
   "main": "server.js",
   "scripts": {
