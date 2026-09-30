@@ -12,6 +12,7 @@ const schema = new mongoose.Schema({
     enabled: { type: Boolean, default: false },
     computer: { type: Boolean, default: true },
     battles: { type: Boolean, default: false },
+    powerBattle: { type: Boolean, default: false },
     lobbyVisible: { type: Boolean, default: true },
   },
   highestUnlocked: { type: Number, default: 1, min: 1, max: 15 },

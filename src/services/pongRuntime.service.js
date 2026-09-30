@@ -47,7 +47,7 @@ async function tick(room) {
       const ids = [room.match.player1Id, room.match.player2Id].filter(Boolean);
       const profiles = await Profile.find({ studentId: { $in: ids } }).lean();
       const count = await User.countDocuments({ _id: { $in: ids }, role: 'student', isArchived: { $ne: true } });
-      if (count !== ids.length || profiles.length !== ids.length || profiles.some(p => !service.allowed(p, room.match.mode))) return await finish(room, 'disabled', 'Your teacher has turned this game mode off.');
+      if (count !== ids.length || profiles.length !== ids.length || profiles.some(p => !service.allowed(p, room.match.mode, room.state.ruleset))) return await finish(room, 'disabled', 'Your teacher has turned this game mode off.');
       const saved = await Match.updateOne({ _id: room.match._id, status: 'active', engineOwner: OWNER, leaseUntil: { $gt: new Date() } }, { $set: { state: structuredClone(room.state), leaseUntil: new Date(now + LEASE_MS) } });
       if (saved.matchedCount !== 1) {
         const current = await Match.findById(room.match._id);
@@ -98,7 +98,7 @@ async function connect(id, handle, res) {
     res.setHeader('Content-Type', 'text/event-stream'); write(res, await service.matchView(id, match)); res.end(); return;
   }
   const p = await service.profile(id);
-  if (!service.allowed(p, match.mode)) throw service.fail(403, 'PONG_DISABLED', 'Your teacher has turned this game mode off.');
+  if (!service.allowed(p, match.mode, match.state.ruleset)) throw service.fail(403, 'PONG_DISABLED', 'Your teacher has turned this game mode off.');
   const room = await loadRoom(match), side = sideFor(room, id), token = randomUUID();
   res.setHeader('Content-Type', 'text/event-stream'); res.setHeader('Cache-Control', 'no-cache, no-transform'); res.setHeader('X-Accel-Buffering', 'no'); res.flushHeaders();
   room.connections[side]?.res.end();
@@ -118,7 +118,7 @@ async function input(id, handle, payload) {
   const now = Date.now();
   if (now - room.lastSeen[side] < 25 && !(payload.direction === 0 && payload.targetY == null)) return { accepted: false };
   room.seq[side] = payload.seq; room.lastSeen[side] = now;
-  room.inputs[side] = payload.targetY == null ? { direction: payload.direction || 0 } : { targetY: payload.targetY };
+  room.inputs[side] = { ...(payload.targetY == null ? { direction: payload.direction || 0 } : { targetY: payload.targetY }), forward: payload.forward || 0 };
   return { accepted: true };
 }
 async function control(id, handle, action) {

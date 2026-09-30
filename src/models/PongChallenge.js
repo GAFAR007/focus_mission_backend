@@ -10,6 +10,7 @@ const schema = new mongoose.Schema({
   challengerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   opponentId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   pairKey: { type: String, required: true },
+  ruleset: { type: String, enum: ['classic', 'power'], default: 'classic' },
   status: { type: String, enum: ['pending', 'accepted', 'declined', 'cancelled', 'expired'], default: 'pending' },
   expiresAt: { type: Date, required: true },
   acceptedAt: { type: Date, default: null },

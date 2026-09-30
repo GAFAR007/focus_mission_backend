@@ -21,13 +21,14 @@ exports.lobby = route(req => {
   return service.lobby(req.user.id, search);
 });
 exports.challenge = route(req => {
-  const data = body(req, ['opponent', 'rematchOf']);
-  return service.challenge(req.user.id, handle(data.opponent), data.rematchOf ? handle(data.rematchOf) : null);
+  const data = body(req, ['opponent', 'rematchOf', 'ruleset']);
+  return service.challenge(req.user.id, handle(data.opponent), data.rematchOf ? handle(data.rematchOf) : null, data.ruleset || 'classic');
 });
 exports.respond = route(req => {
-  const data = body(req, ['action']);
+  const data = body(req, ['action', 'ruleset']);
+  if (data.ruleset != null && !['classic', 'power'].includes(data.ruleset)) throw bad();
   if (!['accept', 'decline', 'cancel'].includes(data.action)) throw bad();
-  return service.respond(req.user.id, handle(req.params.handle), data.action);
+  return service.respond(req.user.id, handle(req.params.handle), data.action, data.ruleset);
 });
 exports.computer = route(req => {
   const data = body(req, ['level']);
@@ -37,10 +38,11 @@ exports.computer = route(req => {
 exports.match = route(async req => service.matchView(req.user.id, await service.ownedMatch(req.user.id, handle(req.params.handle))));
 exports.stream = route((req, res) => runtime.connect(req.user.id, handle(req.params.handle), res));
 exports.input = route(req => {
-  const data = body(req, ['controlToken', 'seq', 'direction', 'targetY']);
+  const data = body(req, ['controlToken', 'seq', 'direction', 'targetY', 'forward']);
   handle(data.controlToken);
   if (!Number.isSafeInteger(data.seq) || data.seq < 0) throw bad();
   if (data.direction != null && ![-1, 0, 1].includes(data.direction)) throw bad();
+  if (data.forward != null && ![-1, 0, 1].includes(data.forward)) throw bad();
   if (data.targetY != null && (!Number.isFinite(data.targetY) || data.targetY < 0 || data.targetY > 560)) throw bad();
   return runtime.input(req.user.id, handle(req.params.handle), data);
 });
@@ -52,7 +54,7 @@ exports.control = route(req => {
 function student(req) { if (!mongoose.isValidObjectId(req.params.studentId)) throw bad(); return req.params.studentId; }
 exports.getAccess = route(req => service.getAccess(req.user.id, student(req)));
 exports.setAccess = route(req => {
-  const data = body(req, ['enabled', 'computer', 'battles', 'lobbyVisible']);
+  const data = body(req, ['enabled', 'computer', 'battles', 'powerBattle', 'lobbyVisible']);
   if (!Object.keys(data).length || Object.values(data).some(v => typeof v !== 'boolean')) throw bad();
   return service.setAccess(req.user.id, student(req), data);
 });

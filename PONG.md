@@ -27,7 +27,9 @@ the existing guarded single-school migration; Pong adds no tenant fallback.
 All levels use one ball, delayed/imperfect computer reactions and bounded paddle
 movement. Completed levels can be replayed. A transaction saves each result once
 and unlocks at most the next level. Solo misses are practice results with no
-academic penalty. PvP always has equal paddles, neutral physics and first to 7.
+academic penalty. Classic PvP starts with equal paddles and neutral physics,
+first to 7. Power Battle keeps the same match goal and adds mirrored temporary
+boosts after both players explicitly choose and accept that ruleset.
 
 | Level | Challenge | Returns |
 | --- | --- | --- |
@@ -109,3 +111,50 @@ navigation and result-screen reconnect feedback before release.
 Use the frontend repository's `RELEASE.md` and `tool/release.mjs` for the paired
 minor release. Local tests are not deployment evidence. The command builds clean
 committed archives and verifies exact Render revision and Netlify artifact bytes.
+
+## Vertical gameplay upgrade
+
+The server retains its canonical 1000-by-560 coordinate system so persisted
+matches and the existing control API remain compatible. Each client projects
+that world into a 560-by-1000 vertical court. Player zero uses `(y, 1000-x)`;
+player one uses `(560-y, x)`. The inverse input mapping makes A/D, left/right
+arrows and horizontal touch motion natural for both students. Forward is a
+bounded distance toward the centre, independent of which baseline they defend.
+
+Moving strikes combine impact offset, actual paddle velocity, modest rally
+escalation and a capped power modifier. Spin decays and cannot reverse the
+forward direction. The engine applies each level's speed limits and an absolute
+680-unit safety ceiling after every physics modifier, including speed zones.
+Focus changes server-owned ball displacement in the receiving half for both
+clients; it never slows a client's independent simulation.
+
+`pongPowerUps.js` owns seven effects: Speed (30%, 5s), Wide Paddle (35%, 6s),
+Power Shot (next hit, 8s expiry), Shield (one save, 10s expiry), Forward Rush
+(4s, maximum 110 units into the player's half), Curve (next hit, 8s expiry), and
+Focus (3s). Shot/curve/shield share one temporary slot; collecting another stored
+boost cannot replace or stack it. Width and forward depth return smoothly.
+Simulation time pauses all timers when the authoritative game is paused.
+
+Level 1 has no drops; levels 2-8 introduce Speed, Wide, Power, Shield, Rush,
+Curve and Focus in that order. Drops arrive every 10-18 simulation seconds
+(10-14 at level 10+). At most two exist: identical mirrored opportunities with
+equal travel times. They must touch the intended paddle and expire if missed.
+The AI may chase a drop only by moving its own bounded paddle. Its reaction,
+error, movement and risk appetite remain capped by the current level. Match-only
+hit and collection aggregates inform small adjustments; they contain no learner
+identity, academic results, SEN data or notes. No Ollama call, training or external
+strategy dependency is introduced; disconnected/offline model services cannot
+interrupt the deterministic opponent.
+
+Classic remains the default PvP ruleset. Power Battle is an explicit invitation
+choice, independently permitted for both students. Acceptance must echo `power`,
+so an old client that cannot display those rules cannot accidentally accept them.
+Rematches keep their previous rules. Turning Power Battle off cancels only power
+invitations/games, leaving permitted Classic play and all historical stats intact.
+The additive migration sets the new permission to false only where missing.
+
+The HUD names the opponent above and the local student below. Boosts show symbols,
+labels, expiry and READY state. Speed controls trail length, particles and hit
+feedback; reduced motion suppresses trails, flashes, sparks and court pulses.
+Optional sound starts muted and uses the existing audio package with six short,
+original generated tones stored in the frontend's `assets/sounds/pong/` folder.
