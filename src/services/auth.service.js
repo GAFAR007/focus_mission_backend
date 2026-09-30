@@ -219,6 +219,9 @@ function serializeUser(user) {
 
   return {
     id: String(user._id),
+    // The session exposes the persisted school; authorization still resolves it
+    // from the account on every request instead of trusting client metadata.
+    schoolId: String(user.schoolId || ""),
     name: user.name,
     email: user.email,
     role: user.role,

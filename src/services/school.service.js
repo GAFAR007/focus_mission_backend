@@ -18,8 +18,25 @@ async function currentSchool() {
 async function resolveIdentitySchool(filter) {
   // WHY: Only authentication may resolve an identity before its school is known.
   // No account details from this lookup are returned to a client.
-  const identity = await mongoose.model('User').collection.findOne(filter, { projection: { schoolId: 1 } });
+  const users = mongoose.model('User').collection;
+  let identity = await users.findOne(filter, { projection: { schoolId: 1, createdAt: 1 } });
   if (!identity) return currentSchool();
+  if (identity.schoolId == null) {
+    const school = await currentSchool();
+    // A fallback is only for records that predate the completed migration, and
+    // only while this is the sole school (including inactive schools). New
+    // unassigned accounts and multi-school ambiguity must fail closed.
+    const schools = await School.find({}).select('_id').limit(2).lean();
+    const isLegacy = !identity.createdAt ||
+      new Date(identity.createdAt) <= new Date(school.migrationCompletedAt);
+    if (schools.length !== 1 || String(schools[0]._id) !== String(school._id) || !isLegacy) {
+      throw scopeError('This account requires an explicit school assignment.');
+    }
+    await users.updateOne({ _id: identity._id, schoolId: null }, { $set: { schoolId: school._id } });
+    // Re-read a concurrent assignment rather than overwriting or assuming it.
+    identity = await users.findOne({ _id: identity._id }, { projection: { schoolId: 1 } });
+    if (!identity) throw scopeError('This account is no longer available.');
+  }
   const school = await School.findOne({ _id: identity.schoolId, active: true }).lean();
   if (!school) throw scopeError('This account has no active school.');
   return school;
@@ -28,6 +45,12 @@ async function migrateCurrentSchool() {
   for (const name of fs.readdirSync(path.join(__dirname, '../models')).filter(name => name.endsWith('.js'))) require(`../models/${name}`);
   // WHY: Indexes exist before concurrent servers can create the singleton school.
   for (const model of Object.values(mongoose.models)) await model.init();
+  const existing = await School.findOne({ migrationKey: DEFAULT_KEY }).lean();
+  if (existing?.migrationCompletedAt) return existing;
+  // Never attach legacy records to a guessed default once other schools exist.
+  if (await School.countDocuments({ migrationKey: { $ne: DEFAULT_KEY } }) > 0) {
+    throw scopeError('Legacy school migration requires a single configured school.');
+  }
   const school = await School.findOneAndUpdate({ migrationKey: DEFAULT_KEY }, { $setOnInsert: {
     name: 'Current School', active: true, xpTrackingStartedAt: new Date(),
   } }, { upsert: true, new: true });
@@ -40,7 +63,7 @@ async function migrateCurrentSchool() {
         await model.collection.updateMany({ schoolId: null }, { $set: { schoolId: school._id } }, { session });
       }
       const User = mongoose.model('User');
-      await User.collection.updateMany({ xpOpeningBalance: { $exists: false } }, [{ $set: {
+      await User.collection.updateMany({ schoolId: school._id, xpOpeningBalance: { $exists: false } }, [{ $set: {
         xpOpeningBalance: { $ifNull: ['$xp', 0] }, xpTrackingStartedAt: school.xpTrackingStartedAt,
       } }], { session });
       // WHY: Existing milestone dates are unknown: record observation, not a

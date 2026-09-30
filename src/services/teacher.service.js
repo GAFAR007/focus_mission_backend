@@ -2590,7 +2590,7 @@ async function listStudents(teacherId) {
   })
     .sort({ name: 1 })
     .select(
-      "name role avatar avatarSeed xp streak preferredDifficulty firstLoginAt lastLoginAt loginDayCount yearGroup",
+      "name schoolId role avatar avatarSeed xp streak preferredDifficulty firstLoginAt lastLoginAt loginDayCount yearGroup",
     )
     .lean();
 }

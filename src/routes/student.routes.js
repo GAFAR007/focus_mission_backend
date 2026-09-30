@@ -11,6 +11,7 @@
  */
 const express = require("express");
 const multer = require("multer");
+const { schoolBoundMiddleware } = require("../middleware/school.middleware");
 const { body, param, query } = require("express-validator");
 
 const studentController = require("../controllers/student.controller");
@@ -160,7 +161,7 @@ router.post(
       .withMessage("questionIndex must be between 0 and 59."),
     validateRequest,
   ],
-  questionEvidenceUpload.single("evidenceFile"),
+  schoolBoundMiddleware(questionEvidenceUpload.single("evidenceFile")),
   studentController.uploadMissionQuestionEvidence,
 );
 

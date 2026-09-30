@@ -11,6 +11,7 @@
  */
 const express = require("express");
 const multer = require("multer");
+const { schoolBoundMiddleware } = require("../middleware/school.middleware");
 const {
   body,
   param,
@@ -431,7 +432,7 @@ router.post(
 
 router.post(
   "/ai/extract-source",
-  upload.single("sourceFile"),
+  schoolBoundMiddleware(upload.single("sourceFile")),
   [
     body("subjectId")
       .isMongoId()
@@ -494,7 +495,7 @@ router.post(
 
 router.post(
   "/ai/extract-unit-source",
-  upload.single("sourceFile"),
+  schoolBoundMiddleware(upload.single("sourceFile")),
   [
     body("criterionId")
       .isMongoId()
@@ -1032,7 +1033,7 @@ router.post(
       .withMessage("questionIndex must be between 0 and 59."),
     validateRequest,
   ],
-  upload.single("evidenceFile"),
+  schoolBoundMiddleware(upload.single("evidenceFile")),
   teacherController.uploadMissionQuestionEvidence,
 );
 
@@ -1092,7 +1093,7 @@ router.get(
 
 router.post(
   "/standalone-papers/import",
-  upload.single("sourceFile"),
+  schoolBoundMiddleware(upload.single("sourceFile")),
   [
     body("studentId")
       .isMongoId()
@@ -1397,7 +1398,7 @@ router.post(
 
 router.post(
   "/missions/:missionId/manual-result",
-  upload.single("resultFile"),
+  schoolBoundMiddleware(upload.single("resultFile")),
   [
     param("missionId")
       .isMongoId()
@@ -1411,7 +1412,7 @@ router.post(
 
 router.post(
   "/results/manual-upload",
-  upload.single("resultFile"),
+  schoolBoundMiddleware(upload.single("resultFile")),
   [
     body("studentId")
       .isMongoId()
@@ -1554,7 +1555,7 @@ router.post(
 
 router.post(
   "/results/:resultPackageId/screenshot",
-  upload.single("screenshotFile"),
+  schoolBoundMiddleware(upload.single("screenshotFile")),
   [
     param("resultPackageId")
       .isMongoId()
