@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "nodemon server.js",
     "start": "node server.js",
-    "seed": "node src/utils/seed.js"
+    "seed": "node src/utils/seed.js",
+    "prestart": "node src/utils/releaseGuard.js --production",
+    "release:check": "node src/utils/releaseGuard.js",
+    "test": "node --test test/*.test.js"
   },
   "keywords": [],
   "author": "",

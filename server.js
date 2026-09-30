@@ -6,9 +6,16 @@
  * Result email delivery uses retry semantics, so worker startup must happen
  * once after a successful DB connection.
  * HOW:
- * Connect MongoDB first, start retry worker, then bind the Express app.
+ * Check production release evidence, connect MongoDB, start the retry worker,
+ * then bind the Express app.
  */
 require("dotenv").config();
+
+// WHY: Direct Render startup must enforce the same guard as npm start, before
+// touching production data or accepting requests. Development never bumps versions.
+if (process.env.NODE_ENV === 'production' || process.env.RENDER) {
+  require('./src/utils/releaseGuard').checkRelease();
+}
 
 const app = require("./src/app");
 const connectDB = require("./src/config/db");

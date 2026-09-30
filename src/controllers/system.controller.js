@@ -6,9 +6,10 @@
  * confirm the API and database state before deeper flows are exercised.
  * HOW:
  * Return static app metadata from the root route and current connection state
- * from the health route.
+ * and the validated release identity from the health route.
  */
 const mongoose = require("mongoose");
+const { releaseStatus } = require('../utils/releaseGuard');
 
 const READY_STATE_LABELS = {
   0: "disconnected",
@@ -30,6 +31,7 @@ function getHealth(_req, res) {
     status: "ok",
     timestamp: new Date().toISOString(),
     database: READY_STATE_LABELS[mongoose.connection.readyState] || "unknown",
+    release: releaseStatus(),
   });
 }
 
