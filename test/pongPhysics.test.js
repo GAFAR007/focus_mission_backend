@@ -52,6 +52,7 @@ test('plain wall and paddle collisions remain bounded and deterministic', () => 
   assert.deepEqual(first, second);
   assert.equal(first.paddles[0], 75);
   assert.ok(!('seed' in p.view(first)) && !('vx' in p.view(first).ball));
+  assert.ok(p.view(first).ballVelocity && Number.isFinite(p.view(first).ballVelocity.x));
 });
 module.exports = { playLevel };
 
@@ -71,6 +72,40 @@ test('moving strikes change speed, angle and spin; paddle edges aim predictable 
   assert.ok(Math.hypot(right.ball.vx, right.ball.vy) > Math.hypot(center.ball.vx, center.ball.vy) * 1.15);
   assert.ok(right.spin > 0 && left.spin < 0);
   assert.ok(impact({ offset: .8 }).ball.vy > 0); assert.ok(impact({ offset: -.8 }).ball.vy < 0);
+});
+test('opening speed is meaningful and level baselines rise progressively', () => {
+  const opening = p.createState('computer', 1).ball;
+  assert.ok(Math.abs(Math.hypot(opening.vx, opening.vy) - 260) < .001);
+  for (let level = 2; level <= 15; level++) assert.ok(p.LEVELS[level - 1].speed > p.LEVELS[level - 2].speed);
+  assert.ok(p.LEVELS[14].speed - p.LEVELS[0].speed >= 200);
+});
+test('ordinary returns retain energy and rally bands add bounded intensity', () => {
+  const at = count => { const s = impact({ speed: 250 }); s.rally = count; return impactAtRally(s, count); };
+  const speedAt = count => Math.hypot(at(count).ball.vx, at(count).ball.vy);
+  assert.ok(speedAt(0) > 250);
+  assert.ok(speedAt(3) < speedAt(4));
+  assert.ok(speedAt(4) < speedAt(8));
+  assert.ok(speedAt(8) < speedAt(13));
+  assert.ok(speedAt(13) <= p.PVP.maxSpeed + .001);
+});
+function impactAtRally(state, count) {
+  state.rally = count;
+  state.ball = { x: 44, y: state.paddles[0], vx: -250, vy: 0 };
+  p.step(state, [{}, {}], 1/120);
+  return state;
+}
+test('a maximum-speed ball is swept into the paddle rather than passing through it', () => {
+  const s = rally();
+  s.ball = { x: 50, y: s.paddles[0], vx: -p.PVP.maxSpeed, vy: 0 };
+  p.step(s, [{}, {}], .1);
+  assert.ok(s.ball.vx > 0);
+  assert.deepEqual(s.score, [0, 0]);
+});
+test('exact obstacle center contacts resolve once and do not stick', () => {
+  const ball = { x: 491, y: 260, vx: 120, vy: 0 };
+  assert.equal(p.reflectSegment(ball, [491, 235, 491, 325]), true);
+  assert.ok(ball.vx < 0 && ball.x < 491);
+  assert.equal(p.reflectSegment(ball, [491, 235, 491, 325]), false);
 });
 test('all impact and arena multipliers obey the normal and absolute velocity caps', () => {
   const s = impact({ movement: 1, type: 'power', speed: 2000 });

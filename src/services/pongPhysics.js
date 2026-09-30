@@ -8,14 +8,14 @@ const powers = require('./pongPowerUps');
 const ABSOLUTE_MAX_SPEED = 680;
 const WORLD = Object.freeze({ width: 1000, height: 560, radius: 8, paddleWidth: 14, left: 28, right: 972, playerSpeed: 650 });
 const definitions = [
-  ['Getting Started', 5, 220, 150, 'plain'], ['A Little Faster', 8, 245, 145, 'plain'],
-  ['Picking Up Speed', 10, 275, 138, 'plain'], ['Sharp Angles', 12, 285, 138, 'angles'],
-  ['Smaller Paddle', 12, 300, 118, 'plain'], ['Centre Wall', 15, 300, 118, 'wall'],
-  ['Moving Wall', 15, 315, 115, 'moving'], ['Speed Zones', 18, 310, 112, 'speed'],
-  ['Narrow Defence', 18, 330, 95, 'plain'], ['Zigzag Arena', 20, 330, 105, 'zigzag'],
-  ['Fast Returns', 22, 335, 102, 'accelerate'], ['Moving Barriers', 25, 345, 100, 'barriers'],
-  ['Gravity Zone', 25, 345, 100, 'gravity'], ['Expert Arena', 30, 380, 85, 'moving'],
-  ['Final Challenge', 35, 410, 80, 'final'],
+  ['Getting Started', 5, 260, 150, 'plain'], ['A Little Faster', 8, 280, 145, 'plain'],
+  ['Picking Up Speed', 10, 300, 138, 'plain'], ['Sharp Angles', 12, 315, 138, 'angles'],
+  ['Smaller Paddle', 12, 330, 118, 'plain'], ['Centre Wall', 15, 345, 118, 'wall'],
+  ['Moving Wall', 15, 360, 115, 'moving'], ['Speed Zones', 18, 375, 112, 'speed'],
+  ['Narrow Defence', 18, 390, 95, 'plain'], ['Zigzag Arena', 20, 405, 105, 'zigzag'],
+  ['Fast Returns', 22, 420, 102, 'accelerate'], ['Moving Barriers', 25, 435, 100, 'barriers'],
+  ['Gravity Zone', 25, 450, 100, 'gravity'], ['Expert Arena', 30, 470, 85, 'moving'],
+  ['Final Challenge', 35, 490, 80, 'final'],
 ];
 const LEVELS = Object.freeze(definitions.map(([name, goal, speed, paddleHeight, arena], i) => Object.freeze({
   level: i + 1, name, goal, speed, paddleHeight, arena,
@@ -55,8 +55,16 @@ function reflectSegment(ball, line) {
   const [ax, ay, bx, by] = line; const dx = bx-ax, dy = by-ay;
   const t = clamp(((ball.x-ax)*dx+(ball.y-ay)*dy)/(dx*dx+dy*dy),0,1);
   const nx0 = ball.x-(ax+t*dx), ny0 = ball.y-(ay+t*dy), distance = Math.hypot(nx0,ny0);
-  if (distance >= WORLD.radius || distance < 0.00001) return false;
-  const nx = nx0/distance, ny = ny0/distance, toward = ball.vx*nx+ball.vy*ny;
+  if (distance >= WORLD.radius) return false;
+  // WHY: An exact center-line contact still needs a stable normal or a fast
+  // ball can cross a thin obstacle without ever being separated from it.
+  let nx, ny;
+  if (distance < 0.00001) {
+    const length = Math.hypot(dx, dy) || 1;
+    nx = -dy / length; ny = dx / length;
+    if (ball.vx * nx + ball.vy * ny > 0) { nx *= -1; ny *= -1; }
+  } else { nx = nx0 / distance; ny = ny0 / distance; }
+  const toward = ball.vx*nx+ball.vy*ny;
   if (toward < 0) { ball.vx -= 2*toward*nx; ball.vy -= 2*toward*ny; }
   ball.x += nx*(WORLD.radius-distance+0.1); ball.y += ny*(WORLD.radius-distance+0.1);
   // WHY: Avoid a near-vertical obstacle bounce that would trap a rally forever.
@@ -109,6 +117,7 @@ function step(state, inputs, seconds) {
     const dt = Math.min(remaining, 1/120); remaining -= dt; state.elapsedMs += dt * 1000;
     const controls = [inputs[0] || {}, state.mode === 'computer' ? computerInput(state, config, dt) : inputs[1] || {}];
     powers.update(state, config, controls, dt, random);
+    const paddleStarts = state.paddles.slice();
     for (const side of [0, 1]) {
       const speed = side === 1 && state.mode === 'computer' ? config.aiSpeed : WORLD.playerSpeed;
       movePaddle(state, side, controls[side], state.paddleWidths[side], dt, speed * (powers.active(state, side, 'speed') ? 1.3 : 1));
@@ -129,6 +138,7 @@ function step(state, inputs, seconds) {
     if (config.arena === 'speed' && ((ball.x > 270 && ball.x < 350) || (ball.x > 650 && ball.x < 730))) factor *= 1.18;
     factor = Math.min(factor, Math.min(config.maxSpeed, ABSOLUTE_MAX_SPEED) / Math.hypot(ball.vx, ball.vy));
     state.effectiveSpeed = Math.hypot(ball.vx, ball.vy) * factor;
+    const oldBallX = ball.x, oldBallY = ball.y;
     ball.x += ball.vx * dt * factor; ball.y += ball.vy * dt * factor;
     if (ball.y < WORLD.radius || ball.y > WORLD.height - WORLD.radius) {
       ball.y = clamp(ball.y, WORLD.radius, WORLD.height - WORLD.radius); ball.vy *= -1; state.spin *= -.65;
@@ -140,12 +150,23 @@ function step(state, inputs, seconds) {
       const sign = side === 0 ? 1 : -1;
       const x = side === 0 ? WORLD.left + state.depths[0] : WORLD.right - state.depths[1];
       const height = state.paddleWidths[side];
-      if (ball.vx * sign < 0 && Math.abs(ball.x - x) <= WORLD.paddleWidth/2 + WORLD.radius && Math.abs(ball.y - state.paddles[side]) <= height/2 + WORLD.radius) {
-        const offset = clamp((ball.y - state.paddles[side]) / (height/2), -1, 1);
+      const face = x + sign * (WORLD.paddleWidth/2 + WORLD.radius);
+      const oldGap = (oldBallX - face) * sign, newGap = (ball.x - face) * sign;
+      const crossedFace = oldGap >= 0 && newGap <= 0;
+      const contactTime = crossedFace ? clamp(oldGap / Math.max(0.00001, oldGap - newGap), 0, 1) : 1;
+      const contactY = oldBallY + (ball.y - oldBallY) * contactTime;
+      const contactPaddle = paddleStarts[side] + (state.paddles[side] - paddleStarts[side]) * contactTime;
+      // The 1/120 s substep bounds travel to less than half a ball diameter.
+      // Sweeping the paddle face also handles contact on the first crossed step.
+      const overlapping = Math.abs(ball.x - x) <= WORLD.paddleWidth/2 + WORLD.radius;
+      if (ball.vx * sign < 0 && (crossedFace || overlapping) && Math.abs(contactY - contactPaddle) <= height/2 + WORLD.radius) {
+        ball.y = contactY;
+        const offset = clamp((contactY - contactPaddle) / (height/2), -1, 1);
         const motion = clamp(state.paddleVelocities[side] / WORLD.playerSpeed, -1, 1);
         const power = powers.consume(state, side, 'power'), curve = powers.consume(state, side, 'curve');
-        const escalation = 1.012 + Math.min(.025, Math.floor(state.rally / 5) * .007);
-        const speed = Math.hypot(ball.vx, ball.vy) * escalation * (1 + .22 * Math.abs(motion)) * (power ? 1.35 : 1);
+        const rallyMultiplier = state.rally >= 13 ? 1.075 : state.rally >= 8 ? 1.05 : state.rally >= 4 ? 1.025 : 1;
+        const paddleImpactMultiplier = 1.03 + .22 * Math.abs(motion);
+        const speed = Math.hypot(ball.vx, ball.vy) * rallyMultiplier * paddleImpactMultiplier * (power ? 1.35 : 1);
         const angle = clamp(offset * config.maxAngle + motion * .2, -1.05, 1.05);
         ball.vx = sign * Math.cos(angle) * speed; ball.vy = Math.sin(angle) * speed;
         state.spin = motion * 48 + (curve ? (Math.sign(offset || motion) || 1) * 160 : 0);
@@ -182,6 +203,6 @@ function step(state, inputs, seconds) {
 function view(state) {
   const config = configFor(state.mode,state.level);
   powers.init(state, config);
-  return { mode:state.mode,level:state.level,phase:state.phase,paddles:state.paddles,ball:{x:state.ball.x,y:state.ball.y},score:state.score,returns:state.returns,goal:config.goal,longestRally:state.longestRally,elapsedMs:Math.round(state.elapsedMs),winner:state.winner,completed:state.completed,paddleHeights:state.paddleWidths,barriers:segments(state,config),arena:config.arena,rally:state.rally,ballSpeed:state.effectiveSpeed || Math.hypot(state.ball.vx,state.ball.vy),maxSpeed:config.maxSpeed,hot:state.hotUntil>state.elapsedMs,...powers.view(state) };
+  return { mode:state.mode,level:state.level,phase:state.phase,paddles:state.paddles,ball:{x:state.ball.x,y:state.ball.y},ballVelocity:{x:state.ball.vx,y:state.ball.vy},score:state.score,returns:state.returns,goal:config.goal,longestRally:state.longestRally,elapsedMs:Math.round(state.elapsedMs),winner:state.winner,completed:state.completed,paddleHeights:state.paddleWidths,barriers:segments(state,config),arena:config.arena,rally:state.rally,ballSpeed:state.effectiveSpeed || Math.hypot(state.ball.vx,state.ball.vy),maxSpeed:config.maxSpeed,hot:state.hotUntil>state.elapsedMs,...powers.view(state) };
 }
-module.exports = { WORLD, LEVELS, PVP, ABSOLUTE_MAX_SPEED, createState, step, view, configFor, reflectedY };
+module.exports = { WORLD, LEVELS, PVP, ABSOLUTE_MAX_SPEED, createState, step, view, configFor, reflectedY, reflectSegment };
