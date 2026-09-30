@@ -12,6 +12,7 @@
  * attempt in-app/email delivery, and retry pending email sends on an interval.
  */
 
+const { resultMissionName } = require("./missionNaming.service");
 const xpJourneyService = require("./xpJourney.service");
 const path = require("path");
 const Mission = require("../models/Mission");
@@ -485,7 +486,7 @@ function serializeMissionResultHistoryEntry(mission) {
       resultKind: RESULT_KIND_PAPER_ASSESSMENT,
       missionId: "",
       title: String(
-        serializedMission.title || "Paper Assessment",
+        mission.title || "Paper Assessment",
       ).trim(),
       teacherNote: "",
       sourceUnitText: "",
@@ -2011,7 +2012,7 @@ function buildFullResultReportText({
     `Student: ${String(meta.studentName || "").trim()}`,
     `Student ID: ${String(meta.studentId || "").trim()}`,
     `Teacher ID: ${String(meta.teacherId || "").trim()}`,
-    `${sourceLabel}: ${String(meta.missionTitle || "").trim()}`,
+    `${sourceLabel}: ${resultMissionName(resultPackage)}`,
     `${sourceLabel} ID: ${String(meta.missionId || "").trim()}`,
     `Subject: ${String(meta.subject || "").trim()}`,
     `Task Codes: ${Array.isArray(meta.taskCodes) ? meta.taskCodes.join(", ") : ""}`,
@@ -2227,10 +2228,7 @@ function buildResultAttachmentName(
   resultPackage,
   extension = "txt",
 ) {
-  const missionTitle = String(
-    resultPackage?.meta
-      ?.missionTitle || "result",
-  )
+  const missionTitle = resultMissionName(resultPackage)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
@@ -2613,9 +2611,7 @@ function buildResultReportPdfBuffer({
       );
       keyValue(
         sourceLabel,
-        String(
-          meta.missionTitle || "",
-        ).trim(),
+        resultMissionName(resultPackage),
       );
       keyValue(
         `${sourceLabel} ID`,
@@ -3034,7 +3030,7 @@ async function sendResultEmail({
   resultPackage,
   screenshotUrl = "",
 }) {
-  const subject = `Focus Mission Result: ${resultPackage.meta.missionTitle}`;
+  const subject = `Focus Mission Result: ${resultMissionName(resultPackage)}`;
   const fullReportText =
     buildFullResultReportText({
       resultPackage,

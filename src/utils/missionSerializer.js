@@ -9,6 +9,7 @@
  * Normalize mission questions, map subject metadata, and build a fallback bank
  * mission when no saved teacher mission is available.
  */
+const { missionName } = require("../services/missionNaming.service");
 const { resolveMissionRewardPolicy } = require("./xpPolicy");
 const {
   DEFAULT_LEARNING_VIDEO_PLACEMENT,
@@ -122,7 +123,8 @@ function serializeMission(mission) {
       ? "completed"
       : mission.startedAt ? "in_progress" : mission.redoOfMissionId ? "redo_requested" : "available",
     completedAt: mission.completedAt ? new Date(mission.completedAt).toISOString() : null,
-    title: mission.title,
+    title: missionName(mission),
+    namingDraftFormat: mission.draftFormat || "",
     teacherNote: mission.teacherNote || "",
     sourceUnitText: mission.sourceUnitText || "",
     sourceRawText: mission.sourceRawText || "",
@@ -193,7 +195,7 @@ function buildQuestionBankMission({
 }) {
   return {
     id: `bank-${String(subject._id || subject.id || "")}-${sessionType}`,
-    title: `${subject.name} Practice Mission`,
+    title: missionName({ draftFormat: "QUESTIONS", questions }),
     teacherNote: "Answer the mission questions and keep your focus steady.",
     sourceUnitText: "",
     sourceRawText: "",

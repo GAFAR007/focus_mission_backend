@@ -16,6 +16,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const Mission = require("../src/models/Mission");
+const Subject = require("../src/models/Subject");
 const Timetable = require("../src/models/Timetable");
 const User = require("../src/models/User");
 const subjectCertificationService = require(
@@ -111,6 +112,7 @@ async function withReusePersistence(
   } = {},
 ) {
   const originals = {
+    subjectFindById: Subject.findById,
     missionFindOne: Mission.findOne,
     missionFind: Mission.find,
     missionCreate: Mission.create,
@@ -122,6 +124,7 @@ async function withReusePersistence(
     buildCertification:
       subjectCertificationService.buildMissionCertificationSnapshot,
   };
+  Subject.findById = () => queryReturning({ name: "Business" });
   let createdPayload;
   let timetableFilter;
 
@@ -186,6 +189,7 @@ async function withReusePersistence(
       },
     });
   } finally {
+    Subject.findById = originals.subjectFindById;
     Mission.findOne = originals.missionFindOne;
     Mission.find = originals.missionFind;
     Mission.create = originals.missionCreate;

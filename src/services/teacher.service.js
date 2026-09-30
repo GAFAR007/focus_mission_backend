@@ -11,6 +11,7 @@
  * persist approved learning content and blocks when the teacher explicitly
  * approves the draft.
  */
+const { missionDisplayName, missionName } = require("./missionNaming.service");
 const xpJourneyService = require("./xpJourney.service");
 const bcrypt = require("bcryptjs");
 const Block = require("../models/Block");
@@ -1271,11 +1272,11 @@ async function buildImportedMissionFromSource({
         questionCount: importedItemCount,
         taskCodes: normalizedTaskCodes,
       });
-  const title =
-    assessmentCreationMetadata.title ||
-    String(payload.title || "").trim() ||
-    parsedDraft.title ||
-    `${subject.name} Mission`;
+  const title = missionDisplayName({
+    title: assessmentCreationMetadata.title || String(payload.title || "").trim() || parsedDraft.title,
+    type: draftFormat, taskCodes: normalizedTaskCodes,
+    questionCount: importedItemCount, subject: subject.name,
+  });
   const baseMission = {
     id: "",
     title,
@@ -3206,10 +3207,11 @@ async function buildUploadedMissionFromSource({
     subjectId: String(subject._id),
     sessionType: String(payload.sessionType || "").trim().toLowerCase(),
     targetDate,
-    title:
-      String(payload.title || "").trim() ||
-      unitPlan.suggestedMissionTitle ||
-      `${subject.name} Mission`,
+    title: missionDisplayName({
+      title: payload.title, type: draftFormat,
+      taskCodes: parseTaskCodeUploadField(payload.taskCodes), questionCount,
+      subject: subject.name,
+    }),
     unitText: extractedSource.extractedText,
     sourceRawText: extractedSource.extractedText,
     draftFormat,
@@ -3598,7 +3600,11 @@ async function generateMission(teacherId, payload) {
     studentId: student._id,
     subjectId: subject._id,
     sessionType: payload.sessionType,
-    title: assessmentCreationMetadata.title || generated.title,
+    title: missionDisplayName({
+      title: assessmentCreationMetadata.title || payload.title,
+      type: draftFormat, taskCodes: normalizedTaskCodes,
+      questionCount: normalizedQuestions.length, subject: subject.name,
+    }),
     teacherNote: generated.teacherNote,
     sourceUnitText: unitText,
     sourceRawText: String(payload.sourceRawText || payload.unitText || "").trim(),
@@ -3703,7 +3709,10 @@ async function previewMission(teacherId, payload) {
 
   return serializeMission({
     id: "",
-    title: generated.title,
+    title: missionDisplayName({
+      title: payload.title, type: draftFormat, taskCodes: normalizedTaskCodes,
+      questionCount: normalizedQuestions.length, subject: subject.name,
+    }),
     teacherNote: generated.teacherNote,
     sourceUnitText: unitText,
     sourceRawText: String(payload.sourceRawText || payload.unitText || "").trim(),
@@ -3935,12 +3944,14 @@ async function reuseMissionDraft(teacherId, missionId, payload) {
     questionCount: rewardQuestionCount,
   }).xpReward;
 
+  const namingSubject = await Subject.findById(subjectId).select("name").lean();
+
   try {
     const createdMission = await Mission.create({
       studentId: targetStudentId,
       subjectId,
       sessionType,
-      title: assessmentCreationMetadata.title || sourceMission.title,
+      title: assessmentCreationMetadata.title || missionName(sourceMission, namingSubject?.name || ""),
       teacherNote: sourceMission.teacherNote,
       sourceUnitText: sourceMission.sourceUnitText,
       sourceRawText: sourceMission.sourceRawText,
@@ -4298,6 +4309,9 @@ async function updateMission(teacherId, missionId, payload) {
       mission.publishedAt = null;
     }
   }
+
+  const namingSubject = await Subject.findById(mission.subjectId).select("name").lean();
+  mission.title = missionName(mission, namingSubject?.name || "");
 
   await mission.save();
 

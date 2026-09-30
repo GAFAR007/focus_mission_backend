@@ -9,6 +9,7 @@
  * Load the active student and timetable context, resolve the correct mission
  * for the scheduled slot, and persist completed session outcomes.
  */
+const { missionName, resultMissionName } = require("./missionNaming.service");
 const xpJourneyService = require("./xpJourney.service");
 const mongoose = require("mongoose");
 const Mission = require("../models/Mission");
@@ -162,11 +163,7 @@ function buildStudentMissionHistoryItem({
   return {
     missionId: String(mission?._id || mission?.id || resultPackage?.missionId || ""),
     resultPackageId: String(resultPackage?._id || resultPackage?.id || ""),
-    title: String(
-      mission?.title ||
-        resultPackage?.meta?.missionTitle ||
-        "Mission",
-    ).trim(),
+    title: resultPackage ? resultMissionName(resultPackage) : missionName(mission),
     missionType,
     taskCodes: Array.isArray(mission?.taskCodes) ? mission.taskCodes : [],
     assignedDate: String(

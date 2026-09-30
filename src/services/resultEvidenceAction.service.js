@@ -10,6 +10,7 @@
  * new attempt or derived target record, preserve source evidence, and execute
  * multi-record move writes inside a MongoDB transaction.
  */
+const { missionName } = require("./missionNaming.service");
 const mongoose = require("mongoose");
 
 const EvidenceReclassification = require("../models/EvidenceReclassification");
@@ -138,12 +139,12 @@ function copyMissionQuestion(question) {
   };
 }
 
-function commonMissionCopy(sourceMission) {
+function commonMissionCopy(sourceMission, subject = "") {
   return {
     studentId: sourceMission.studentId,
     subjectId: sourceMission.subjectId,
     sessionType: sourceMission.sessionType,
-    title: sourceMission.title,
+    title: missionName(sourceMission, subject),
     teacherNote: sourceMission.teacherNote,
     sourceUnitText: sourceMission.sourceUnitText,
     sourceRawText: sourceMission.sourceRawText,
@@ -183,7 +184,7 @@ function buildRedoMissionData({ sourceMission, sourceResultPackage, teacherId, n
     weekday: "long",
   }).format(now);
   return {
-    ...commonMissionCopy(sourceMission),
+    ...commonMissionCopy(sourceMission, sourceResultPackage?.meta?.subject),
     status: "published",
     isArchived: false,
     archivedAt: null,
@@ -626,7 +627,8 @@ function buildMovedMissionData({
 }) {
   const score = sourceResultPackage?.meta?.score || {};
   return {
-    ...commonMissionCopy(sourceMission),
+    ...commonMissionCopy(sourceMission, sourceResultPackage?.meta?.subject),
+    title: missionName({ ...sourceMission, taskCodes: [targetTaskCode] }, sourceResultPackage?.meta?.subject),
     status: "published",
     isArchived: false,
     archivedAt: null,
