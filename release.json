@@ -1,8 +1,8 @@
 {
-  "version": "2.4.0",
-  "releasedAt": "2026-10-03T09:34:42.948Z",
+  "version": "2.5.0",
+  "releasedAt": "2026-10-03T11:05:47.545Z",
   "source": {
-    "commit": "0c00990f42ce48ffa1aaacb956f3afef04741022",
+    "commit": "ef72d466d18e3038a14092b5e8c72d7da29d2c84",
     "digest": "5bc4d05f5792476f0ffed3f141a4681f35b9fd33f49804793d55f19bd2c1df92",
     "files": {
       ".env.example": "44a1288678e1d796268723e62698599dac225d783bedca7fc1c9402ac2f2eb69",
@@ -146,9 +146,9 @@
   },
   "validation": {
     "status": "passed",
-    "checkedAt": "2026-10-03T09:36:36.045Z",
+    "checkedAt": "2026-10-03T11:07:56.354Z",
     "backendTests": 216,
-    "flutterTests": 230,
+    "flutterTests": 254,
     "analysis": "passed",
     "build": "passed",
     "backendSyntax": "passed",
