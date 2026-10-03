@@ -1,9 +1,9 @@
 {
-  "version": "2.3.1",
-  "releasedAt": "2026-09-30T19:06:37.400Z",
+  "version": "2.4.0",
+  "releasedAt": "2026-10-03T09:34:42.948Z",
   "source": {
-    "commit": "a5ab911010f707c2cc71b3aabcfe55d16491a20e",
-    "digest": "49475d7427611d54ed526cd5fd11326df715c8a27ce5d59b1358ac21446b6239",
+    "commit": "0c00990f42ce48ffa1aaacb956f3afef04741022",
+    "digest": "5bc4d05f5792476f0ffed3f141a4681f35b9fd33f49804793d55f19bd2c1df92",
     "files": {
       ".env.example": "44a1288678e1d796268723e62698599dac225d783bedca7fc1c9402ac2f2eb69",
       ".gitignore": "d97f68d33e0161c095cbb3a4db60e3401b0b3e987c9f4450a784c23b1d2d5ddb",
@@ -74,7 +74,7 @@
       "src/routes/pong.routes.js": "1ee80a93661de96dd2c29fdbdd55b2d84e7e348e3c8ad83f11c2803758d5f36e",
       "src/routes/student.routes.js": "df774e49645dbcdf40eec17fcaa49748c319e8bbaec60c1d299e3ea3b031642b",
       "src/routes/system.routes.js": "a0762c511cb81e08e9f5064d82302779fe11a4ed218a06f33e4c3cf35eb5de8c",
-      "src/routes/teacher.routes.js": "ef45c5bceb121ebc6d77058774c13ac40b129e8f48d1a25368ce493e6d947202",
+      "src/routes/teacher.routes.js": "ca31311fd60e3108c6f6e440ebfe4cb619d734222e705938aa550331b6b4f795",
       "src/routes/xpJourney.routes.js": "df98a5fee44e7373e1bcfcc757eae37456a9390a04bb823c36128db18b2fe588",
       "src/services/accessGate.service.js": "c497b08cc4ce4d1dee64689d4c20025eca5440ce914e8c96fad1af775ae60b23",
       "src/services/auth.service.js": "4bbee15999f17e0cdbe97de568b6b07d22dabbcb9ef347d7a2790fb147881413",
@@ -99,7 +99,7 @@
       "src/services/standalonePaperSession.service.js": "aff535cf22014a187fbd53ddc1a29f7b6baa4c11df234060c6eba82608decc52",
       "src/services/student.service.js": "6d726492090b57a43cc81eabbae82ff7eee9c25bc944567c34319981270f62ed",
       "src/services/subjectCertification.service.js": "653df305c7a4355e98f1ed797df661adab881b4a5917a63ecf22a4a71eb59c99",
-      "src/services/teacher.service.js": "ba6d12bb76098710ba006cec4e9036d3122511fc0ba6b3ec9dd6735f596a786f",
+      "src/services/teacher.service.js": "1b4da8c8c10e489059158953202ae78e75e3d1a5a7522674de4b784e39185bef",
       "src/services/xpJourney.service.js": "f3c4e7b87e0a68b20399b0d3af3265346efb48d13d266d2ed85e9ce668a86b95",
       "src/utils/checkUserPassword.js": "db7dfda9b1feb4d0faae606bd1c6dd14387c914a17112d61ee4f55071a6a5d50",
       "src/utils/ensureTeacher.js": "80a829928ba6745b44bcab3d9a6e2b8aad20b7e4140261757fa0c59cc9bf1350",
@@ -138,6 +138,7 @@
       "test/teacherDraftManagement.test.js": "562132a333fe374dafb2904062a1361d6f77df5fc6e83315dd980dfbc8e53d13",
       "test/teacherEssayImport.test.js": "4cdbff1111d97b9761eea6c7df8174efa44845461e54fc7af8f0fbc20e52e49b",
       "test/teacherMissionReuse.test.js": "ab0248d3bb9faf56fb50e527c5f71192de5d09c23640ecc8750628a2f4be7f9c",
+      "test/teacherPopulationPreview.test.js": "13c5fa7a8845e3f71d45f1a9a25ffd6066c8267265b88d88755488940cf52dce",
       "test/teacherTaskFocusWorkflow.test.js": "e784d411120c1a70a76f7ef4e73252e27f64af7e4816306f201d044a36908324",
       "test/xpJourneyIsolation.test.js": "4778985827225e166a91a210cf269055f81922404bdd73404fc1049baeff6d42",
       "test/youtubeVideo.test.js": "e028252b078e9be2cd3d138ea561e86f4e1180a19b54304b3bbdabed4a564fc1"
@@ -145,9 +146,9 @@
   },
   "validation": {
     "status": "passed",
-    "checkedAt": "2026-09-30T19:09:12.140Z",
-    "backendTests": 208,
-    "flutterTests": 219,
+    "checkedAt": "2026-10-03T09:36:36.045Z",
+    "backendTests": 216,
+    "flutterTests": 230,
     "analysis": "passed",
     "build": "passed",
     "backendSyntax": "passed",
