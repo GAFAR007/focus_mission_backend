@@ -484,6 +484,10 @@ router.post(
       .optional()
       .isString()
       .withMessage("missionDraftId must be text."),
+    body("previewOnly")
+      .optional()
+      .isBoolean()
+      .withMessage("Choose a valid population preview mode."),
     body("uploadMode")
       .optional()
       .isIn(["ai_draft", "populate_draft"])

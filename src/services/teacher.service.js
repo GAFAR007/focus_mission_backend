@@ -270,7 +270,7 @@ function normalizeImportedTextBlock(value) {
 
 function extractImportedMissionTitle(sourceText) {
   const firstMarkerMatch =
-    /(?:^|\n)\s*(?:UNIT TEXT|Question\s+\d+)/im.exec(String(sourceText || ""));
+    /(?:^|\n)\s*(?:UNIT TEXT|Question\s+\d+|Sentence\s+\d+|Target Words)/im.exec(String(sourceText || ""));
   const titleRegion = firstMarkerMatch
     ? String(sourceText || "").slice(0, firstMarkerMatch.index)
     : String(sourceText || "");
@@ -291,7 +291,7 @@ function extractImportedMissionTitle(sourceText) {
 function extractImportedUnitText(sourceText) {
   const normalizedSourceText = String(sourceText || "");
   const unitTextMatch =
-    /(?:^|\n)\s*UNIT TEXT\s*:?\s*([\s\S]*?)(?=\n\s*Question\s+\d+\s*:?\s*|\s*$)/i.exec(
+    /(?:^|\n)\s*UNIT TEXT\s*:?\s*([\s\S]*?)(?=\n\s*(?:Question\s+\d+|Sentence\s+\d+|Target Words|Target Sentences|Target Blanks)\s*:?\s*|\s*$)/i.exec(
       normalizedSourceText,
     );
 
@@ -349,7 +349,7 @@ function splitImportedQuestionBlocks(sourceText) {
 function extractImportedQuestionSections(questionBody) {
   const normalizedBody = String(questionBody || "");
   const labelPattern =
-    /(?:^|\n)\s*(Learn First|Prompt|Options|Correct Answer|Explanation|Expected Answer|Minimum Word Count)\s*:?\s*/gim;
+    /(?:^|\n)\s*(Learn First|Prompt|Options|Correct Answer|Explanation|Expected Answer|Minimum Word Count)[ \t]*:?[ \t]*/gim;
   const matches = [];
   let match;
 
@@ -526,7 +526,7 @@ function splitImportedEssaySentenceBlocks(sourceText) {
 function extractImportedEssaySentenceSections(sentenceBody) {
   const normalizedBody = String(sentenceBody || "");
   const labelPattern =
-    /(?:^|\n)\s*(Unit Text|Learn First Title|Learn First Bullet\s+\d+|Sentence Preview|Blank\s+\d+)\s*:?\s*/gim;
+    /(?:^|\n)\s*(Unit Text|Learn First Title|Learn First Bullet\s+\d+|Sentence Preview|Blank\s+\d+)[ \t]*:?[ \t]*/gim;
   const matches = [];
   let match;
 
@@ -604,7 +604,7 @@ function extractImportedEssaySentenceSections(sentenceBody) {
 
 function extractImportedEssayBlankSections(blankBody) {
   const normalizedBody = String(blankBody || "");
-  const labelPattern = /(?:^|\n)\s*(Hint|Correct Answer)\s*:?\s*/gim;
+  const labelPattern = /(?:^|\n)\s*(Hint|Correct Answer)[ \t]*:?[ \t]*/gim;
   const matches = [];
   let match;
 
@@ -669,11 +669,19 @@ function buildImportedUnitTextFallbackFromEssaySentences(sentences) {
   return uniqueSections.join("\n\n").trim();
 }
 
+// WHY: Review fields are transient UI data, never persisted as a mission. Both
+// file and paste use the same section/option parsers; incomplete fields remain
+// visible for a teacher to repair before the existing import/save validation.
+function importedReviewField(label, prefix, value) {
+  return { label, prefix, value: String(value || "") };
+}
+
 function parseImportedEssayDraftFromText({
   sourceText,
   parsedTitle,
   unitText,
   essayMode,
+  reviewFields,
 }) {
   const sentenceBlocks = splitImportedEssaySentenceBlocks(sourceText);
   const errors = [];
@@ -696,6 +704,28 @@ function parseImportedEssayDraftFromText({
       .map((bullet) => normalizeImportedTextBlock(bullet))
       .filter(Boolean);
     const sentencePreview = normalizeImportedTextBlock(sections.sentencePreview);
+    reviewFields.push(
+      importedReviewField(`${sentenceLabel} · Role`, `${sentenceLabel}:`, sentenceBlock.role),
+      importedReviewField(`${sentenceLabel} · Unit text`, "Unit Text:", sections.unitText),
+      importedReviewField(`${sentenceLabel} · Learn First title`, "Learn First Title:", sections.learnFirstTitle),
+      ...Array.from({ length: Math.max(3, learnFirstBullets.length) }, (_, index) =>
+        importedReviewField(`${sentenceLabel} · Learn First bullet ${index + 1}`,
+          `Learn First Bullet ${index + 1}:`, learnFirstBullets[index])),
+      importedReviewField(`${sentenceLabel} · Sentence Preview`, "Sentence Preview:", sentencePreview),
+    );
+    for (const blank of sections.blankBlocks.length ? sections.blankBlocks : [{ number: 1, body: "" }]) {
+      const blankSections = extractImportedEssayBlankSections(blank.body);
+      const options = parseImportedOptionList(blank.body);
+      reviewFields.push(
+        importedReviewField(`${sentenceLabel} · Blank ${blank.number} hint`,
+          `Blank ${blank.number}:\nHint:`, String(blankSections.hint || "").split(/\n\s*A[).:\-]/)[0]),
+        ...options.map((value, index) => importedReviewField(
+          `${sentenceLabel} · Blank ${blank.number} option ${"ABCD"[index]}`, `${"ABCD"[index]})`, value)),
+        importedReviewField(`${sentenceLabel} · Blank ${blank.number} correct answer`,
+          "Correct Answer:", blankSections["correct answer"]),
+      );
+    }
+
 
     if (learnFirstBullets.length < 3) {
       errors.push(`${sentenceLabel} needs at least 3 Learn First bullets.`);
@@ -857,6 +887,7 @@ function parseImportedEssayDraftFromText({
 
   return {
     title: parsedTitle,
+    reviewFields,
     unitText,
     questions: [],
     draftJson:
@@ -909,6 +940,17 @@ function buildImportedUnitTextFallbackFromQuestions(questions) {
 function parseImportedMissionFromText({ sourceText, draftFormat, essayMode }) {
   const normalizedDraftFormat = normalizeDraftFormat(draftFormat);
   const parsedTitle = extractImportedMissionTitle(sourceText);
+  const reviewFields = [
+    importedReviewField("Assessment title", "", parsedTitle),
+    importedReviewField("Unit text", "UNIT TEXT:", extractImportedUnitText(sourceText)),
+  ];
+  if (normalizedDraftFormat === "ESSAY_BUILDER") {
+    for (const label of ["Target Words", "Target Sentences", "Target Blanks"]) {
+      const value = new RegExp(`(?:^|\\n)\\s*${label}\\s*:?\\s*([^\\n]+)`, "im").exec(sourceText)?.[1];
+      reviewFields.push(importedReviewField(label, `${label}:`, value));
+    }
+  }
+
   let unitText = extractImportedUnitText(sourceText);
   const questionBlocks = splitImportedQuestionBlocks(sourceText);
   const parsedQuestions = [];
@@ -921,6 +963,7 @@ function parseImportedMissionFromText({ sourceText, draftFormat, essayMode }) {
       parsedTitle,
       unitText,
       essayMode,
+      reviewFields,
     });
   }
 
@@ -936,6 +979,24 @@ function parseImportedMissionFromText({ sourceText, draftFormat, essayMode }) {
     const learningText = normalizeImportedTextBlock(sections["learn first"]);
     const prompt = normalizeImportedTextBlock(sections.prompt);
     const explanation = normalizeImportedTextBlock(sections.explanation);
+    reviewFields.push(
+      importedReviewField(`${questionLabel} · Learn First`, `${questionLabel}:\nLearn First:`, learningText),
+      importedReviewField(`${questionLabel} · Prompt`, "Prompt:", prompt),
+    );
+    if (normalizedDraftFormat === "THEORY") {
+      reviewFields.push(
+        importedReviewField(`${questionLabel} · Expected Answer`, "Expected Answer:",
+          resolveImportedTheoryExpectedAnswer({ sections, options: parseImportedOptionList(sections.options) })),
+        importedReviewField(`${questionLabel} · Minimum Word Count`, "Minimum Word Count:", sections["minimum word count"] || "12"),
+      );
+    } else {
+      reviewFields.push(...parseImportedOptionList(sections.options).map((value, index) =>
+        importedReviewField(`${questionLabel} · Option ${"ABCD"[index]}`,
+          `${index === 0 ? "Options:\n" : ""}${"ABCD"[index]})`, value)));
+      reviewFields.push(importedReviewField(`${questionLabel} · Correct Answer`, "Correct Answer:", sections["correct answer"]));
+    }
+    reviewFields.push(importedReviewField(`${questionLabel} · Explanation`, "Explanation:", explanation));
+
 
     if (!learningText) {
       errors.push(`${questionLabel} is missing Learn First.`);
@@ -1033,6 +1094,7 @@ function parseImportedMissionFromText({ sourceText, draftFormat, essayMode }) {
 
   return {
     title: parsedTitle,
+    reviewFields,
     unitText,
     questions: normalizedQuestions,
     draftJson: null,
@@ -3283,11 +3345,23 @@ async function extractSourcePlan(teacherId, payload) {
     hasStudentContext,
   });
 
-  const extractedSource = await extractTextFromUploadedSource(payload.file);
+  const previewOnly = payload.previewOnly === true || payload.previewOnly === "true";
   const uploadMode = normalizeUploadMode(payload.uploadMode);
+  if (previewOnly && uploadMode !== "populate_draft") {
+    throw createError(400, "Text population is available through Populate, not AI draft.");
+  }
+  const extractedSource = await extractTextFromUploadedSource(payload.file,
+    previewOnly ? { minCharacters: 0 } : {});
+  if (previewOnly && !extractedSource.extractedText.trim()) {
+    throw createError(422, "Paste some assessment content before choosing Populate from Text.");
+  }
+  if (previewOnly && extractedSource.extractedText.length > 100000) {
+    throw createError(422, "This text is too long. Paste one assessment at a time (up to 100,000 characters).");
+  }
   let unitPlan;
   let prefilledMission = null;
   let resolvedDraftReadiness;
+  let populationPreview = null;
 
   if (uploadMode === "populate_draft") {
     const parsedDraft = parseImportedMissionFromText({
@@ -3295,6 +3369,30 @@ async function extractSourcePlan(teacherId, payload) {
       draftFormat: payload.draftFormat,
       essayMode: payload.essayMode,
     });
+    if (previewOnly) {
+      // WHY: A parse preview must never create drafts or consume assessment A/B
+      // slots. It retains recognised fields even when strict import is not ready.
+      if (parsedDraft.reviewFields.length > 500) {
+        throw createError(422, "Too many sections were found. Paste one assessment at a time.");
+      }
+      populationPreview = { fields: parsedDraft.reviewFields };
+      if (!parsedDraft.title) parsedDraft.errors.unshift("No assessment title was detected. Add a title above UNIT TEXT.");
+      // WHY: The existing builder requires 80 characters of Unit text on save.
+      // Report it while pasted fields are still editable, not after applying.
+      if (parsedDraft.unitText && parsedDraft.unitText.length < 80) {
+        parsedDraft.errors.push(`Unit text needs at least 80 characters before this draft can be saved; ${parsedDraft.unitText.length} were found. Add more teaching content.`);
+      }
+
+      if (parsedDraft.structuredBlockCount === 0) {
+        parsedDraft.errors.push(normalizeDraftFormat(payload.draftFormat) === "ESSAY_BUILDER"
+          ? "Essay Builder needs Sentence sections, Learn First bullets, Sentence Preview and Blank answer options. A plain essay prompt or marking rubric cannot fill this structure."
+          : "No usable questions could be extracted. Use Question 1, Learn First and Prompt headings, followed by Options and Correct Answer for Objective, or Expected Answer for Theory.");
+      }
+      if (normalizeDraftFormat(payload.draftFormat) === "QUESTIONS" && /(?:^|\n)\s*Expected Answer\s*:/i.test(extractedSource.extractedText)
+          && !/(?:^|\n)\s*Options\s*:/i.test(extractedSource.extractedText)) {
+        parsedDraft.errors.push("This looks like Theory content. Choose Populate theory, or add A–D options and a Correct Answer for each objective question.");
+      }
+    }
     unitPlan = buildImportedUnitPlan({
       subjectName: subject.name,
       payload,
@@ -3306,7 +3404,7 @@ async function extractSourcePlan(teacherId, payload) {
       draftFormat: payload.draftFormat,
     });
 
-    if (resolvedDraftReadiness.status === "ready") {
+    if (resolvedDraftReadiness.status === "ready" && !previewOnly) {
       prefilledMission = await buildImportedMissionFromSource({
         teacherId,
         subject,
@@ -3377,6 +3475,15 @@ async function extractSourcePlan(teacherId, payload) {
     }
   }
 
+  if (previewOnly) {
+    const readable = (value) => String(value).replace(/uploaded file|import file|this file|the file/g, "pasted text");
+    resolvedDraftReadiness.missingRequirements = resolvedDraftReadiness.missingRequirements.map(readable);
+    resolvedDraftReadiness.warningNotes = resolvedDraftReadiness.warningNotes.map(readable);
+    resolvedDraftReadiness.summary = resolvedDraftReadiness.status === "ready"
+      ? "Content populated. Review the fields, then apply to the builder."
+      : "Recognised fields are shown below. Complete the missing content, then check again. Nothing has been saved.";
+  }
+
   console.info("[teacher] source_plan_upload_complete", {
     teacherId: String(teacherId),
     subjectId: String(subject._id),
@@ -3397,6 +3504,7 @@ async function extractSourcePlan(teacherId, payload) {
     },
     unitPlan,
     draftReadiness: resolvedDraftReadiness,
+    ...(populationPreview ? { populationPreview } : {}),
     prefilledMission,
   };
 }
