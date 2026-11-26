@@ -1,8 +1,8 @@
 {
-  "version": "2.9.0",
-  "releasedAt": "2026-11-26T07:45:48.431Z",
+  "version": "2.9.1",
+  "releasedAt": "2026-11-26T07:54:18.511Z",
   "source": {
-    "commit": "ca21bf2b984412e497b20029fc111c55ba9c9bb6",
+    "commit": "8118745eecadb09a35d37e6fcd836e3534c91b36",
     "digest": "68a35500eb054cf079062696d94222c58efc9a138adb0e4d7d89069aa8cd7f38",
     "files": {
       ".env.example": "44a1288678e1d796268723e62698599dac225d783bedca7fc1c9402ac2f2eb69",
@@ -148,7 +148,7 @@
   },
   "validation": {
     "status": "passed",
-    "checkedAt": "2026-11-26T07:48:12.972Z",
+    "checkedAt": "2026-11-26T07:56:44.292Z",
     "backendTests": 220,
     "flutterTests": 270,
     "analysis": "passed",
