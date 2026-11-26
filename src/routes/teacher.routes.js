@@ -1141,6 +1141,13 @@ router.post(
   teacherController.uploadStandalonePaperSourceDraft,
 );
 
+// WHY: Existing teacher middleware and school scope protect picture edits too.
+router.patch(
+  "/standalone-papers/:paperId/items/:itemIndex/image",
+  [param("paperId").isMongoId(), param("itemIndex").isInt({ min: 0, max: 59 }), validateRequest],
+  teacherController.updateStandalonePaperImage,
+);
+
 router.post(
   "/standalone-papers",
   [

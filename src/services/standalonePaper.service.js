@@ -506,6 +506,26 @@ function parseImportedMinimumWordCount(value) {
   return Number(match[0]);
 }
 
+function normalizeQuestionImage(item) {
+  const imageDataUrl = String(item?.imageDataUrl || "");
+  const imageDescription = String(item?.imageDescription || "").trim();
+  // WHY: Raster-only, bounded data avoids remote tracking, SVG scripts and
+  // oversized Mongo documents. Never trust the file extension alone.
+  if (imageDescription.length > 6000) throw createError(400, "Image description is too long.");
+  if (!imageDataUrl) return { imageDataUrl: "", imageDescription };
+  const match = /^data:image\/(png|jpeg);base64,([A-Za-z0-9+/]+={0,2})$/.exec(imageDataUrl);
+  if (!match || imageDataUrl.length > 700000) throw createError(400, "Use a PNG or JPEG image up to 512 KB.");
+  const bytes = Buffer.from(match[2], "base64");
+  const valid = match[1] === "png"
+    ? bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))
+    : bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
+  if (!valid || bytes.length > 512 * 1024 || bytes.toString("base64") !== match[2]) {
+    throw createError(400, "The image content must be a valid PNG or JPEG up to 512 KB.");
+  }
+  if (!imageDescription) throw createError(400, "Add an image description for students using assistive technology.");
+  return { imageDataUrl, imageDescription };
+}
+
 function normalizeStandalonePaperItems(items) {
   if (!Array.isArray(items) || items.length === 0) {
     throw createError(400, "Standalone papers must include at least one item.");
@@ -515,7 +535,12 @@ function normalizeStandalonePaperItems(items) {
     throw createError(400, "Standalone papers can include up to 60 items.");
   }
 
+  // WHY: Leave room for question text below MongoDB's document limit.
+  if (items.reduce((n, item) => n + String(item?.imageDataUrl || "").length, 0) > 8 * 1024 * 1024) {
+    throw createError(400, "Pictures in one paper must total less than 6 MB before encoding.");
+  }
   return items.map((item, index) => {
+    const image = normalizeQuestionImage(item);
     const itemLabel = `Item ${index + 1}`;
     const itemType = normalizeStandaloneItemType(item?.itemType);
     const learningText = String(item?.learningText || "").trim();
@@ -547,6 +572,7 @@ function normalizeStandalonePaperItems(items) {
       }
 
       return {
+        ...image,
         itemType,
         learningText,
         prompt,
@@ -582,6 +608,7 @@ function normalizeStandalonePaperItems(items) {
       }
 
       return {
+        ...image,
         itemType,
         learningText,
         prompt,
@@ -613,6 +640,7 @@ function normalizeStandalonePaperItems(items) {
     }
 
     return {
+      ...image,
       itemType,
       learningText,
       prompt,
@@ -978,6 +1006,8 @@ function serializeStandalonePaper(paper) {
     : null;
   const items = Array.isArray(paper?.items)
     ? paper.items.map((item) => ({
+        imageDataUrl: String(item?.imageDataUrl || ""),
+        imageDescription: String(item?.imageDescription || ""),
         itemType: String(item?.itemType || "").trim(),
         learningText: String(item?.learningText || "").trim(),
         prompt: String(item?.prompt || "").trim(),
@@ -1303,7 +1333,33 @@ async function uploadStandalonePaperSourceDraft({
   };
 }
 
+async function updateStandalonePaperImage({ teacherId, paperId, itemIndex, payload }) {
+  const paper = await loadStandalonePaperForTeacher({ teacherId, paperId });
+  const index = Number(itemIndex);
+  if (!Number.isInteger(index) || index < 0 || index >= paper.items.length) {
+    throw createError(400, "Choose an existing question.");
+  }
+  const image = normalizeQuestionImage(payload);
+  const total = paper.items.reduce((n, item, i) => n + (i === index ? image.imageDataUrl : String(item.imageDataUrl || "")).length, 0);
+  if (total > 8 * 1024 * 1024) throw createError(400, "Pictures in one paper must total less than 6 MB before encoding.");
+  // WHY: Published papers accept image-only corrections. Never rewrite items,
+  // answers, marks or sitting state; reject concurrent teacher edits.
+  const updated = await StandalonePaper.findOneAndUpdate(
+    { _id: paper._id, updatedAt: paper.updatedAt },
+    { $set: {
+      [`items.${index}.imageDataUrl`]: image.imageDataUrl,
+      [`items.${index}.imageDescription`]: image.imageDescription,
+      [`items.${index}.imageUpdatedAt`]: new Date(),
+      [`items.${index}.imageUpdatedBy`]: teacherId,
+    } }, { new: true, runValidators: true },
+  ).populate("subjectId", "name icon color").lean();
+  if (!updated) throw createError(409, "The paper changed. Refresh it before saving the picture.");
+  return serializeStandalonePaper(updated);
+}
+
 module.exports = {
+  normalizeQuestionImage,
+  updateStandalonePaperImage,
   listStandalonePapers,
   createStandalonePaper,
   updateStandalonePaper,

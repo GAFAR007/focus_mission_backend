@@ -305,6 +305,8 @@ function serializeStudentPaper(paper) {
     durationMinutes: Number(paper?.durationMinutes || 0),
     subject,
     items: (Array.isArray(paper?.items) ? paper.items : []).map((item, index) => ({
+      imageDataUrl: String(item?.imageDataUrl || ""),
+      imageDescription: String(item?.imageDescription || ""),
       itemIndex: index,
       itemType: String(item?.itemType || "").trim(),
       learningText: String(item?.learningText || "").trim(),

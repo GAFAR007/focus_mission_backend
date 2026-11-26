@@ -422,6 +422,16 @@ async function updateStandalonePaper(req, res, next) {
   }
 }
 
+async function updateStandalonePaperImage(req, res, next) {
+  try {
+    const paper = await standalonePaperService.updateStandalonePaperImage({
+      teacherId: req.user.id, paperId: req.params.paperId,
+      itemIndex: req.params.itemIndex, payload: req.body,
+    });
+    res.json({ paper });
+  } catch (error) { next(error); }
+}
+
 async function deleteStandalonePaper(req, res, next) {
   try {
     const deleted = await standalonePaperService.deleteStandalonePaper({
@@ -980,6 +990,7 @@ module.exports = {
   getStandalonePapers,
   createStandalonePaper,
   updateStandalonePaper,
+  updateStandalonePaperImage,
   deleteStandalonePaper,
   uploadStandalonePaperSourceDraft,
   publishStandalonePaper,

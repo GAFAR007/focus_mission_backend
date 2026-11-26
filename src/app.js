@@ -80,6 +80,8 @@ app.use(
 );
 app.use(helmet());
 app.use(morgan("dev"));
+// WHY: Only paper authoring accepts bounded inline question pictures.
+app.use("/api/teacher/standalone-papers", express.json({ limit: "10mb" }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 

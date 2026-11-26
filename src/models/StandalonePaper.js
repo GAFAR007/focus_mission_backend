@@ -27,6 +27,11 @@ const standalonePaperItemSchema = new mongoose.Schema(
       // WHY: Imported or teacher-authored mixed papers still need explicit
       // teach-first guidance per item so the review copy stays readable.
     },
+    // WHY: Private inline raster images travel only with the authorized paper.
+    imageUpdatedAt: { type: Date, default: null },
+    imageUpdatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    imageDataUrl: { type: String, default: "", maxlength: 700000 },
+    imageDescription: { type: String, default: "", maxlength: 6000 },
     prompt: {
       type: String,
       required: true,
