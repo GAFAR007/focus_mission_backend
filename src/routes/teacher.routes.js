@@ -1304,6 +1304,13 @@ router.get(
   teacherController.getLatestStandalonePaperSession,
 );
 
+// WHY: Existing teacher middleware plus service ownership authorizes recovery.
+router.post(
+  "/standalone-papers/:paperId/reinstate",
+  [param("paperId").isMongoId().withMessage("Valid paperId is required."), validateRequest],
+  teacherController.reinstateStandalonePaper,
+);
+
 router.post(
   "/standalone-paper-sessions/:sessionId/reset",
   [

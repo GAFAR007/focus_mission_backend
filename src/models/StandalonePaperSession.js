@@ -171,6 +171,7 @@ const standalonePaperSessionSchema = new mongoose.Schema(
       required: true,
       default: Date.now,
     },
+    recoveryPending: { type: Boolean, default: false },
     endsAt: {
       type: Date,
       default: null,
@@ -230,7 +231,8 @@ const standalonePaperSessionSchema = new mongoose.Schema(
     },
     submittedReason: {
       type: String,
-      enum: ["manual_submit", "time_expired", "integrity_lock"],
+      // WHY: An unfinished sitting has no submission reason yet.
+      enum: ["", "manual_submit", "time_expired", "integrity_lock"],
       default: "",
       trim: true,
     },
@@ -255,7 +257,8 @@ const standalonePaperSessionSchema = new mongoose.Schema(
       default: [],
     },
   },
-  { timestamps: true },
+  // WHY: Stale heartbeats and saves must not undo a teacher recovery or lock.
+  { timestamps: true, optimisticConcurrency: true },
 );
 
 standalonePaperSessionSchema.index({

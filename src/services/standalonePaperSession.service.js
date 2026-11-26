@@ -11,6 +11,7 @@
  * responses and integrity events, auto-submit on timer expiry, and let teachers
  * reset or score written answers after submission.
  */
+const mongoose = require("mongoose");
 const ResultPackage = require("../models/ResultPackage");
 const SessionLog = require("../models/SessionLog");
 const StandalonePaper = require("../models/StandalonePaper");
@@ -410,6 +411,8 @@ async function assertStudentCanOpenPublishedPaper({
     throw createError(403, "This standalone paper is not published yet.");
   }
 
+  // WHY: A teacher can explicitly reinstate this paper for today.
+  if (paper.recoveryDate === currentDateKey) return;
   if (String(paper.targetDate || "").trim() !== currentDateKey) {
     throw createError(
       403,
@@ -836,7 +839,17 @@ async function submitStandalonePaperSessionInternal({
 async function resolveFreshSessionState({
   session,
   paper,
+  beginRecovery = true,
 }) {
+  // WHY: Only student activity starts the replacement timer; teacher inspection
+  // must not consume time before the learner can return.
+  if (beginRecovery && session.status === "active" && session.recoveryPending) {
+    session.endsAt = Number(paper.durationMinutes) > 0
+      ? new Date(getNow().getTime() + Number(paper.durationMinutes) * 60000) : null;
+    session.recoveryPending = false;
+    await session.save();
+  }
+
   if (
     String(session.status || "").trim() === "active" &&
     session.endsAt &&
@@ -869,20 +882,18 @@ async function listAvailableStandalonePapersForStudent({
     populate: true,
   });
 
-  if (!timetable) {
-    return [];
-  }
-
   const papers = await StandalonePaper.find({
     studentId,
     status: "published",
-    targetDate: currentDateKey,
+    $or: [{ targetDate: currentDateKey }, { recoveryDate: currentDateKey }],
   })
     .populate("subjectId", "name icon color")
     .sort({ publishedAt: -1, createdAt: -1 })
     .lean();
 
   const filtered = papers.filter((paper) => {
+    if (paper.recoveryDate === currentDateKey) return true;
+    if (!timetable) return false;
     const sessionType = String(paper?.sessionType || "").trim().toLowerCase();
     const scheduledSubjectId =
       sessionType === "afternoon"
@@ -1320,8 +1331,58 @@ async function getLatestStandalonePaperSessionForTeacher({
     teacherId,
     sessionId: latestSession._id,
   });
-  await resolveFreshSessionState({ session, paper });
+  await resolveFreshSessionState({ session, paper, beginRecovery: false });
   return serializeSessionSummary(session);
+}
+
+async function reinstateStandalonePaper({ teacherId, paperId }) {
+  // WHY: The grant, audit and resumed attempt must commit together. Completed
+  // evidence remains intact; reinstating a finalized sitting creates a new copy.
+  return mongoose.connection.transaction(async (dbSession) => {
+    const paper = await StandalonePaper.findById(paperId).session(dbSession);
+    if (!paper) throw createError(404, "Standalone paper not found.");
+    if (String(paper.teacherId) !== String(teacherId)) {
+      throw createError(403, "You do not have access to this standalone paper.");
+    }
+    if (paper.status !== "published") {
+      throw createError(409, "Publish this paper before reinstating it.");
+    }
+    let sitting = await StandalonePaperSession.findOne({ paperId })
+      .sort({ createdAt: -1 }).session(dbSession);
+    const previousStatus = sitting?.status || "not_started";
+    if (sitting && ["submitted", "time_expired", "reset_by_teacher"].includes(sitting.status)) {
+      const copy = sitting.toObject();
+      for (const key of ["_id", "__v", "createdAt", "updatedAt", "resultPackageId", "sessionLogId",
+        "submittedAt", "resetAt", "lockedAt"]) delete copy[key];
+      copy.attemptNumber = Number(sitting.attemptNumber || 1) + 1;
+      copy.startedAt = getNow();
+      copy.responses = copy.responses.map(response => ({ ...response,
+        teacherScorePercent: null, teacherFeedback: "" }));
+      copy.status = "active";
+      copy.submittedReason = "";
+      copy.endsAt = null;
+      copy.recoveryPending = true;
+      copy.warningCount = 0;
+      copy.autoScorePercent = 0;
+      copy.reviewStatus = paper.items.some(item => item.itemType === "THEORY") ? "pending_review" : "not_needed";
+      [sitting] = await StandalonePaperSession.create([copy], { session: dbSession });
+    } else if (sitting) {
+      // WHY: Preserve answers, position and integrity history, but clear the
+      // current lock and warning so a teacher-approved return is usable.
+      sitting.status = "active";
+      sitting.lockedAt = null;
+      sitting.submittedReason = "";
+      sitting.warningCount = 0;
+      sitting.endsAt = null;
+      sitting.recoveryPending = true;
+      await sitting.save({ session: dbSession });
+    }
+    paper.recoveryDate = getDateKey(getNow());
+    paper.recoveryHistory.push({ teacherId, occurredAt: getNow(), previousStatus,
+      sessionId: sitting?._id || null, reason: "Teacher reinstated paper for today" });
+    await paper.save({ session: dbSession });
+    return { session: serializeSessionSummary(sitting), recoveryDate: paper.recoveryDate };
+  });
 }
 
 async function resetStandalonePaperSession({
@@ -1471,6 +1532,7 @@ module.exports = {
   publishStandalonePaper,
   unpublishStandalonePaper,
   getLatestStandalonePaperSessionForTeacher,
+  reinstateStandalonePaper,
   resetStandalonePaperSession,
   scoreStandalonePaperSession,
 };

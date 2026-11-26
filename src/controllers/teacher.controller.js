@@ -485,6 +485,15 @@ async function getLatestStandalonePaperSession(req, res, next) {
   }
 }
 
+async function reinstateStandalonePaper(req, res, next) {
+  try {
+    const result = await standalonePaperSessionService.reinstateStandalonePaper({
+      teacherId: req.user.id, paperId: req.params.paperId,
+    });
+    res.json(result);
+  } catch (error) { next(error); }
+}
+
 async function resetStandalonePaperSession(req, res, next) {
   try {
     const result = await standalonePaperSessionService.resetStandalonePaperSession({
@@ -976,6 +985,7 @@ module.exports = {
   publishStandalonePaper,
   unpublishStandalonePaper,
   getLatestStandalonePaperSession,
+  reinstateStandalonePaper,
   resetStandalonePaperSession,
   scoreStandalonePaperSession,
   reextractMissionSource,
