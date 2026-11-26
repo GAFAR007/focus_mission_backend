@@ -230,7 +230,16 @@ function serializeIntegrityEvents(events) {
   }));
 }
 
-function serializeSessionSummary(session) {
+function objectiveAnswerCorrectness(response, paper) {
+  const item = paper?.items?.[Number(response?.itemIndex)];
+  const selected = Number(response?.selectedOptionIndex ?? -1);
+  const correct = Number(item?.correctIndex);
+  if (item?.itemType !== "OBJECTIVE" || !Number.isInteger(selected) || selected < 0 ||
+      !Number.isInteger(correct) || correct < 0 || correct >= (item.options?.length || 0) || selected >= (item.options?.length || 0)) return null;
+  return selected === correct;
+}
+
+function serializeSessionSummary(session, paper = null) {
   if (!session) {
     return null;
   }
@@ -268,6 +277,9 @@ function serializeSessionSummary(session) {
       itemIndex: Number(response?.itemIndex || 0),
       itemType: String(response?.itemType || "").trim(),
       selectedOptionIndex: Number(response?.selectedOptionIndex ?? -1),
+      // WHY: The owner requires immediate objective feedback in Tests and Exams.
+      // Grade only the saved selection; never expose the answer key or grade theory.
+      isCorrect: objectiveAnswerCorrectness(response, paper),
       textAnswer: String(response?.textAnswer || "").trim(),
       flagged: response?.flagged == true,
       answeredAt: response?.answeredAt
@@ -953,7 +965,7 @@ async function startStandalonePaperSession({
     });
     return {
       paper: serializeStudentPaper(paper),
-      session: serializeSessionSummary(fresh.session),
+      session: serializeSessionSummary(fresh.session, paper),
     };
   }
 
@@ -999,7 +1011,7 @@ async function startStandalonePaperSession({
 
   return {
     paper: serializeStudentPaper(paper),
-    session: serializeSessionSummary(session),
+    session: serializeSessionSummary(session, paper),
   };
 }
 
@@ -1022,7 +1034,7 @@ async function getStandalonePaperSessionForStudent({
   await resolveFreshSessionState({ session, paper });
   return {
     paper: serializeStudentPaper(paper),
-    session: serializeSessionSummary(session),
+    session: serializeSessionSummary(session, paper),
   };
 }
 
@@ -1048,7 +1060,7 @@ async function saveStandalonePaperSessionProgress({
   if (String(session.status || "").trim() !== "active") {
     return {
       paper: serializeStudentPaper(paper),
-      session: serializeSessionSummary(session),
+      session: serializeSessionSummary(session, paper),
     };
   }
 
@@ -1121,7 +1133,7 @@ async function saveStandalonePaperSessionProgress({
 
   return {
     paper: serializeStudentPaper(paper),
-    session: serializeSessionSummary(session),
+    session: serializeSessionSummary(session, paper),
   };
 }
 
@@ -1147,7 +1159,7 @@ async function recordStandalonePaperHeartbeat({
   }
   return {
     paper: serializeStudentPaper(paper),
-    session: serializeSessionSummary(session),
+    session: serializeSessionSummary(session, paper),
   };
 }
 
@@ -1173,7 +1185,7 @@ async function recordStandalonePaperIntegrityEvent({
   if (String(session.status || "").trim() !== "active") {
     return {
       paper: serializeStudentPaper(paper),
-      session: serializeSessionSummary(session),
+      session: serializeSessionSummary(session, paper),
       message: "This paper is no longer active.",
     };
   }
@@ -1218,7 +1230,7 @@ async function recordStandalonePaperIntegrityEvent({
 
   return {
     paper: serializeStudentPaper(paper),
-    session: serializeSessionSummary(session),
+    session: serializeSessionSummary(session, paper),
     message,
   };
 }
@@ -1245,7 +1257,7 @@ async function submitStandalonePaperSession({
   });
   return {
     paper: serializeStudentPaper(submitted.paper),
-    session: serializeSessionSummary(submitted.session),
+    session: serializeSessionSummary(submitted.session, submitted.paper),
     resultPackageId: String(submitted.resultPackageId || "").trim(),
   };
 }
