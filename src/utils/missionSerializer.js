@@ -70,6 +70,8 @@ function serializeMissionQuestion(question, index = 0, draftFormat = "QUESTIONS"
     id: String(question._id || question.id || `question-${index + 1}`),
     answerMode,
     learningText: question.learningText || question.lessonText || question.explanation || "",
+    imageDataUrl: String(question.imageDataUrl || ""),
+    imageDescription: String(question.imageDescription || ""),
     learningVideoUrl: learningVideo?.canonicalUrl || "",
     learningVideoPlacement:
       learningVideoPlacement || DEFAULT_LEARNING_VIDEO_PLACEMENT,

@@ -36,6 +36,9 @@ const missionQuestionSchema = new mongoose.Schema(
       // WHY: Missions teach before questioning so the student answers from
       // taught content instead of being tested on untaught knowledge.
     },
+    // WHY: Optional pictures support every question format without changing answers.
+    imageDataUrl: { type: String, default: "", maxlength: 700000 },
+    imageDescription: { type: String, default: "", maxlength: 6000 },
     learningVideoUrl: {
       type: String,
       default: "",

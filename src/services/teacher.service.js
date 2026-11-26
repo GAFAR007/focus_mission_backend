@@ -12,6 +12,7 @@
  * approves the draft.
  */
 const { missionDisplayName, missionName } = require("./missionNaming.service");
+const { normalizeQuestionImage, normalizeMissionPictures, assertPictureBudget } = require("./questionImage.service");
 const xpJourneyService = require("./xpJourney.service");
 const bcrypt = require("bcryptjs");
 const Block = require("../models/Block");
@@ -1927,6 +1928,7 @@ function normalizeQuestions(
   if (!Array.isArray(questions) || questions.length < 1 || questions.length > 10) {
     throw createError(400, "Mission drafts must include between 1 and 10 questions.");
   }
+  assertPictureBudget(questions);
   const questionIds = questions.map((question, index) =>
     String(question?.id || `question-${index + 1}`).trim(),
   );
@@ -1988,6 +1990,7 @@ function normalizeQuestions(
         answerMode: "short_answer",
         learningText,
         ...learningVideo,
+        ...normalizeQuestionImage(question),
         prompt,
         options: [],
         correctIndex: -1,
@@ -2053,6 +2056,7 @@ function normalizeQuestions(
       answerMode: "multiple_choice",
       learningText,
       ...learningVideo,
+      ...normalizeQuestionImage(question),
       prompt,
       options,
       correctIndex,
@@ -2070,6 +2074,8 @@ function copyMissionQuestion(question) {
     ...(questionId ? { id: questionId } : {}),
     answerMode: String(question?.answerMode || "multiple_choice"),
     learningText: String(question?.learningText || ""),
+    ...(question?.imageDataUrl || question?.imageDescription
+      ? normalizeQuestionImage(question) : {}),
     learningVideoUrl: String(question?.learningVideoUrl || ""),
     learningVideoPlacement: String(
       question?.learningVideoPlacement || DEFAULT_LEARNING_VIDEO_PLACEMENT,
@@ -4342,7 +4348,7 @@ async function updateMission(teacherId, missionId, payload) {
     mission.draftJson =
       payload.draftJson &&
       typeof payload.draftJson === "object" ?
-        payload.draftJson
+        normalizeMissionPictures(payload.draftJson)
       : null;
   }
 
