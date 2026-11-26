@@ -1,9 +1,9 @@
 {
-  "version": "2.10.0",
-  "releasedAt": "2026-11-26T16:22:08.319Z",
+  "version": "2.11.0",
+  "releasedAt": "2026-11-26T17:26:54.289Z",
   "source": {
-    "commit": "f3a12e33af19f6897d229ccb32d780eb7af74a30",
-    "digest": "c61b7c071aefed0c583bb1e494906c8764c3b608b558beb7bb60fc117617f48e",
+    "commit": "fa238dd684be5bbbbf730bd85ceba6840b5b7212",
+    "digest": "db65745cec9f8d83e7e7cb03eee072bf9661d4c157de9529f364d99781d8195d",
     "files": {
       ".env.example": "44a1288678e1d796268723e62698599dac225d783bedca7fc1c9402ac2f2eb69",
       ".gitignore": "d97f68d33e0161c095cbb3a4db60e3401b0b3e987c9f4450a784c23b1d2d5ddb",
@@ -97,7 +97,7 @@
       "src/services/school.service.js": "cf437a5b3d23b49a1aee302061570b5efbeaf90192701ad9bc081f9e5868356a",
       "src/services/sourceExtraction.service.js": "86e05223948f042b031e3cc45189778dc01d9ab5b2961893d3ef0ea51e0ab5c3",
       "src/services/standalonePaper.service.js": "1630f837ab48a01d8f3d876d34163482f044df5d71baf113024fde939d668672",
-      "src/services/standalonePaperSession.service.js": "dcacd9d559e32b0c41fe61eb2e56558c8c2dd16b63d3080050b0a0ccc4ebf22f",
+      "src/services/standalonePaperSession.service.js": "57a7c3263e0b0fcf1855cbfd5fb46a4e50b3aad34a9f24e0aea55a1125d4ec85",
       "src/services/student.service.js": "6d726492090b57a43cc81eabbae82ff7eee9c25bc944567c34319981270f62ed",
       "src/services/subjectCertification.service.js": "653df305c7a4355e98f1ed797df661adab881b4a5917a63ecf22a4a71eb59c99",
       "src/services/teacher.service.js": "b7ed81018b8724474d064c68d14582b1f04a9add6f1aedb189176df6e82fed23",
@@ -135,6 +135,7 @@
       "test/resultEvidenceAction.test.js": "327777381b6cdfaf35cb2e87dad2e2deb8719245038f7e82949c6a7cdb58d251",
       "test/schoolContextIsolation.test.js": "3b9fdc43034a0f9f64d1cfba2271863b212f59cb3cb786e4a5edf9be2875ef80",
       "test/schoolRequestContext.test.js": "c7464d8cae64fcc32a0435d4b0cfda0e2a8c8e7ced7d3d66d8e1475a8edec1e6",
+      "test/standalonePaperFeedback.test.js": "4ac688fcb590b6903e69690ee9381b101cfa4bf699bc4172e098ec10fc30c9bb",
       "test/standalonePaperImages.test.js": "5bb95d42cc718cbd59870e8560649dede0fc3df38cb49c7e8a70fd5c38358d0d",
       "test/standalonePaperRecovery.test.js": "8aba2103310312eee4ad008ae01655654f509f7d723cc04915f45f41e3af8637",
       "test/subjectCertificationAchievement.test.js": "c3652e44fe4768405800aa2d4df564981b0bbf809215224f68acb417b4ec27fd",
@@ -150,9 +151,9 @@
   },
   "validation": {
     "status": "passed",
-    "checkedAt": "2026-11-26T16:28:15.234Z",
-    "backendTests": 222,
-    "flutterTests": 278,
+    "checkedAt": "2026-11-26T17:29:23.843Z",
+    "backendTests": 223,
+    "flutterTests": 282,
     "analysis": "passed",
     "build": "passed",
     "backendSyntax": "passed",
