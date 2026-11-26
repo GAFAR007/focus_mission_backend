@@ -187,7 +187,7 @@ const standalonePaperSchema = new mongoose.Schema(
       // WHY: Standalone papers can be planned ahead without being tied to the
       // timetable mission date model, so the saved date stays explicit here.
     },
-    // WHY: Only an explicit teacher decision grants access outside the original slot.
+    // WHY: Only an explicit teacher decision grants access from this date until unpublished.
     recoveryDate: { type: String, default: "" },
     recoveryHistory: {
       type: [{ teacherId: mongoose.Schema.Types.ObjectId, occurredAt: Date,

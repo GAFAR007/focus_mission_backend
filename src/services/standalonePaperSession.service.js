@@ -411,8 +411,8 @@ async function assertStudentCanOpenPublishedPaper({
     throw createError(403, "This standalone paper is not published yet.");
   }
 
-  // WHY: A teacher can explicitly reinstate this paper for today.
-  if (paper.recoveryDate === currentDateKey) return;
+  // WHY: A teacher recovery stays available across days while published.
+  if (paper.recoveryDate && paper.recoveryDate <= currentDateKey) return;
   if (String(paper.targetDate || "").trim() !== currentDateKey) {
     throw createError(
       403,
@@ -885,14 +885,14 @@ async function listAvailableStandalonePapersForStudent({
   const papers = await StandalonePaper.find({
     studentId,
     status: "published",
-    $or: [{ targetDate: currentDateKey }, { recoveryDate: currentDateKey }],
+    $or: [{ targetDate: currentDateKey }, { recoveryDate: { $gt: "", $lte: currentDateKey } }],
   })
     .populate("subjectId", "name icon color")
     .sort({ publishedAt: -1, createdAt: -1 })
     .lean();
 
   const filtered = papers.filter((paper) => {
-    if (paper.recoveryDate === currentDateKey) return true;
+    if (paper.recoveryDate && paper.recoveryDate <= currentDateKey) return true;
     if (!timetable) return false;
     const sessionType = String(paper?.sessionType || "").trim().toLowerCase();
     const scheduledSubjectId =
@@ -1379,7 +1379,7 @@ async function reinstateStandalonePaper({ teacherId, paperId }) {
     }
     paper.recoveryDate = getDateKey(getNow());
     paper.recoveryHistory.push({ teacherId, occurredAt: getNow(), previousStatus,
-      sessionId: sitting?._id || null, reason: "Teacher reinstated paper for today" });
+      sessionId: sitting?._id || null, reason: "Teacher reinstated paper until unpublished" });
     await paper.save({ session: dbSession });
     return { session: serializeSessionSummary(sitting), recoveryDate: paper.recoveryDate };
   });

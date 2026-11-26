@@ -46,6 +46,9 @@ test('teacher reinstatement preserves answers, date access, ownership and result
       await service.reinstateStandalonePaper({ teacherId: teacher, paperId: paper._id });
       const available = await service.listAvailableStandalonePapersForStudent(access);
       assert.equal(available.length, 1, 'teacher grant works without a current timetable');
+      await Paper.updateOne({ _id: paper._id }, { $set: { recoveryDate: '2020-01-01' } });
+      assert.equal((await service.listAvailableStandalonePapersForStudent(access)).length, 1,
+        'reinstatement remains available on later days');
       const started = await service.startStandalonePaperSession(access);
       assert.equal(started.session.status, 'active');
       const sessionAccess = { studentId: String(student), requesterId: String(student), sessionId: started.session.id };
